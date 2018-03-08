@@ -13,6 +13,7 @@
  */
 package com.github.ambry.rest;
 
+import com.github.ambry.frontend.IdConverter;
 import com.github.ambry.router.RouterErrorCode;
 
 
@@ -54,6 +55,11 @@ public enum RestServiceErrorCode {
   ResourceDirty,
 
   /**
+   * An authenticated client is not authorized to access a resource.
+   */
+  AccessDenied,
+
+  /**
    * Client has sent a request that cannot be processed due to authorization failure.
    */
   Unauthorized,
@@ -62,56 +68,92 @@ public enum RestServiceErrorCode {
    * Generic BadRequest error code when a client provides a request that is not fit for processing.
    */
   BadRequest,
+
   /**
    * Client has sent arguments (whether in the URI or in the headers) that are not in the format that is expected or if
    * the number of values for an argument expected by the server does not match what the client sent.
    */
   InvalidArgs,
+
   /**
    * Client has sent request content without sending request metadata first or has sent content when no content
    * was expected (for e.g. content with {@link RestMethod#GET}).
    */
   InvalidRequestState,
+
+  /**
+   * The account is not valid.
+   */
+  InvalidAccount,
+
+  /**
+   * The container is not valid.
+   */
+  InvalidContainer,
+
   /**
    * Client has sent a request that cannot be decoded using the REST protocol (usually HTTP).
    */
   MalformedRequest,
+
   /**
    * Client has sent a request that is missing some arguments (whether in the URI or in the headers) necessary to
    * service the request.
    */
   MissingArgs,
+
   /**
    * Client is requesting a HTTP method that is not supported.
    */
   UnsupportedHttpMethod,
 
   /**
+   * Range request is not satisfiable (because the provided range is invalid or outside of the bounds of an object.)
+   */
+  RangeNotSatisfiable,
+
+  /**
    * Generic InternalServerError that is a result of problems on the server side that is not caused by the client and
    * there is nothing that a client can do about it.
    */
   InternalServerError,
+
   /**
    * Indicates that {@link IdConverter} encountered some exception during ID conversion
    */
   IdConverterServiceError,
+
   /**
    * Indicates that a {@link RestRequest} has been closed and an operation could not be performed on it.
    */
   RequestChannelClosed,
+
   /**
    * Indicates that the submitted request or response could not be queued in the AsyncRequestResponseHandler.
    */
   RequestResponseQueuingFailure,
+
   /**
-   * Indicates that an internal service is unavailable either because it is not started, is shutdown or has crashed.
+   * The request is larger than what the server is willing or is configured to accept.
+   */
+  RequestTooLarge,
+
+  /**
+   * Indicates that the service is unavailable because one or more of the components is not started, is shutdown, has
+   * crashed or is temporarily unable to respond.
    */
   ServiceUnavailable,
+
   /**
    * Indicates a {@link RestMethod} is not supported (May also indicate a bug where behaviour for a new
    * {@link RestMethod} has not been defined in the implementation).
    */
-  UnsupportedRestMethod;
+  UnsupportedRestMethod,
+
+  /**
+   * There is insufficient capacity to service the request.
+   */
+  InsufficientCapacity;
 
   /**
    * Gets the RestServiceErrorCode that corresponds to the {@code routerErrorCode}.
@@ -130,11 +172,16 @@ public enum RestServiceErrorCode {
         return Deleted;
       case BlobDoesNotExist:
         return NotFound;
-      case AmbryUnavailable:
-      case InsufficientCapacity:
+      case RangeNotSatisfiable:
+        return RangeNotSatisfiable;
       case OperationTimedOut:
+      case AmbryUnavailable:
       case RouterClosed:
+        return ServiceUnavailable;
+      case InsufficientCapacity:
+        return InsufficientCapacity;
       case UnexpectedInternalError:
+      case ChannelClosed:
       default:
         return InternalServerError;
     }

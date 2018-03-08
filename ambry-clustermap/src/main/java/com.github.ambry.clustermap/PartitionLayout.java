@@ -13,14 +13,8 @@
  */
 package com.github.ambry.clustermap;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -28,12 +22,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
  * PartitionLayout of {@link Partition}s and {@link Replica}s on an Ambry cluster (see {@link HardwareLayout}).
  */
-public class PartitionLayout {
+class PartitionLayout {
   private static final long MinPartitionId = 0;
 
   private final HardwareLayout hardwareLayout;
@@ -47,8 +46,7 @@ public class PartitionLayout {
 
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  public PartitionLayout(HardwareLayout hardwareLayout, JSONObject jsonObject)
-      throws JSONException {
+  public PartitionLayout(HardwareLayout hardwareLayout, JSONObject jsonObject) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("PartitionLayout " + hardwareLayout + ", " + jsonObject.toString());
     }
@@ -252,15 +250,14 @@ public class PartitionLayout {
    * @param stream byte-serialized partition ID
    * @return requested Partition else null.
    */
-  public Partition getPartition(DataInputStream stream)
-      throws IOException {
+  public Partition getPartition(InputStream stream) throws IOException {
     byte[] partitionBytes = Partition.readPartitionBytesFromStream(stream);
     return partitionMap.get(ByteBuffer.wrap(partitionBytes));
   }
 
-  public JSONObject toJSONObject()
-      throws JSONException {
-    JSONObject jsonObject = new JSONObject().put("clusterName", hardwareLayout.getClusterName()).put("version", version)
+  public JSONObject toJSONObject() throws JSONException {
+    JSONObject jsonObject = new JSONObject().put("clusterName", hardwareLayout.getClusterName())
+        .put("version", version)
         .put("partitions", new JSONArray());
     for (Partition partition : partitionMap.values()) {
       jsonObject.accumulate("partitions", partition.toJSONObject());

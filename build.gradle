@@ -25,6 +25,7 @@ allprojects {
     apply plugin: 'eclipse'
     apply plugin: 'idea'
     apply plugin: 'project-report'
+    apply plugin: 'jacoco'
 
     repositories {
         mavenCentral()
@@ -34,6 +35,8 @@ allprojects {
 
 subprojects {
     apply plugin: 'java'
+    sourceCompatibility = 1.8
+    targetCompatibility = 1.8
 
     sourceSets {
         test {
@@ -51,10 +54,12 @@ subprojects {
         compile "org.slf4j:slf4j-api:$slf4jVersion"
         compile "org.slf4j:slf4j-log4j12:$slf4jVersion"
         testCompile "junit:junit:$junitVersion"
+        testCompile "org.mockito:mockito-core:2.+"
         unitTestCompile sourceSets.main.output
         unitTestCompile sourceSets.test.output
         unitTestCompile configurations.testCompile
         unitTestRuntime configurations.testRuntime
+        testRuntime project(':log4j-test-config')
     }
 
     test {
@@ -75,6 +80,15 @@ subprojects {
     // but run integration tests too when running the test target
     check.dependsOn -= test
     check.dependsOn += unitTest
+
+    task testJar(type: Jar) {
+        from sourceSets.test.output
+        classifier = 'test'
+    }
+
+    artifacts {
+        archives testJar
+    }
 }
 
 project(':ambry-utils') {
@@ -82,6 +96,7 @@ project(':ambry-utils') {
         compile "commons-codec:commons-codec:$commonsVersion"
         compile "org.json:json:$jsonVersion"
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
+        testCompile "org.apache.helix:helix-core:$helixVersion"
     }
 }
 
@@ -93,13 +108,27 @@ project(':ambry-api') {
     }
 }
 
+project(':ambry-account') {
+    dependencies {
+        compile project(':ambry-api'),
+                project(':ambry-utils'),
+                project(':ambry-commons')
+        compile "org.apache.helix:helix-core:$helixVersion"
+        compile "com.codahale.metrics:metrics-core:$metricsVersion"
+        compile "org.json:json:$jsonVersion"
+        testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+    }
+}
+
 project(':ambry-clustermap') {
     dependencies {
         compile project(':ambry-api'),
-                project(':ambry-metrics'),
                 project(':ambry-utils')
+        compile "org.apache.helix:helix-core:$helixVersion"
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "org.json:json:$jsonVersion"
+        testCompile project(':ambry-utils').sourceSets.test.output
     }
 }
 
@@ -109,17 +138,22 @@ project(':ambry-commons') {
                 project(':ambry-clustermap'),
                 project(':ambry-messageformat'),
                 project(':ambry-utils')
+        testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-clustermap').sourceSets.test.output
+        testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
 
 project(':ambry-network') {
     dependencies {
         compile project(':ambry-api'),
-                project(':ambry-utils')
+                project(':ambry-utils'),
+                project(':ambry-commons')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
-        testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
         testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
 
@@ -127,7 +161,6 @@ project(':ambry-server') {
     dependencies {
         compile project(':ambry-clustermap'),
                 project(':ambry-messageformat'),
-                project(':ambry-metrics'),
                 project(':ambry-network'),
                 project(':ambry-protocol'),
                 project(':ambry-commons'),
@@ -140,6 +173,8 @@ project(':ambry-server') {
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-network').sourceSets.test.output
         testCompile project(':ambry-api').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-replication').sourceSets.test.output
         testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
@@ -147,8 +182,6 @@ project(':ambry-server') {
 project(':ambry-store') {
     dependencies {
         compile project(':ambry-api'),
-                project(':ambry-clustermap'),
-                project(':ambry-metrics'),
                 project(':ambry-utils')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         testCompile project(':ambry-clustermap').sourceSets.test.output
@@ -176,23 +209,23 @@ project(':ambry-replication') {
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
     }
 }
 
 project(':ambry-tools') {
     dependencies {
         compile project(':ambry-api'),
+                project(':ambry-account'),
                 project(':ambry-store'),
                 project(':ambry-rest'),
-                project(':ambry-admin'),
                 project(':ambry-frontend')
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
-    }
-}
-
-project(':ambry-metrics') {
-    dependencies {
-        compile project(':ambry-api')
+        testCompile project(':ambry-clustermap').sourceSets.test.output
+        testCompile project(':ambry-account').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-store').sourceSets.test.output
+        testCompile project(':ambry-utils').sourceSets.test.output
     }
 }
 
@@ -204,6 +237,9 @@ project(':ambry-protocol') {
                 project(':ambry-utils'),
                 project(':ambry-commons')
         testCompile project(':ambry-clustermap').sourceSets.test.output
+        testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-messageformat').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
     }
 }
 
@@ -214,26 +250,15 @@ project(':ambry-rest') {
                 project(':ambry-commons')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
-        compile "io.netty:netty-all:4.0.25.Final"
+        compile "io.netty:netty-all:$nettyVersion"
         compile "javax.servlet:javax.servlet-api:$javaxVersion"
         testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
-    }
-}
-
-project(':ambry-admin') {
-    dependencies {
-        compile project(':ambry-api'),
-                project(':ambry-utils'),
-                project(':ambry-commons'),
-                project(':ambry-rest'),
-                project(':ambry-router')
-        compile "com.codahale.metrics:metrics-core:$metricsVersion"
-        testCompile project(':ambry-api').sourceSets.test.output
-        testCompile project(':ambry-clustermap').sourceSets.test.output
-        testCompile project(':ambry-rest').sourceSets.test.output
-        testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-router').sourceSets.main.output
+        testCompile project(':ambry-router').sourceSets.test.output
+        testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
 
@@ -247,25 +272,32 @@ project(':ambry-router') {
                 project(':ambry-protocol'),
                 project(':ambry-network')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
+        compile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
         testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
         testCompile project(':ambry-network').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
     }
 }
 
 project(':ambry-frontend') {
     dependencies {
         compile project(':ambry-api'),
+                project(':ambry-account'),
                 project(':ambry-utils'),
                 project(':ambry-commons'),
                 project(':ambry-rest'),
                 project(':ambry-router')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         testCompile project(':ambry-api').sourceSets.test.output
+        testCompile project(':ambry-account').sourceSets.test.output
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-rest').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-router').sourceSets.test.output
+        testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
 
@@ -276,6 +308,7 @@ task allJar(type: Jar, dependsOn: subprojects.assemble) {
         attributes 'Implementation-Title': 'Ambry',
                    'Main-Class': 'com.github.ambry.server.AmbryMain'
     }
+    zip64 true
     destinationDir = file('target')
     baseName = 'ambry'
     subprojects.each { subproject ->
@@ -285,4 +318,24 @@ task allJar(type: Jar, dependsOn: subprojects.assemble) {
             }
         }
     }
+    exclude 'META-INF/*.RSA', 'META-INF/*.SF','META-INF/*.DSA'
+}
+
+task codeCoverageReport(type: JacocoReport) {
+    executionData fileTree(project.rootDir.absolutePath).include("**/build/jacoco/*.exec")
+
+    subprojects.each {
+        sourceSets it.sourceSets.main
+    }
+
+    reports {
+        xml.enabled true
+        xml.destination "${buildDir}/reports/jacoco/report.xml"
+        html.enabled true
+        csv.enabled true
+    }
+}
+
+codeCoverageReport.dependsOn {
+    subprojects*.unitTest
 }

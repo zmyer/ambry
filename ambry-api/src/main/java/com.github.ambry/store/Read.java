@@ -13,8 +13,8 @@
  */
 package com.github.ambry.store;
 
-import java.nio.ByteBuffer;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 
 
 /**
@@ -23,11 +23,11 @@ import java.io.IOException;
 public interface Read {
 
   /**
-   * Read from the underlying store(file) into the buffer starting at the given position in the store
+   * Read from the underlying store(file) into the buffer starting at the given position in the store. Reads
+   * exactly {@code buffer.remaining()} amount of data or throws an exception.
    * @param buffer The buffer into which the read needs to write to
    * @param position The position to start the read from
    * @throws IOException
    */
-  void readInto(ByteBuffer buffer, long position)
-      throws IOException;
+  void readInto(ByteBuffer buffer, long position) throws IOException;
 }

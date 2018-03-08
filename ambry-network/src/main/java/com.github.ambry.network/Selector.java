@@ -13,6 +13,7 @@
  */
 package com.github.ambry.network;
 
+import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.utils.Time;
 import java.io.EOFException;
 import java.io.IOException;
@@ -84,8 +85,7 @@ public class Selector implements Selectable {
   /**
    * Create a new selector
    */
-  public Selector(NetworkMetrics metrics, Time time, SSLFactory sslFactory)
-      throws IOException {
+  public Selector(NetworkMetrics metrics, Time time, SSLFactory sslFactory) throws IOException {
     this.nioSelector = java.nio.channels.Selector.open();
     this.time = time;
     this.keyMap = new HashMap<String, SelectionKey>();
@@ -115,8 +115,15 @@ public class Selector implements Selectable {
     int remotePort = socket.getPort();
     long connectionIdSuffix = IdGenerator.getAndIncrement();
     StringBuilder connectionIdBuilder = new StringBuilder();
-    connectionIdBuilder.append(localHost).append(":").append(localPort).append("-").append(remoteHost).append(":")
-        .append(remotePort).append("_").append(connectionIdSuffix);
+    connectionIdBuilder.append(localHost)
+        .append(":")
+        .append(localPort)
+        .append("-")
+        .append(remoteHost)
+        .append(":")
+        .append(remotePort)
+        .append("_")
+        .append(connectionIdSuffix);
     return connectionIdBuilder.toString();
   }
 
@@ -157,9 +164,9 @@ public class Selector implements Selectable {
     SelectionKey key = channel.register(this.nioSelector, SelectionKey.OP_CONNECT);
     Transmission transmission = null;
     try {
-      transmission = TransmissionFactory
-          .getTransmission(connectionId, channel, key, address.getHostName(), address.getPort(), time, metrics,
-              portType, sslFactory, SSLFactory.Mode.CLIENT);
+      transmission =
+          TransmissionFactory.getTransmission(connectionId, channel, key, address.getHostName(), address.getPort(),
+              time, metrics, portType, sslFactory, SSLFactory.Mode.CLIENT);
     } catch (IOException e) {
       logger.error("IOException on transmission creation " + e);
       channel.socket().close();
@@ -177,16 +184,15 @@ public class Selector implements Selectable {
    * Use this on server-side, when a connection is accepted by a different thread but processed by the Selector
    * Note that we are not checking if the connection id is valid - since the connection already exists
    */
-  public String register(SocketChannel channel, PortType portType)
-      throws IOException {
+  public String register(SocketChannel channel, PortType portType) throws IOException {
     Socket socket = channel.socket();
     String connectionId = generateConnectionId(channel);
     SelectionKey key = channel.register(nioSelector, SelectionKey.OP_READ);
     Transmission transmission = null;
     try {
-      transmission = TransmissionFactory
-          .getTransmission(connectionId, channel, key, socket.getInetAddress().getHostAddress(), socket.getPort(), time,
-              metrics, portType, sslFactory, SSLFactory.Mode.SERVER);
+      transmission =
+          TransmissionFactory.getTransmission(connectionId, channel, key, socket.getInetAddress().getHostAddress(),
+              socket.getPort(), time, metrics, portType, sslFactory, SSLFactory.Mode.SERVER);
     } catch (IOException e) {
       logger.error("IOException on transmission creation " + e);
       socket.close();
@@ -279,8 +285,7 @@ public class Selector implements Selectable {
    *         already an in-progress send
    */
   @Override
-  public void poll(long timeoutMs)
-      throws IOException {
+  public void poll(long timeoutMs) throws IOException {
     poll(timeoutMs, null);
   }
 
@@ -302,8 +307,7 @@ public class Selector implements Selectable {
    *         already an in-progress send
    */
   @Override
-  public void poll(long timeoutMs, List<NetworkSend> sends)
-      throws IOException {
+  public void poll(long timeoutMs, List<NetworkSend> sends) throws IOException {
     clear();
 
     // register for write interest on any new sends
@@ -457,8 +461,7 @@ public class Selector implements Selectable {
    * @return The number of keys ready
    * @throws IOException
    */
-  private int select(long ms)
-      throws IOException {
+  private int select(long ms) throws IOException {
     if (ms == 0L) {
       return this.nioSelector.selectNow();
     } else if (ms < 0L) {
@@ -526,8 +529,7 @@ public class Selector implements Selectable {
   /**
    * Process reads from ready sockets
    */
-  private void read(SelectionKey key, Transmission transmission)
-      throws IOException {
+  private void read(SelectionKey key, Transmission transmission) throws IOException {
     long startTimeToReadInMs = time.milliseconds();
     try {
       boolean readComplete = transmission.read();
@@ -545,8 +547,7 @@ public class Selector implements Selectable {
   /**
    * Process writes to ready sockets
    */
-  private void write(SelectionKey key, Transmission transmission)
-      throws IOException {
+  private void write(SelectionKey key, Transmission transmission) throws IOException {
     long startTimeToWriteInMs = time.milliseconds();
     try {
       boolean sendComplete = transmission.write();

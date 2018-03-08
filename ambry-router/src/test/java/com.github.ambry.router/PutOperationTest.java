@@ -15,6 +15,7 @@ package com.github.ambry.router;
 
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.ByteBufferReadableStreamChannel;
+import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.commons.ResponseHandler;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
@@ -28,6 +29,7 @@ import com.github.ambry.protocol.RequestOrResponse;
 import com.github.ambry.utils.ByteBufferChannel;
 import com.github.ambry.utils.ByteBufferInputStream;
 import com.github.ambry.utils.MockTime;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Time;
 import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
@@ -70,8 +72,7 @@ public class PutOperationTest {
   private final int successTarget = 1;
   private final Random random = new Random();
 
-  public PutOperationTest()
-      throws Exception {
+  public PutOperationTest() throws Exception {
     Properties properties = new Properties();
     properties.setProperty("router.hostname", "localhost");
     properties.setProperty("router.datacenter.name", "DC1");
@@ -89,11 +90,11 @@ public class PutOperationTest {
    * after the associated chunk is complete, the buffer is not reused even though the PutChunk is reused.
    */
   @Test
-  public void testSendIncomplete()
-      throws Exception {
+  public void testSendIncomplete() throws Exception {
     int numChunks = NonBlockingRouter.MAX_IN_MEM_CHUNKS + 1;
     BlobProperties blobProperties =
-        new BlobProperties(chunkSize * numChunks, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time);
+        new BlobProperties(-1, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time,
+            Utils.getRandomShort(TestUtils.RANDOM), Utils.getRandomShort(TestUtils.RANDOM), false);
     byte[] userMetadata = new byte[10];
     byte[] content = new byte[chunkSize * numChunks];
     random.nextBytes(content);
@@ -101,8 +102,10 @@ public class PutOperationTest {
     FutureResult<String> future = new FutureResult<>();
     MockNetworkClient mockNetworkClient = new MockNetworkClient();
     PutOperation op =
-        new PutOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobProperties, userMetadata,
-            channel, future, null, new ReadyForPollCallback(mockNetworkClient), null, time);
+        new PutOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, new LoggingNotificationSystem(),
+            userMetadata, channel, future, null,
+            new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>()), null, null, null, null,
+            time, blobProperties);
     op.startReadingFromChannel();
     List<RequestInfo> requestInfos = new ArrayList<>();
     requestRegistrationCallback.requestListToFill = requestInfos;
@@ -126,8 +129,8 @@ public class PutOperationTest {
 
     // 1.
     ResponseInfo responseInfo = getResponseInfo(requestInfos.get(0));
-    PutResponse putResponse = responseInfo.getError() == null ? PutResponse
-        .readFrom(new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
+    PutResponse putResponse = responseInfo.getError() == null ? PutResponse.readFrom(
+        new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
     op.handleResponse(responseInfo, putResponse);
     // 2.
     PutRequest putRequest = (PutRequest) requestInfos.get(1).getRequest();
@@ -144,8 +147,8 @@ public class PutOperationTest {
     // succeed all the other requests.
     for (int i = 3; i < requestInfos.size(); i++) {
       responseInfo = getResponseInfo(requestInfos.get(i));
-      putResponse = responseInfo.getError() == null ? PutResponse
-          .readFrom(new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
+      putResponse = responseInfo.getError() == null ? PutResponse.readFrom(
+          new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
       op.handleResponse(responseInfo, putResponse);
     }
     // fill the first PutChunk with the last chunk.
@@ -164,16 +167,16 @@ public class PutOperationTest {
     // reset the correlation id as they will be different between the two requests.
     resetCorrelationId(expectedRequestContent);
     resetCorrelationId(savedRequestContent);
-    Assert
-        .assertArrayEquals("Underlying buffer should not have be reused", expectedRequestContent, savedRequestContent);
+    Assert.assertArrayEquals("Underlying buffer should not have be reused", expectedRequestContent,
+        savedRequestContent);
 
     // now that all the requests associated with the original buffer have been read,
     // the next poll will free this buffer. We cannot actually verify it via the tests directly, as this is very
     // internal to the chunk (though this can be verified via coverage).
     for (int i = 0; i < requestInfos.size(); i++) {
       responseInfo = getResponseInfo(requestInfos.get(i));
-      putResponse = responseInfo.getError() == null ? PutResponse
-          .readFrom(new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
+      putResponse = responseInfo.getError() == null ? PutResponse.readFrom(
+          new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
       op.handleResponse(responseInfo, putResponse);
     }
     requestInfos.clear();
@@ -183,10 +186,59 @@ public class PutOperationTest {
     Assert.assertFalse("Operation should not be complete yet", op.isOperationComplete());
     // once the metadata request succeeds, it should complete the operation.
     responseInfo = getResponseInfo(requestInfos.get(0));
-    putResponse = responseInfo.getError() == null ? PutResponse
-        .readFrom(new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
+    putResponse = responseInfo.getError() == null ? PutResponse.readFrom(
+        new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse()))) : null;
     op.handleResponse(responseInfo, putResponse);
     Assert.assertTrue("Operation should be complete at this time", op.isOperationComplete());
+  }
+
+  /**
+   * Test the Errors {@link RouterErrorCode} received by Put Operation. The operation exception is set
+   * based on the priority of these errors.
+   * @throws Exception
+   */
+  @Test
+  public void testSetOperationExceptionAndComplete() throws Exception {
+    int numChunks = NonBlockingRouter.MAX_IN_MEM_CHUNKS + 1;
+    BlobProperties blobProperties =
+        new BlobProperties(-1, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time,
+            Utils.getRandomShort(TestUtils.RANDOM), Utils.getRandomShort(TestUtils.RANDOM), false);
+    byte[] userMetadata = new byte[10];
+    byte[] content = new byte[chunkSize * numChunks];
+    random.nextBytes(content);
+    ReadableStreamChannel channel = new ByteBufferReadableStreamChannel(ByteBuffer.wrap(content));
+    FutureResult<String> future = new FutureResult<>();
+    MockNetworkClient mockNetworkClient = new MockNetworkClient();
+    PutOperation op =
+        new PutOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, new LoggingNotificationSystem(),
+            userMetadata, channel, future, null,
+            new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>()), null, null, null, null,
+            time, blobProperties);
+    RouterErrorCode[] routerErrorCodes = new RouterErrorCode[5];
+    routerErrorCodes[0] = RouterErrorCode.OperationTimedOut;
+    routerErrorCodes[1] = RouterErrorCode.UnexpectedInternalError;
+    routerErrorCodes[2] = RouterErrorCode.AmbryUnavailable;
+    routerErrorCodes[3] = RouterErrorCode.InsufficientCapacity;
+    routerErrorCodes[4] = RouterErrorCode.InvalidBlobId;
+
+    for (int i = 0; i < routerErrorCodes.length; ++i) {
+      op.setOperationExceptionAndComplete(new RouterException("RouterError", routerErrorCodes[i]));
+      Assert.assertEquals(((RouterException) op.getOperationException()).getErrorCode(), routerErrorCodes[i]);
+    }
+    for (int i = routerErrorCodes.length - 1; i >= 0; --i) {
+      op.setOperationExceptionAndComplete(new RouterException("RouterError", routerErrorCodes[i]));
+      Assert.assertEquals(((RouterException) op.getOperationException()).getErrorCode(),
+          routerErrorCodes[routerErrorCodes.length - 1]);
+    }
+
+    Exception nonRouterException = new Exception();
+    op.setOperationExceptionAndComplete(nonRouterException);
+    Assert.assertEquals(nonRouterException, op.getOperationException());
+
+    // test edge case where current operationException is non RouterException
+    op.setOperationExceptionAndComplete(new RouterException("RouterError", RouterErrorCode.InsufficientCapacity));
+    Assert.assertEquals(((RouterException) op.getOperationException()).getErrorCode(),
+        RouterErrorCode.InsufficientCapacity);
   }
 
   /**
@@ -205,8 +257,7 @@ public class PutOperationTest {
    * @return the {@link ResponseInfo} the response for the request.
    * @throws IOException if there is an error sending the request.
    */
-  private ResponseInfo getResponseInfo(RequestInfo requestInfo)
-      throws IOException {
+  private ResponseInfo getResponseInfo(RequestInfo requestInfo) throws IOException {
     NetworkReceive networkReceive = new NetworkReceive(null, mockServer.send(requestInfo.getRequest()), time);
     return new ResponseInfo(requestInfo, null, networkReceive.getReceivedBytes().getPayload());
   }

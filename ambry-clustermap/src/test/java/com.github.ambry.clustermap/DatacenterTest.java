@@ -21,16 +21,12 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 // TestDatacenter permits Datacenter to be constructed with a null HardwareLayout.
 class TestDatacenter extends Datacenter {
-  public TestDatacenter(JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
-      throws JSONException {
+  public TestDatacenter(JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     super(null, jsonObject, clusterMapConfig);
   }
 
@@ -65,54 +61,57 @@ public class DatacenterTest {
   private static final long diskCapacityInBytes = 1000 * 1024 * 1024 * 1024L;
 
   private static final int dataNodeCount = 6;
+  private Properties props;
 
-  JSONArray getDisks()
-      throws JSONException {
+  public DatacenterTest() {
+    props = new Properties();
+    props.setProperty("clustermap.cluster.name", "test");
+    props.setProperty("clustermap.datacenter.name", "dc1");
+    props.setProperty("clustermap.host.name", "localhost");
+  }
+
+  JSONArray getDisks() throws JSONException {
     return TestUtils.getJsonArrayDisks(diskCount, "/mnt", HardwareState.AVAILABLE, diskCapacityInBytes);
   }
 
-  JSONArray getDataNodes()
-      throws JSONException {
+  JSONArray getDataNodes() throws JSONException {
     return TestUtils.getJsonArrayDataNodes(dataNodeCount, TestUtils.getLocalHost(), 6666, 7666, HardwareState.AVAILABLE,
         getDisks());
   }
 
-  JSONArray getDataNodesRackAware()
-      throws JSONException {
+  JSONArray getDataNodesRackAware() throws JSONException {
     return TestUtils.getJsonArrayDataNodesRackAware(dataNodeCount, TestUtils.getLocalHost(), 6666, 7666, 3,
         HardwareState.AVAILABLE, getDisks());
   }
 
-  JSONArray getDataNodesPartiallyRackAware()
-      throws JSONException {
+  JSONArray getDataNodesPartiallyRackAware() throws JSONException {
     return TestUtils.getJsonArrayDataNodesPartiallyRackAware(dataNodeCount, TestUtils.getLocalHost(), 6666, 7666,
         HardwareState.AVAILABLE, getDisks());
   }
 
   @Test
-  public void basics()
-      throws JSONException {
-    JSONObject jsonObject = TestUtils.getJsonDatacenter("XYZ1", getDataNodes());
-    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(new Properties()));
+  public void basics() throws JSONException {
+    JSONObject jsonObject = TestUtils.getJsonDatacenter("XYZ1", (byte) 1, getDataNodes());
+    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(props));
 
     Datacenter datacenter = new TestDatacenter(jsonObject, clusterMapConfig);
 
     assertEquals(datacenter.getName(), "XYZ1");
+    assertEquals(datacenter.getId(), 1);
     assertEquals(datacenter.getDataNodes().size(), dataNodeCount);
     assertEquals(datacenter.getRawCapacityInBytes(), dataNodeCount * diskCount * diskCapacityInBytes);
     assertFalse(datacenter.isRackAware());
     assertEquals(datacenter.toJSONObject().toString(), jsonObject.toString());
     assertEquals(datacenter, new TestDatacenter(datacenter.toJSONObject(), clusterMapConfig));
 
-    jsonObject = TestUtils.getJsonDatacenter("XYZ1", getDataNodesRackAware());
+    jsonObject = TestUtils.getJsonDatacenter("XYZ1", (byte) 1, getDataNodesRackAware());
     datacenter = new TestDatacenter(jsonObject, clusterMapConfig);
     assertTrue(datacenter.isRackAware());
     assertEquals(datacenter.toJSONObject().toString(), jsonObject.toString());
     assertEquals(datacenter, new TestDatacenter(datacenter.toJSONObject(), clusterMapConfig));
   }
 
-  public void failValidation(JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
-      throws JSONException {
+  public void failValidation(JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     try {
       new TestDatacenter(jsonObject, clusterMapConfig);
       fail("Should have failed validation.");
@@ -122,14 +121,13 @@ public class DatacenterTest {
   }
 
   @Test
-  public void validation()
-      throws JSONException {
+  public void validation() throws JSONException {
     JSONObject jsonObject;
-    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(new Properties()));
+    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(props));
 
     try {
       // Null HardwareLayout
-      jsonObject = TestUtils.getJsonDatacenter("XYZ1", getDataNodes());
+      jsonObject = TestUtils.getJsonDatacenter("XYZ1", (byte) 1, getDataNodes());
       new Datacenter(null, jsonObject, clusterMapConfig);
       fail("Should have failed validation.");
     } catch (IllegalStateException e) {
@@ -137,11 +135,11 @@ public class DatacenterTest {
     }
 
     // Bad datacenter name
-    jsonObject = TestUtils.getJsonDatacenter("", getDataNodes());
+    jsonObject = TestUtils.getJsonDatacenter("", (byte) 1, getDataNodes());
     failValidation(jsonObject, clusterMapConfig);
 
     // Missing rack IDs
-    jsonObject = TestUtils.getJsonDatacenter("XYZ1", getDataNodesPartiallyRackAware());
+    jsonObject = TestUtils.getJsonDatacenter("XYZ1", (byte) 1, getDataNodesPartiallyRackAware());
     failValidation(jsonObject, clusterMapConfig);
   }
 }

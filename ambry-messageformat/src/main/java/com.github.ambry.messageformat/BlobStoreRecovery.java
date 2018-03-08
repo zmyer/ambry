@@ -19,15 +19,16 @@ import com.github.ambry.store.Read;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.utils.Utils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.DataInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import java.io.IOException;
-import java.io.InputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static com.github.ambry.messageformat.MessageFormatRecord.*;
 
 
 /**
@@ -44,71 +45,66 @@ public class BlobStoreRecovery implements MessageStoreRecovery {
     try {
       while (startOffset < endOffset) {
         // read message header
-        ByteBuffer headerVersion = ByteBuffer.allocate(MessageFormatRecord.Version_Field_Size_In_Bytes);
-        if (startOffset + MessageFormatRecord.Version_Field_Size_In_Bytes > endOffset) {
+        ByteBuffer headerVersion = ByteBuffer.allocate(Version_Field_Size_In_Bytes);
+        if (startOffset + Version_Field_Size_In_Bytes > endOffset) {
           throw new IndexOutOfBoundsException("Unable to read version. Reached end of stream");
         }
         read.readInto(headerVersion, startOffset);
         startOffset += headerVersion.capacity();
         headerVersion.flip();
         short version = headerVersion.getShort();
-        switch (version) {
-          case MessageFormatRecord.Message_Header_Version_V1:
-
-            ByteBuffer header = ByteBuffer.allocate(MessageFormatRecord.MessageHeader_Format_V1.getHeaderSize());
-            header.putShort(version);
-            if (startOffset + (MessageFormatRecord.MessageHeader_Format_V1.getHeaderSize() - headerVersion.capacity())
-                > endOffset) {
-              throw new IndexOutOfBoundsException("Unable to read version. Reached end of stream");
-            }
-            read.readInto(header, startOffset);
-            startOffset += header.capacity() - headerVersion.capacity();
-            header.flip();
-            MessageFormatRecord.MessageHeader_Format_V1 headerFormat =
-                new MessageFormatRecord.MessageHeader_Format_V1(header);
-            headerFormat.verifyHeader();
-            ReadInputStream stream = new ReadInputStream(read, startOffset, endOffset);
-            StoreKey key = factory.getStoreKey(new DataInputStream(stream));
-
-            // read the appropriate type of message based on the relative offset that is set
-            if (headerFormat.getBlobPropertiesRecordRelativeOffset()
-                != MessageFormatRecord.Message_Header_Invalid_Relative_Offset) {
-              BlobProperties properties = MessageFormatRecord.deserializeBlobProperties(stream);
-              // we do not use the user metadata or blob during recovery but we still deserialize them to check
-              // for validity
-              MessageFormatRecord.deserializeUserMetadata(stream);
-              MessageFormatRecord.deserializeBlob(stream);
-              MessageInfo info =
-                  new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(), Utils
-                      .addSecondsToEpochTime(properties.getCreationTimeInMs(), properties.getTimeToLiveInSeconds()));
-              messageRecovered.add(info);
-            } else {
-              boolean deleteFlag = MessageFormatRecord.deserializeDeleteRecord(stream);
-              MessageInfo info =
-                  new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(),
-                      deleteFlag);
-              messageRecovered.add(info);
-            }
-            startOffset = stream.getCurrentPosition();
-            break;
-          default:
-            throw new MessageFormatException("Version not known while reading message - " + version,
-                MessageFormatErrorCodes.Unknown_Format_Version);
+        if (!isValidHeaderVersion(version)) {
+          throw new MessageFormatException("Version not known while reading message - " + version,
+              MessageFormatErrorCodes.Unknown_Format_Version);
         }
+        ByteBuffer header = ByteBuffer.allocate(getHeaderSizeForVersion(version));
+        header.putShort(version);
+        if (startOffset + (header.capacity() - headerVersion.capacity()) > endOffset) {
+          throw new IndexOutOfBoundsException("Unable to read version. Reached end of stream");
+        }
+        read.readInto(header, startOffset);
+        startOffset += header.capacity() - headerVersion.capacity();
+        header.flip();
+        MessageHeader_Format headerFormat = getMessageHeader(version, header);
+        headerFormat.verifyHeader();
+        ReadInputStream stream = new ReadInputStream(read, startOffset, endOffset);
+        StoreKey key = factory.getStoreKey(new DataInputStream(stream));
+
+        // read the appropriate type of message based on the relative offset that is set
+        if (headerFormat.isPutRecord()) {
+          // we do not use blob encryption key, user metadata or blob during recovery but we still deserialize
+          // them to check for validity
+          if (headerFormat.hasEncryptionKeyRecord()) {
+            deserializeBlobEncryptionKey(stream);
+          }
+          BlobProperties properties = deserializeBlobProperties(stream);
+          deserializeUserMetadata(stream);
+          deserializeBlob(stream);
+          MessageInfo info = new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(),
+              Utils.addSecondsToEpochTime(properties.getCreationTimeInMs(), properties.getTimeToLiveInSeconds()),
+              properties.getAccountId(), properties.getContainerId(), properties.getCreationTimeInMs());
+          messageRecovered.add(info);
+        } else {
+          DeleteRecord deleteRecord = deserializeDeleteRecord(stream);
+          MessageInfo info =
+              new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(), true,
+                  deleteRecord.getAccountId(), deleteRecord.getContainerId(), deleteRecord.getDeletionTimeInMs());
+          messageRecovered.add(info);
+        }
+        startOffset = stream.getCurrentPosition();
       }
     } catch (MessageFormatException e) {
       // log in case where we were not able to parse a message. we stop recovery at that point and return the
       // messages that have been recovered so far.
-      logger.error("Message format exception while recovering messages");
+      logger.error("Message format exception while recovering messages", e);
     } catch (IndexOutOfBoundsException e) {
       // log in case where were not able to read a complete message. we stop recovery at that point and return
       // the message that have been recovered so far.
       logger.error("Trying to read more than the available bytes");
     }
     for (MessageInfo messageInfo : messageRecovered) {
-      logger
-          .info("Message Recovered key {} size {} ttl {} deleted {}", messageInfo.getStoreKey(), messageInfo.getSize(),
-              messageInfo.getExpirationTimeInMs(), messageInfo.isDeleted());
+      logger.info("Message Recovered key {} size {} ttl {} deleted {}", messageInfo.getStoreKey(),
+          messageInfo.getSize(), messageInfo.getExpirationTimeInMs(), messageInfo.isDeleted());
     }
     return messageRecovered;
   }
@@ -127,8 +123,7 @@ class ReadInputStream extends InputStream {
   }
 
   @Override
-  public int read()
-      throws IOException {
+  public int read() throws IOException {
     if (currentPosition + 1 > endPosition) {
       throw new IndexOutOfBoundsException("Trying to read outside the available read window");
     }
@@ -140,8 +135,7 @@ class ReadInputStream extends InputStream {
   }
 
   @Override
-  public int read(byte b[], int off, int len)
-      throws IOException {
+  public int read(byte b[], int off, int len) throws IOException {
     if (b == null) {
       throw new NullPointerException();
     } else if (off < 0 || len < 0 || len > b.length - off) {

@@ -17,8 +17,10 @@ import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.PortType;
 import com.github.ambry.utils.Utils;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.json.JSONArray;
@@ -27,21 +29,16 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.List;
+import static com.github.ambry.clustermap.ClusterMapUtils.*;
 
 
 /**
+ * An extension of {@link DataNodeId} to be used within the {@link StaticClusterManager}.
+ *
  * DataNode is uniquely identified by its hostname and port. A DataNode is in a {@link Datacenter}. A DataNode has zero
  * or more {@link Disk}s.
  */
-public class DataNode extends DataNodeId {
-  private static final int MinPort = 1025;
-  private static final int MaxPort = 65535;
-  private static final int MissingRackId = -1;
-
+class DataNode extends DataNodeId {
   private final Datacenter datacenter;
   private final String hostname;
   private final int portNum;
@@ -51,22 +48,25 @@ public class DataNode extends DataNodeId {
   private final ResourceStatePolicy dataNodeStatePolicy;
   private final long rackId;
   private final ArrayList<String> sslEnabledDataCenters;
+  private final ClusterMapConfig clusterMapConfig;
 
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  public DataNode(Datacenter datacenter, JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
-      throws JSONException {
+  DataNode(Datacenter datacenter, JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("DataNode " + jsonObject.toString());
     }
     this.datacenter = datacenter;
+    this.clusterMapConfig = clusterMapConfig;
     this.sslEnabledDataCenters = Utils.splitString(clusterMapConfig.clusterMapSslEnabledDatacenters, ",");
 
-    this.hostname = getFullyQualifiedDomainName(jsonObject.getString("hostname"));
+    this.hostname =
+        clusterMapConfig.clusterMapResolveHostnames ? getFullyQualifiedDomainName(jsonObject.getString("hostname"))
+            : jsonObject.getString("hostname");
     this.portNum = jsonObject.getInt("port");
     try {
-      ResourceStatePolicyFactory resourceStatePolicyFactory = Utils
-          .getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this,
+      ResourceStatePolicyFactory resourceStatePolicyFactory =
+          Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this,
               HardwareState.valueOf(jsonObject.getString("hardwareState")), clusterMapConfig);
       this.dataNodeStatePolicy = resourceStatePolicyFactory.getResourceStatePolicy();
     } catch (Exception e) {
@@ -90,38 +90,16 @@ public class DataNode extends DataNodeId {
         throw new IllegalStateException("Invalid rackId : " + this.rackId + " is less than 0");
       }
     } else {
-      this.rackId = MissingRackId;
+      this.rackId = UNKNOWN_RACK_ID;
     }
 
     validate();
   }
 
-  private void populatePorts(JSONObject jsonObject)
-      throws JSONException {
+  private void populatePorts(JSONObject jsonObject) throws JSONException {
     if (jsonObject.has("sslport")) {
       int sslPortNum = jsonObject.getInt("sslport");
       this.ports.put(PortType.SSL, new Port(sslPortNum, PortType.SSL));
-    }
-  }
-
-  /**
-   * Converts a hostname into a canonical hostname.
-   *
-   * @param unqualifiedHostname hostname to be fully qualified
-   * @return canonical hostname that can be compared with DataNode.getHostname()
-   */
-  public static String getFullyQualifiedDomainName(String unqualifiedHostname) {
-    if (unqualifiedHostname == null) {
-      throw new IllegalStateException("Hostname cannot be null.");
-    } else if (unqualifiedHostname.length() == 0) {
-      throw new IllegalStateException("Hostname cannot be zero length.");
-    }
-
-    try {
-      return InetAddress.getByName(unqualifiedHostname).getCanonicalHostName().toLowerCase();
-    } catch (UnknownHostException e) {
-      throw new IllegalStateException(
-          "Host (" + unqualifiedHostname + ") is unknown so cannot determine fully qualified domain name.");
     }
   }
 
@@ -156,29 +134,6 @@ public class DataNode extends DataNodeId {
   }
 
   /**
-   * Returns the {@link Port} to connect to based on the whether the {@link DataNodeId} belongs to the list of ssl-enabled
-   * Datacenters.
-   * @param sslEnabledDataCenters List of ssl enabled Datacenters.
-   * @return {@link Port} to which the caller can connect to.
-   * @throws IllegalStateException Thrown if the list dictates that an SSL port must be used, but the {@link DataNodeId}
-   * does not have an SSL port.
-   * @deprecated This method is obsolete. Please use {@link #getPortToConnectTo()} instead.
-   */
-  @Override
-  @Deprecated
-  public Port getPortToConnectTo(ArrayList<String> sslEnabledDataCenters) {
-    if (sslEnabledDataCenters.contains(datacenter.getName())) {
-      if (ports.containsKey(PortType.SSL)) {
-        return ports.get(PortType.SSL);
-      } else {
-        throw new IllegalStateException(
-            "An SSL port is needed but does not exist at data node " + hostname + ":" + portNum);
-      }
-    }
-    return ports.get(PortType.PLAINTEXT);
-  }
-
-  /**
    * Returns the {@link Port} of this node to connect to. A {@link Port} will be automatically selected based on if
    * there is a need of establishing an SSL connection.
    *
@@ -202,15 +157,15 @@ public class DataNode extends DataNodeId {
     return dataNodeStatePolicy.isDown() ? HardwareState.UNAVAILABLE : HardwareState.AVAILABLE;
   }
 
-  public void onNodeTimeout() {
+  void onNodeTimeout() {
     dataNodeStatePolicy.onError();
   }
 
-  public void onNodeResponse() {
+  void onNodeResponse() {
     dataNodeStatePolicy.onSuccess();
   }
 
-  public boolean isDown() {
+  boolean isDown() {
     return dataNodeStatePolicy.isDown();
   }
 
@@ -219,11 +174,11 @@ public class DataNode extends DataNodeId {
     return getDatacenter().getName();
   }
 
-  public Datacenter getDatacenter() {
+  Datacenter getDatacenter() {
     return datacenter;
   }
 
-  public long getRawCapacityInBytes() {
+  long getRawCapacityInBytes() {
     return rawCapacityInBytes;
   }
 
@@ -235,7 +190,7 @@ public class DataNode extends DataNodeId {
     return capacityInBytes;
   }
 
-  public List<Disk> getDisks() {
+  List<Disk> getDisks() {
     return disks;
   }
 
@@ -251,10 +206,12 @@ public class DataNode extends DataNodeId {
   }
 
   private void validateHostname() {
-    String fqdn = getFullyQualifiedDomainName(hostname);
-    if (!fqdn.equals(hostname)) {
-      throw new IllegalStateException(
-          "Hostname for DataNode (" + hostname + ") does not match its fully qualified domain name: " + fqdn + ".");
+    if (clusterMapConfig.clusterMapResolveHostnames) {
+      String fqdn = getFullyQualifiedDomainName(hostname);
+      if (!fqdn.equals(hostname)) {
+        throw new IllegalStateException(
+            "Hostname for DataNode (" + hostname + ") does not match its fully qualified domain name: " + fqdn + ".");
+      }
     }
   }
 
@@ -265,10 +222,10 @@ public class DataNode extends DataNodeId {
       if (portNumbers.contains(portNo)) {
         throw new IllegalStateException("Same port number " + portNo + " found for two port types");
       }
-      if (portNo < MinPort) {
-        throw new IllegalStateException("Invalid " + portType + " port : " + portNo + " is less than " + MinPort);
-      } else if (portNo > MaxPort) {
-        throw new IllegalStateException("Invalid " + portType + " port : " + portNo + " is greater than " + MaxPort);
+      if (portNo < MIN_PORT) {
+        throw new IllegalStateException("Invalid " + portType + " port : " + portNo + " is less than " + MIN_PORT);
+      } else if (portNo > MAX_PORT) {
+        throw new IllegalStateException("Invalid " + portType + " port : " + portNo + " is greater than " + MAX_PORT);
       }
       portNumbers.add(portNo);
     }
@@ -285,15 +242,14 @@ public class DataNode extends DataNodeId {
     logger.trace("complete validate.");
   }
 
-  public JSONObject toJSONObject()
-      throws JSONException {
+  JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject = new JSONObject().put("hostname", hostname).put("port", portNum);
     addSSLPortToJson(jsonObject);
     if (rackId >= 0) {
       jsonObject.put("rackId", getRackId());
     }
-    jsonObject
-        .put("hardwareState", dataNodeStatePolicy.isHardDown() ? HardwareState.UNAVAILABLE : HardwareState.AVAILABLE)
+    jsonObject.put("hardwareState",
+        dataNodeStatePolicy.isHardDown() ? HardwareState.UNAVAILABLE : HardwareState.AVAILABLE)
         .put("disks", new JSONArray());
     for (Disk disk : disks) {
       jsonObject.accumulate("disks", disk.toJSONObject());
@@ -301,8 +257,7 @@ public class DataNode extends DataNodeId {
     return jsonObject;
   }
 
-  private void addSSLPortToJson(JSONObject jsonObject)
-      throws JSONException {
+  private void addSSLPortToJson(JSONObject jsonObject) throws JSONException {
     for (PortType portType : ports.keySet()) {
       if (portType == PortType.SSL) {
         jsonObject.put("sslport", ports.get(portType).getPort());

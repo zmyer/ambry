@@ -17,11 +17,17 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMessage;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.ssl.SslHandler;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import java.util.Collection;
+import javax.net.ssl.SSLEngine;
+import javax.security.auth.x500.X500Principal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +44,7 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
   private long responseFirstChunkStartTimeInMs;
   private StringBuilder logMessage;
   private HttpRequest request;
+  private StringBuilder sslLogMessage;
 
   private static final long INIT_TIME = -1;
   private final Logger logger = LoggerFactory.getLogger(getClass());
@@ -49,8 +56,7 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
   }
 
   @Override
-  public void channelRead(ChannelHandlerContext ctx, Object obj)
-      throws Exception {
+  public void channelRead(ChannelHandlerContext ctx, Object obj) throws Exception {
     logger.trace("Reading on channel {}", ctx.channel());
     long startTimeInMs = System.currentTimeMillis();
     if (obj instanceof HttpRequest) {
@@ -64,25 +70,25 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
       requestArrivalTimeInMs = System.currentTimeMillis();
       request = (HttpRequest) obj;
       logMessage.append(ctx.channel().remoteAddress()).append(" ");
-      logMessage.append(request.getMethod().toString()).append(" ");
-      logMessage.append(request.getUri()).append(", ");
+      logMessage.append(request.method().toString()).append(" ");
+      logMessage.append(request.uri()).append(", ");
+      logSSLInfo(ctx);
+      logMessage.append(", ");
       logHeaders("Request", request, publicAccessLogger.getRequestHeaders());
       logMessage.append(", ");
     } else if (obj instanceof LastHttpContent) {
       requestLastChunkArrivalTimeInMs = System.currentTimeMillis();
     } else if (!(obj instanceof HttpContent)) {
-      logger.error("Receiving request (messageReceived) that is not of type HttpRequest or HttpContent. " +
-          "Receiving request from " + ctx.channel().remoteAddress() + ". " +
-          "Request is of type " + obj.getClass() + ". " +
-          "No action being taken other than logging this unexpected state.");
+      logger.error("Receiving request (messageReceived) that is not of type HttpRequest or HttpContent. "
+          + "Receiving request from " + ctx.channel().remoteAddress() + ". " + "Request is of type " + obj.getClass()
+          + ". " + "No action being taken other than logging this unexpected state.");
     }
     nettyMetrics.publicAccessLogRequestProcessingTimeInMs.update(System.currentTimeMillis() - startTimeInMs);
     super.channelRead(ctx, obj);
   }
 
   @Override
-  public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
-      throws Exception {
+  public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
     long startTimeInMs = System.currentTimeMillis();
     boolean shouldReset = msg instanceof LastHttpContent;
     if (request != null) {
@@ -90,9 +96,9 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
         HttpResponse response = (HttpResponse) msg;
         logHeaders("Response", response, publicAccessLogger.getResponseHeaders());
         logMessage.append(", ");
-        logMessage.append("status=").append(response.getStatus().code());
+        logMessage.append("status=").append(response.status().code());
         logMessage.append(", ");
-        if (HttpHeaders.isTransferEncodingChunked(response)) {
+        if (HttpUtil.isTransferEncodingChunked(response)) {
           responseFirstChunkStartTimeInMs = System.currentTimeMillis();
         } else {
           shouldReset = true;
@@ -114,8 +120,7 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
   }
 
   @Override
-  public void disconnect(ChannelHandlerContext ctx, ChannelPromise future)
-      throws Exception {
+  public void disconnect(ChannelHandlerContext ctx, ChannelPromise future) throws Exception {
     if (request != null) {
       logError(" : Channel disconnected while request in progress.");
     }
@@ -123,8 +128,7 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
   }
 
   @Override
-  public void close(ChannelHandlerContext ctx, ChannelPromise future)
-      throws Exception {
+  public void close(ChannelHandlerContext ctx, ChannelPromise future) throws Exception {
     if (request != null) {
       logError(" : Channel closed while request in progress.");
     }
@@ -144,7 +148,7 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
         logMessage.append("[").append(header).append("=").append(message.headers().get(header)).append("] ");
       }
     }
-    boolean isChunked = HttpHeaders.isTransferEncodingChunked(message);
+    boolean isChunked = HttpUtil.isTransferEncodingChunked(message);
     logMessage.append("[isChunked=").append(isChunked).append("]");
     logMessage.append(")");
   }
@@ -157,7 +161,8 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
     long nowMs = System.currentTimeMillis();
     logMessage.append("duration=").append(nowMs - requestArrivalTimeInMs).append("ms ");
     if (requestLastChunkArrivalTimeInMs != INIT_TIME) {
-      logMessage.append("(chunked request receive=").append(requestLastChunkArrivalTimeInMs - requestArrivalTimeInMs)
+      logMessage.append("(chunked request receive=")
+          .append(requestLastChunkArrivalTimeInMs - requestArrivalTimeInMs)
           .append("ms) ");
     }
     if (responseFirstChunkStartTimeInMs != INIT_TIME) {
@@ -178,11 +183,44 @@ public class PublicAccessLogHandler extends ChannelDuplexHandler {
 
   /**
    * Logs error message
-   * @param msg
+   * @param msg the message to log
    */
   private void logError(String msg) {
     logDurations();
     logMessage.append(msg);
     publicAccessLogger.logError(logMessage.toString());
+  }
+
+  /**
+   * If this is an SSL channel, log information about the peer certificate.
+   * @param ctx the {@link ChannelHandlerContext} for this channel.
+   */
+  private void logSSLInfo(ChannelHandlerContext ctx) {
+    if (sslLogMessage == null) {
+      sslLogMessage = new StringBuilder();
+      sslLogMessage.append("SSL (");
+      try {
+        SslHandler sslHandler = ctx.pipeline().get(SslHandler.class);
+        boolean sslUsed = sslHandler != null;
+        sslLogMessage.append("[used=").append(sslUsed).append("]");
+        if (sslUsed) {
+          SSLEngine sslEngine = sslHandler.engine();
+          if (sslEngine.getNeedClientAuth()) {
+            for (Certificate certificate : sslEngine.getSession().getPeerCertificates()) {
+              if (certificate instanceof X509Certificate) {
+                X500Principal principal = ((X509Certificate) certificate).getSubjectX500Principal();
+                Collection subjectAlternativeNames = ((X509Certificate) certificate).getSubjectAlternativeNames();
+                sslLogMessage.append(", [principal=").append(principal).append("]");
+                sslLogMessage.append(", [san=").append(subjectAlternativeNames).append("]");
+              }
+            }
+          }
+        }
+      } catch (Exception e) {
+        logger.error("Unexpected error while getting SSL connection info for public access logger", e);
+      }
+      sslLogMessage.append(")");
+    }
+    logMessage.append(sslLogMessage);
   }
 }

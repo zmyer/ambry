@@ -23,15 +23,16 @@ public class MockReplicaId implements ReplicaId {
   private String mountPath;
   private String replicaPath;
   private List<ReplicaId> peerReplicas;
-  private PartitionId partitionId;
+  private MockPartitionId partitionId;
   private MockDataNodeId dataNodeId;
   private MockDiskId diskId;
   private boolean isMarkedDown = false;
+  private volatile boolean isSealed;
 
   public MockReplicaId() {
   }
 
-  public MockReplicaId(int port, PartitionId partitionId, MockDataNodeId dataNodeId, int indexOfMountPathToUse) {
+  public MockReplicaId(int port, MockPartitionId partitionId, MockDataNodeId dataNodeId, int indexOfMountPathToUse) {
     this.partitionId = partitionId;
     this.dataNodeId = dataNodeId;
     mountPath = dataNodeId.getMountPaths().get(indexOfMountPathToUse);
@@ -41,6 +42,7 @@ public class MockReplicaId implements ReplicaId {
     replicaFile.deleteOnExit();
     replicaPath = replicaFile.getAbsolutePath();
     diskId = new MockDiskId(dataNodeId, mountPath);
+    isSealed = partitionId.getPartitionState().equals(PartitionState.READ_ONLY);
   }
 
   @Override
@@ -97,14 +99,27 @@ public class MockReplicaId implements ReplicaId {
   }
 
   @Override
+  public boolean isSealed() {
+    return isSealed;
+  }
+
+  public void setSealedState(boolean isSealed) {
+    this.isSealed = isSealed;
+    partitionId.resolvePartitionStatus();
+  }
+
+  @Override
   public String toString() {
     return "Mount Path " + mountPath + " Replica Path " + replicaPath;
   }
 
   public void cleanup() {
     File replicaDir = new File(replicaPath);
-    for (File replica : replicaDir.listFiles()) {
-      replica.delete();
+    File[] replicaDirFiles = replicaDir.listFiles();
+    if (replicaDirFiles != null) {
+      for (File replica : replicaDirFiles) {
+        replica.delete();
+      }
     }
     replicaDir.delete();
   }

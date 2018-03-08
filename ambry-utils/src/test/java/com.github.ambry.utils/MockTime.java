@@ -13,16 +13,18 @@
  */
 package com.github.ambry.utils;
 
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+
+
 /**
  * A mock time class
  */
 public class MockTime extends Time {
-  public long currentMilliseconds;
-  public long currentNanoSeconds;
+  private long currentNanoSeconds;
 
   public MockTime(long initialMilliseconds) {
-    currentMilliseconds = initialMilliseconds;
-    currentNanoSeconds = initialMilliseconds * NsPerMs;
+    setCurrentMilliseconds(initialMilliseconds);
   }
 
   public MockTime() {
@@ -31,7 +33,7 @@ public class MockTime extends Time {
 
   @Override
   public long milliseconds() {
-    return currentMilliseconds;
+    return TimeUnit.NANOSECONDS.toMillis(currentNanoSeconds);
   }
 
   @Override
@@ -41,18 +43,29 @@ public class MockTime extends Time {
 
   @Override
   public long seconds() {
-    return currentMilliseconds/MsPerSec;
+    return TimeUnit.NANOSECONDS.toSeconds(currentNanoSeconds);
   }
 
   @Override
-  public void sleep(long ms)
-      throws InterruptedException {
-    currentMilliseconds += ms;
+  public void sleep(long ms) {
+    currentNanoSeconds += TimeUnit.MILLISECONDS.toNanos(ms);
   }
 
   @Override
-  public void wait(Object o, long ms)
-    throws InterruptedException {
+  public void wait(Object o, long ms) throws InterruptedException {
     sleep(ms);
+  }
+
+  @Override
+  public void await(Condition c, long ms) throws InterruptedException {
+    sleep(ms);
+  }
+
+  public void setCurrentMilliseconds(long currentMilliseconds) {
+    setCurrentNanoSeconds(TimeUnit.MILLISECONDS.toNanos(currentMilliseconds));
+  }
+
+  public void setCurrentNanoSeconds(long currentNanoSeconds) {
+    this.currentNanoSeconds = currentNanoSeconds;
   }
 }

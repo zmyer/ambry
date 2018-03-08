@@ -16,6 +16,7 @@ package com.github.ambry.server;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.BlobId;
+import com.github.ambry.commons.CommonTestUtils;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.BlobType;
@@ -41,23 +42,27 @@ class DirectSender implements Runnable {
   List<BlobId> blobIds;
   byte[] data;
   byte[] usermetadata;
+  byte[] encryptionKey;
   BlobProperties blobProperties;
   CountDownLatch endLatch;
 
   public DirectSender(MockCluster cluster, BlockingChannel channel, int totalBlobsToPut, byte[] data,
-      byte[] usermetadata, BlobProperties blobProperties, CountDownLatch endLatch) {
+      byte[] usermetadata, BlobProperties blobProperties, byte[] encryptionKey, CountDownLatch endLatch) {
     MockClusterMap clusterMap = cluster.getClusterMap();
     this.channel = channel;
-    blobIds = new ArrayList<BlobId>(totalBlobsToPut);
+    blobIds = new ArrayList<>(totalBlobsToPut);
     List<PartitionId> partitionIds = clusterMap.getWritablePartitionIds();
     for (int i = 0; i < totalBlobsToPut; i++) {
       int partitionIndex = new Random().nextInt(partitionIds.size());
-      BlobId blobId = new BlobId(partitionIds.get(partitionIndex));
+      BlobId blobId = new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
+          clusterMap.getLocalDatacenterId(), blobProperties.getAccountId(), blobProperties.getContainerId(),
+          partitionIds.get(partitionIndex), false);
       blobIds.add(blobId);
     }
     this.data = data;
     this.usermetadata = usermetadata;
     this.blobProperties = blobProperties;
+    this.encryptionKey = encryptionKey;
     this.endLatch = endLatch;
   }
 
@@ -67,7 +72,8 @@ class DirectSender implements Runnable {
       for (int i = 0; i < blobIds.size(); i++) {
         PutRequest putRequest =
             new PutRequest(1, "client1", blobIds.get(i), blobProperties, ByteBuffer.wrap(usermetadata),
-                ByteBuffer.wrap(data), blobProperties.getBlobSize(), BlobType.DataBlob);
+                ByteBuffer.wrap(data), blobProperties.getBlobSize(), BlobType.DataBlob,
+                encryptionKey != null ? ByteBuffer.wrap(encryptionKey) : null);
 
         channel.send(putRequest);
         InputStream putResponseStream = channel.receive().getInputStream();

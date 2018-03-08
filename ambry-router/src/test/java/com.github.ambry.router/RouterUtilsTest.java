@@ -17,14 +17,17 @@ import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.BlobId;
+import com.github.ambry.commons.CommonTestUtils;
+import com.github.ambry.utils.Utils;
+import java.util.Random;
 import org.junit.Assert;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 public class RouterUtilsTest {
+  Random random = new Random();
   ClusterMap clusterMap;
   PartitionId partition;
   BlobId originalBlobId;
@@ -37,7 +40,9 @@ public class RouterUtilsTest {
       fail("Should not get any exception.");
     }
     partition = clusterMap.getWritablePartitionIds().get(0);
-    originalBlobId = new BlobId(partition);
+    originalBlobId = new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
+        clusterMap.getLocalDatacenterId(), Utils.getRandomShort(random), Utils.getRandomShort(random), partition,
+        false);
     blobIdStr = originalBlobId.getID();
   }
 
@@ -65,8 +70,7 @@ public class RouterUtilsTest {
   }
 
   @Test
-  public void testGoodCase()
-      throws Exception {
+  public void testGoodCase() throws Exception {
     initialize();
     BlobId convertedBlobId = RouterUtils.getBlobIdFromString(blobIdStr, clusterMap);
     assertEquals("The converted BlobId should be the same as the original.", originalBlobId, convertedBlobId);
@@ -96,5 +100,6 @@ public class RouterUtilsTest {
       }
     }
     Assert.assertTrue(RouterUtils.isSystemHealthError(new Exception()));
+    Assert.assertFalse(RouterUtils.isSystemHealthError(Utils.convertToClientTerminationException(new Exception())));
   }
 }

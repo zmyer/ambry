@@ -21,6 +21,8 @@ import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.commons.ResponseHandler;
 import com.github.ambry.commons.ServerErrorCode;
+import com.github.ambry.config.CryptoServiceConfig;
+import com.github.ambry.config.KMSConfig;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobInfo;
@@ -32,9 +34,10 @@ import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.RequestOrResponse;
-import com.github.ambry.router.RouterTestHelpers.ErrorCodeChecker;
+import com.github.ambry.router.RouterTestHelpers.*;
 import com.github.ambry.utils.ByteBufferInputStream;
 import com.github.ambry.utils.MockTime;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -51,14 +54,16 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
-import static com.github.ambry.router.RouterTestHelpers.testWithErrorCodes;
+import static com.github.ambry.router.PutManagerTest.*;
+import static com.github.ambry.router.RouterTestHelpers.*;
 
 
 /**
@@ -72,6 +77,7 @@ import static com.github.ambry.router.RouterTestHelpers.testWithErrorCodes;
  * Many of the variables are made member variables, so that they can be shared between the router and the
  * {@link GetBlobOperation}s.
  */
+@RunWith(Parameterized.class)
 public class GetBlobOperationTest {
   private static final int MAX_PORTS_PLAIN_TEXT = 3;
   private static final int MAX_PORTS_SSL = 3;
@@ -81,7 +87,6 @@ public class GetBlobOperationTest {
   private final MockTime time = new MockTime();
   private final Map<Integer, GetOperation> correlationIdToGetOperation = new HashMap<>();
   private final Random random = new Random();
-  private final FutureResult<GetBlobResult> operationFuture = new FutureResult<>();
   private final MockClusterMap mockClusterMap;
   private final BlobIdFactory blobIdFactory;
   private final NonBlockingRouterMetrics routerMetrics;
@@ -90,7 +95,12 @@ public class GetBlobOperationTest {
   private final ResponseHandler responseHandler;
   private final NonBlockingRouter router;
   private final MockNetworkClient mockNetworkClient;
-  private final ReadyForPollCallback readyForPollCallback;
+  private final RouterCallback routerCallback;
+  private final String operationTrackerType;
+  private final boolean testEncryption;
+  private MockKeyManagementService kms = null;
+  private MockCryptoService cryptoService = null;
+  private CryptoJobHandler cryptoJobHandler = null;
 
   // Certain tests recreate the routerConfig with different properties.
   private RouterConfig routerConfig;
@@ -98,12 +108,13 @@ public class GetBlobOperationTest {
 
   // Parameters for puts which are also used to verify the gets.
   private String blobIdStr;
+  private BlobId blobId;
   private BlobProperties blobProperties;
   private byte[] userMetadata;
   private byte[] putContent;
 
   // Options which are passed into GetBlobOperations
-  private GetBlobOptions options = new GetBlobOptions();
+  private GetBlobOptionsInternal options;
 
   private final GetTestRequestRegistrationCallbackImpl requestRegistrationCallback =
       new GetTestRequestRegistrationCallbackImpl();
@@ -118,16 +129,12 @@ public class GetBlobOperationTest {
     }
   }
 
-  private final AtomicInteger operationsCount = new AtomicInteger(0);
-  private final OperationCompleteCallback operationCompleteCallback = new OperationCompleteCallback(operationsCount);
-
   /**
    * A checker that either asserts that a get operation succeeds or returns the specified error code.
    */
   private final ErrorCodeChecker getErrorCodeChecker = new ErrorCodeChecker() {
     @Override
-    public void testAndAssert(RouterErrorCode expectedError)
-        throws Exception {
+    public void testAndAssert(RouterErrorCode expectedError) throws Exception {
       if (expectedError == null) {
         getAndAssertSuccess();
       } else {
@@ -140,15 +147,32 @@ public class GetBlobOperationTest {
   @After
   public void after() {
     router.close();
-    Assert.assertEquals("All operations should have completed", 0, operationsCount.get());
+    Assert.assertEquals("All operations should have completed", 0, router.getOperationsCount());
+    if (cryptoJobHandler != null) {
+      cryptoJobHandler.close();
+    }
+  }
+
+  /**
+   * Running for both {@link SimpleOperationTracker} and {@link AdaptiveOperationTracker} with and without encryption
+   * @return an array of Pairs of {{@link SimpleOperationTracker}, Non-Encrypted}, {{@link SimpleOperationTracker}, Encrypted}
+   * and {{@link AdaptiveOperationTracker}, Non-Encrypted}
+   */
+  @Parameterized.Parameters
+  public static List<Object[]> data() {
+    return Arrays.asList(
+        new Object[][]{{SimpleOperationTracker.class.getSimpleName(), false}, {SimpleOperationTracker.class.getSimpleName(), true}, {AdaptiveOperationTracker.class.getSimpleName(), false}});
   }
 
   /**
    * Instantiate a router, perform a put, close the router. The blob that was put will be saved in the MockServer,
    * and can be queried by the getBlob operations in the test.
+   * @param operationTrackerType the type of {@link OperationTracker} to use.
+   * @param testEncryption {@code true} if blobs need to be tested w/ encryption. {@code false} otherwise
    */
-  public GetBlobOperationTest()
-      throws Exception {
+  public GetBlobOperationTest(String operationTrackerType, boolean testEncryption) throws Exception {
+    this.operationTrackerType = operationTrackerType;
+    this.testEncryption = testEncryption;
     // Defaults. Tests may override these and do new puts as appropriate.
     maxChunkSize = random.nextInt(1024 * 1024) + 1;
     // a blob size that is greater than the maxChunkSize and is not a multiple of it. Will result in a composite blob.
@@ -159,16 +183,23 @@ public class GetBlobOperationTest {
     mockClusterMap = new MockClusterMap();
     blobIdFactory = new BlobIdFactory(mockClusterMap);
     routerMetrics = new NonBlockingRouterMetrics(mockClusterMap);
+    options = new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet);
     mockServerLayout = new MockServerLayout(mockClusterMap);
     replicasCount = mockClusterMap.getWritablePartitionIds().get(0).getReplicaIds().size();
     responseHandler = new ResponseHandler(mockClusterMap);
     MockNetworkClientFactory networkClientFactory =
         new MockNetworkClientFactory(vprops, mockSelectorState, MAX_PORTS_PLAIN_TEXT, MAX_PORTS_SSL,
             CHECKOUT_TIMEOUT_MS, mockServerLayout, time);
+    if (testEncryption) {
+      kms = new MockKeyManagementService(new KMSConfig(vprops),
+          TestUtils.getRandomKey(SingleKeyManagementServiceTest.DEFAULT_KEY_SIZE_CHARS));
+      cryptoService = new MockCryptoService(new CryptoServiceConfig(vprops));
+      cryptoJobHandler = new CryptoJobHandler(CryptoJobHandlerTest.DEFAULT_THREAD_COUNT);
+    }
     router = new NonBlockingRouter(routerConfig, new NonBlockingRouterMetrics(mockClusterMap), networkClientFactory,
-        new LoggingNotificationSystem(), mockClusterMap, time);
+        new LoggingNotificationSystem(), mockClusterMap, kms, cryptoService, cryptoJobHandler, time);
     mockNetworkClient = networkClientFactory.getMockNetworkClient();
-    readyForPollCallback = new ReadyForPollCallback(mockNetworkClient);
+    routerCallback = new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>());
   }
 
   /**
@@ -177,15 +208,16 @@ public class GetBlobOperationTest {
    * with the content that is generated within this method.
    * @throws Exception
    */
-  private void doPut()
-      throws Exception {
-    blobProperties = new BlobProperties(blobSize, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time);
+  private void doPut() throws Exception {
+    blobProperties = new BlobProperties(-1, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time,
+        Utils.getRandomShort(random), Utils.getRandomShort(random), testEncryption);
     userMetadata = new byte[10];
     random.nextBytes(userMetadata);
     putContent = new byte[blobSize];
     random.nextBytes(putContent);
     ReadableStreamChannel putChannel = new ByteBufferReadableStreamChannel(ByteBuffer.wrap(putContent));
     blobIdStr = router.putBlob(blobProperties, userMetadata, putChannel).get();
+    blobId = RouterUtils.getBlobIdFromString(blobIdStr, mockClusterMap);
   }
 
   /**
@@ -193,53 +225,59 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testInstantiation()
-      throws Exception {
-    Callback<GetBlobResult> operationCallback = new Callback<GetBlobResult>() {
+  public void testInstantiation() throws Exception {
+    Callback<GetBlobResultInternal> getRouterCallback = new Callback<GetBlobResultInternal>() {
       @Override
-      public void onCompletion(GetBlobResult result, Exception exception) {
+      public void onCompletion(GetBlobResultInternal result, Exception exception) {
         // no op.
       }
     };
 
-    // test a bad case
-    try {
-      new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, "invalid_id", null,
-          operationFuture, operationCallback, operationCompleteCallback, readyForPollCallback, blobIdFactory, time);
-      Assert.fail("Instantiation of GetBlobOperation with an invalid blob id must fail");
-    } catch (RouterException e) {
-      Assert.assertEquals("Unexpected exception received on creating GetBlobOperation", RouterErrorCode.InvalidBlobId,
-          e.getErrorCode());
-    }
-
-    blobIdStr = new BlobId(mockClusterMap.getWritablePartitionIds().get(0)).getID();
+    blobId = new BlobId(routerConfig.routerBlobidCurrentVersion, BlobId.BlobIdType.NATIVE,
+        mockClusterMap.getLocalDatacenterId(), Utils.getRandomShort(TestUtils.RANDOM),
+        Utils.getRandomShort(TestUtils.RANDOM), mockClusterMap.getWritablePartitionIds().get(0), false);
+    blobIdStr = blobId.getID();
     // test a good case
     // operationCount is not incremented here as this operation is not taken to completion.
-    GetBlobOperation op =
-        new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobIdStr, null,
-            operationFuture, operationCallback, operationCompleteCallback, readyForPollCallback, blobIdFactory, time);
-
-    Assert.assertEquals("Callbacks must match", operationCallback, op.getCallback());
-    Assert.assertEquals("Futures must match", operationFuture, op.getFuture());
+    GetBlobOperation op = new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobId,
+        new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet),
+        getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
+    Assert.assertEquals("Callbacks must match", getRouterCallback, op.getCallback());
     Assert.assertEquals("Blob ids must match", blobIdStr, op.getBlobIdStr());
+
+    // test the case where the tracker type is bad
+    Properties properties = getDefaultNonBlockingRouterProperties();
+    properties.setProperty("router.get.operation.tracker.type", "NonExistentTracker");
+    RouterConfig badConfig = new RouterConfig(new VerifiableProperties(properties));
+    try {
+      new GetBlobOperation(badConfig, routerMetrics, mockClusterMap, responseHandler, blobId,
+          new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet),
+          getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
+      Assert.fail("Instantiation of GetBlobOperation with an invalid tracker type must fail");
+    } catch (IllegalArgumentException e) {
+      // expected. Nothing to do.
+    }
   }
 
   /**
    * Put blobs that result in a single chunk; perform gets of the blob and ensure success.
    */
   @Test
-  public void testSimpleBlobGetSuccess()
-      throws Exception {
+  public void testSimpleBlobGetSuccess() throws Exception {
     for (int i = 0; i < 10; i++) {
       // blobSize in the range [1, maxChunkSize]
       blobSize = random.nextInt(maxChunkSize) + 1;
       doPut();
       switch (i % 2) {
         case 0:
-          options = new GetBlobOptions(GetBlobOptions.OperationType.All, null);
+          options = new GetBlobOptionsInternal(
+              new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All).build(), false,
+              routerMetrics.ageAtGet);
           break;
         case 1:
-          options = new GetBlobOptions(GetBlobOptions.OperationType.Data, null);
+          options = new GetBlobOptionsInternal(
+              new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.Data).build(), false,
+              routerMetrics.ageAtGet);
           break;
       }
       getAndAssertSuccess();
@@ -250,8 +288,7 @@ public class GetBlobOperationTest {
    * Put a blob with no data, perform get and ensure success.
    */
   @Test
-  public void testZeroSizedBlobGetSuccess()
-      throws Exception {
+  public void testZeroSizedBlobGetSuccess() throws Exception {
     blobSize = 0;
     doPut();
     getAndAssertSuccess();
@@ -261,8 +298,7 @@ public class GetBlobOperationTest {
    * Put blobs that result in multiple chunks and at chunk boundaries; perform gets and ensure success.
    */
   @Test
-  public void testCompositeBlobChunkSizeMultipleGetSuccess()
-      throws Exception {
+  public void testCompositeBlobChunkSizeMultipleGetSuccess() throws Exception {
     for (int i = 2; i < 10; i++) {
       blobSize = maxChunkSize * i;
       doPut();
@@ -275,17 +311,20 @@ public class GetBlobOperationTest {
    * success.
    */
   @Test
-  public void testCompositeBlobNotChunkSizeMultipleGetSuccess()
-      throws Exception {
+  public void testCompositeBlobNotChunkSizeMultipleGetSuccess() throws Exception {
     for (int i = 0; i < 10; i++) {
       blobSize = maxChunkSize * i + random.nextInt(maxChunkSize - 1) + 1;
       doPut();
       switch (i % 2) {
         case 0:
-          options = new GetBlobOptions(GetBlobOptions.OperationType.All, null);
+          options = new GetBlobOptionsInternal(
+              new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All).build(), false,
+              routerMetrics.ageAtGet);
           break;
         case 1:
-          options = new GetBlobOptions(GetBlobOptions.OperationType.Data, null);
+          options = new GetBlobOptionsInternal(
+              new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.Data).build(), false,
+              routerMetrics.ageAtGet);
           break;
       }
       getAndAssertSuccess();
@@ -297,8 +336,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testRouterRequestTimeoutAllFailure()
-      throws Exception {
+  public void testRouterRequestTimeoutAllFailure() throws Exception {
     doPut();
     GetBlobOperation op = createOperation(null);
     op.poll(requestRegistrationCallback);
@@ -318,8 +356,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testNetworkClientTimeoutAllFailure()
-      throws Exception {
+  public void testNetworkClientTimeoutAllFailure() throws Exception {
     doPut();
     GetBlobOperation op = createOperation(null);
     while (!op.isOperationComplete()) {
@@ -347,14 +384,12 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testBlobNotFoundCase()
-      throws Exception {
+  public void testBlobNotFoundCase() throws Exception {
     doPut();
     testWithErrorCodes(Collections.singletonMap(ServerErrorCode.Blob_Not_Found, replicasCount), mockServerLayout,
         RouterErrorCode.BlobDoesNotExist, new ErrorCodeChecker() {
           @Override
-          public void testAndAssert(RouterErrorCode expectedError)
-              throws Exception {
+          public void testAndAssert(RouterErrorCode expectedError) throws Exception {
             GetBlobOperation op = createOperationAndComplete(null);
             Assert.assertEquals("Must have attempted sending requests to all replicas", replicasCount,
                 correlationIdToGetOperation.size());
@@ -369,8 +404,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testErrorPrecedenceWithBlobDeletedAndExpiredCase()
-      throws Exception {
+  public void testErrorPrecedenceWithBlobDeletedAndExpiredCase() throws Exception {
     doPut();
     Map<ServerErrorCode, RouterErrorCode> serverErrorToRouterError = new HashMap<>();
     serverErrorToRouterError.put(ServerErrorCode.Blob_Deleted, RouterErrorCode.BlobDeleted);
@@ -389,8 +423,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testSuccessInThePresenceOfVariousErrors()
-      throws Exception {
+  public void testSuccessInThePresenceOfVariousErrors() throws Exception {
     doPut();
     // The put for the blob being requested happened.
     String dcWherePutHappened = routerConfig.routerDatacenterName;
@@ -413,13 +446,60 @@ public class GetBlobOperationTest {
   }
 
   /**
+   * Test failure with KMS
+   * @throws Exception
+   */
+  @Test
+  public void testKMSFailure() throws Exception {
+    if (testEncryption) {
+      // simple Blob
+      blobSize = random.nextInt(maxChunkSize) + 1;
+      doPut();
+      kms.exceptionToThrow.set(GSE);
+      GetBlobOperation op = createOperationAndComplete(null);
+      assertFailureAndCheckErrorCode(op, RouterErrorCode.UnexpectedInternalError);
+
+      // composite blob
+      kms.exceptionToThrow.set(null);
+      blobSize = maxChunkSize * random.nextInt(10);
+      doPut();
+      kms.exceptionToThrow.set(GSE);
+      op = createOperationAndComplete(null);
+      assertFailureAndCheckErrorCode(op, RouterErrorCode.UnexpectedInternalError);
+    }
+  }
+
+  /**
+   * Test failure with CryptoService
+   * @throws Exception
+   */
+  @Test
+  public void testCryptoServiceFailure() throws Exception {
+    if (testEncryption) {
+      // simple Blob
+      blobSize = random.nextInt(maxChunkSize) + 1;
+      doPut();
+      cryptoService.exceptionOnDecryption.set(GSE);
+      GetBlobOperation op = createOperationAndComplete(null);
+      assertFailureAndCheckErrorCode(op, RouterErrorCode.UnexpectedInternalError);
+
+      // composite blob
+      cryptoService.exceptionOnDecryption.set(null);
+      blobSize = maxChunkSize * random.nextInt(10);
+      doPut();
+      cryptoService.exceptionOnDecryption.set(GSE);
+      op = createOperationAndComplete(null);
+      assertFailureAndCheckErrorCode(op, RouterErrorCode.UnexpectedInternalError);
+    }
+  }
+
+  /**
    * Helper method to simulate errors from the servers. Only one node in the datacenter where the put happened will
    * return success. No matter what order the servers are contacted, as long as one of them returns success, the whole
    * operation should succeed.
    * @param dcWherePutHappened the datacenter where the put happened.
    */
-  private void testVariousErrors(String dcWherePutHappened)
-      throws Exception {
+  private void testVariousErrors(String dcWherePutHappened) throws Exception {
     ArrayList<MockServer> mockServers = new ArrayList<>(mockServerLayout.getMockServers());
     ArrayList<ServerErrorCode> serverErrors = new ArrayList<>(Arrays.asList(ServerErrorCode.values()));
     // set the status to various server level or partition level errors (not Blob_Deleted or Blob_Expired - as they
@@ -445,8 +525,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testReadNotCalledBeforeChunkArrival()
-      throws Exception {
+  public void testReadNotCalledBeforeChunkArrival() throws Exception {
     // 3 chunks so blob can be cached completely before reading
     blobSize = maxChunkSize * 2 + 1;
     doPut();
@@ -458,8 +537,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testDelayedChunks()
-      throws Exception {
+  public void testDelayedChunks() throws Exception {
     doPut();
     getAndAssertSuccess(false, true);
   }
@@ -469,8 +547,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testDataChunkFailure()
-      throws Exception {
+  public void testDataChunkFailure() throws Exception {
     for (ServerErrorCode serverErrorCode : ServerErrorCode.values()) {
       if (serverErrorCode != ServerErrorCode.No_Error) {
         testDataChunkError(serverErrorCode, RouterErrorCode.UnexpectedInternalError);
@@ -483,8 +560,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testLegacyBlobGetSuccess()
-      throws Exception {
+  public void testLegacyBlobGetSuccess() throws Exception {
     RouterTestHelpers.setBlobFormatVersionForAllServers(MessageFormatRecord.Blob_Version_V1, mockServerLayout);
     for (int i = 0; i < 10; i++) {
       // blobSize in the range [1, maxChunkSize]
@@ -500,8 +576,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testRangeRequestSimpleBlob()
-      throws Exception {
+  public void testRangeRequestSimpleBlob() throws Exception {
     // Random valid ranges
     for (int i = 0; i < 5; i++) {
       blobSize = random.nextInt(maxChunkSize) + 1;
@@ -509,7 +584,6 @@ public class GetBlobOperationTest {
       int randomTwo = random.nextInt(blobSize);
       testRangeRequestOffsetRange(Math.min(randomOne, randomTwo), Math.max(randomOne, randomTwo), true);
     }
-
     blobSize = random.nextInt(maxChunkSize) + 1;
     // Entire blob
     testRangeRequestOffsetRange(0, blobSize - 1, true);
@@ -538,8 +612,7 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testRangeRequestCompositeBlob()
-      throws Exception {
+  public void testRangeRequestCompositeBlob() throws Exception {
     // Random valid ranges
     for (int i = 0; i < 5; i++) {
       blobSize = random.nextInt(maxChunkSize) + maxChunkSize * random.nextInt(10);
@@ -588,13 +661,72 @@ public class GetBlobOperationTest {
    * @throws Exception
    */
   @Test
-  public void testEarlyReadableStreamChannelClose()
-      throws Exception {
+  public void testEarlyReadableStreamChannelClose() throws Exception {
     for (int numChunksInBlob = 0; numChunksInBlob <= 4; numChunksInBlob++) {
       for (int numChunksToRead = 0; numChunksToRead < numChunksInBlob; numChunksToRead++) {
         testEarlyReadableStreamChannelClose(numChunksInBlob, numChunksToRead);
       }
     }
+  }
+
+  /**
+   * Test the Errors {@link RouterErrorCode} received by Get Operation. The operation exception is set
+   * based on the priority of these errors.
+   * @throws Exception
+   */
+  @Test
+  public void testSetOperationException() throws Exception {
+    doPut();
+    GetBlobOperation op = createOperation(null);
+    RouterErrorCode[] routerErrorCodes = new RouterErrorCode[8];
+    routerErrorCodes[0] = RouterErrorCode.BlobDoesNotExist;
+    routerErrorCodes[1] = RouterErrorCode.OperationTimedOut;
+    routerErrorCodes[2] = RouterErrorCode.UnexpectedInternalError;
+    routerErrorCodes[3] = RouterErrorCode.AmbryUnavailable;
+    routerErrorCodes[4] = RouterErrorCode.RangeNotSatisfiable;
+    routerErrorCodes[5] = RouterErrorCode.BlobExpired;
+    routerErrorCodes[6] = RouterErrorCode.BlobDeleted;
+    routerErrorCodes[7] = RouterErrorCode.InvalidBlobId;
+
+    for (int i = 0; i < routerErrorCodes.length; ++i) {
+      op.setOperationException(new RouterException("RouterError", routerErrorCodes[i]));
+      op.poll(requestRegistrationCallback);
+      while (!op.isOperationComplete()) {
+        time.sleep(routerConfig.routerRequestTimeoutMs + 1);
+        op.poll(requestRegistrationCallback);
+      }
+      Assert.assertEquals(((RouterException) op.operationException.get()).getErrorCode(), routerErrorCodes[i]);
+    }
+    for (int i = routerErrorCodes.length - 1; i >= 0; --i) {
+      op.setOperationException(new RouterException("RouterError", routerErrorCodes[i]));
+      op.poll(requestRegistrationCallback);
+      while (!op.isOperationComplete()) {
+        time.sleep(routerConfig.routerRequestTimeoutMs + 1);
+        op.poll(requestRegistrationCallback);
+      }
+      Assert.assertEquals(((RouterException) op.operationException.get()).getErrorCode(),
+          routerErrorCodes[routerErrorCodes.length - 1]);
+    }
+
+    // set null to test non RouterException
+    op.operationException.set(null);
+    Exception nonRouterException = new Exception();
+    op.setOperationException(nonRouterException);
+    op.poll(requestRegistrationCallback);
+    while (!op.isOperationComplete()) {
+      time.sleep(routerConfig.routerRequestTimeoutMs + 1);
+      op.poll(requestRegistrationCallback);
+    }
+    Assert.assertEquals(nonRouterException, op.operationException.get());
+
+    // test the edge case where current operationException is non RouterException
+    op.setOperationException(new RouterException("RouterError", RouterErrorCode.BlobDeleted));
+    op.poll(requestRegistrationCallback);
+    while (!op.isOperationComplete()) {
+      time.sleep(routerConfig.routerRequestTimeoutMs + 1);
+      op.poll(requestRegistrationCallback);
+    }
+    Assert.assertEquals(((RouterException) op.operationException.get()).getErrorCode(), RouterErrorCode.BlobDeleted);
   }
 
   /**
@@ -606,20 +738,19 @@ public class GetBlobOperationTest {
    *                        {@link ReadableStreamChannel}.
    * @throws Exception
    */
-  private void testEarlyReadableStreamChannelClose(int numChunksInBlob, final int numChunksToRead)
-      throws Exception {
+  private void testEarlyReadableStreamChannelClose(int numChunksInBlob, final int numChunksToRead) throws Exception {
     final AtomicReference<Exception> callbackException = new AtomicReference<>();
     final AtomicReference<Future<Long>> readIntoFuture = new AtomicReference<>();
     final CountDownLatch readCompleteLatch = new CountDownLatch(1);
-    Callback<GetBlobResult> callback = new Callback<GetBlobResult>() {
+    Callback<GetBlobResultInternal> callback = new Callback<GetBlobResultInternal>() {
       @Override
-      public void onCompletion(final GetBlobResult result, Exception exception) {
+      public void onCompletion(final GetBlobResultInternal result, Exception exception) {
         if (exception != null) {
           callbackException.set(exception);
           readCompleteLatch.countDown();
         } else {
           final ByteBufferAsyncWritableChannel writableChannel = new ByteBufferAsyncWritableChannel();
-          readIntoFuture.set(result.getBlobDataChannel().readInto(writableChannel, null));
+          readIntoFuture.set(result.getBlobResult.getBlobDataChannel().readInto(writableChannel, null));
           Utils.newThread(new Runnable() {
             @Override
             public void run() {
@@ -630,7 +761,7 @@ public class GetBlobOperationTest {
                   writableChannel.resolveOldestChunk(null);
                   chunksLeftToRead--;
                 }
-                result.getBlobDataChannel().close();
+                result.getBlobResult.getBlobDataChannel().close();
               } catch (Exception e) {
                 callbackException.set(e);
               } finally {
@@ -676,7 +807,9 @@ public class GetBlobOperationTest {
   private void testRangeRequestOffsetRange(long startOffset, long endOffset, boolean rangeSatisfiable)
       throws Exception {
     doPut();
-    options = new GetBlobOptions(GetBlobOptions.OperationType.All, ByteRange.fromOffsetRange(startOffset, endOffset));
+    options = new GetBlobOptionsInternal(new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All)
+        .range(ByteRange.fromOffsetRange(startOffset, endOffset))
+        .build(), false, routerMetrics.ageAtGet);
     getErrorCodeChecker.testAndAssert(rangeSatisfiable ? null : RouterErrorCode.RangeNotSatisfiable);
   }
 
@@ -687,10 +820,11 @@ public class GetBlobOperationTest {
    * @param rangeSatisfiable {@code true} if the range request should succeed.
    * @throws Exception
    */
-  private void testRangeRequestFromStartOffset(long startOffset, boolean rangeSatisfiable)
-      throws Exception {
+  private void testRangeRequestFromStartOffset(long startOffset, boolean rangeSatisfiable) throws Exception {
     doPut();
-    options = new GetBlobOptions(GetBlobOptions.OperationType.All, ByteRange.fromStartOffset(startOffset));
+    options = new GetBlobOptionsInternal(new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All)
+        .range(ByteRange.fromStartOffset(startOffset))
+        .build(), false, routerMetrics.ageAtGet);
     getErrorCodeChecker.testAndAssert(rangeSatisfiable ? null : RouterErrorCode.RangeNotSatisfiable);
   }
 
@@ -701,10 +835,11 @@ public class GetBlobOperationTest {
    * @param rangeSatisfiable {@code true} if the range request should succeed.
    * @throws Exception
    */
-  private void testRangeRequestLastNBytes(long lastNBytes, boolean rangeSatisfiable)
-      throws Exception {
+  private void testRangeRequestLastNBytes(long lastNBytes, boolean rangeSatisfiable) throws Exception {
     doPut();
-    options = new GetBlobOptions(GetBlobOptions.OperationType.All, ByteRange.fromLastNBytes(lastNBytes));
+    options = new GetBlobOptionsInternal(new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All)
+        .range(ByteRange.fromLastNBytes(lastNBytes))
+        .build(), false, routerMetrics.ageAtGet);
     getErrorCodeChecker.testAndAssert(rangeSatisfiable ? null : RouterErrorCode.RangeNotSatisfiable);
   }
 
@@ -723,58 +858,55 @@ public class GetBlobOperationTest {
     final AtomicReference<Exception> readCompleteException = new AtomicReference<>(null);
     final ByteBufferAsyncWritableChannel asyncWritableChannel = new ByteBufferAsyncWritableChannel();
     RouterTestHelpers.setGetErrorOnDataBlobOnlyForAllServers(true, mockServerLayout);
-    RouterTestHelpers
-        .testWithErrorCodes(Collections.singletonMap(serverErrorCode, 9), mockServerLayout, expectedErrorCode,
-            new ErrorCodeChecker() {
+    RouterTestHelpers.testWithErrorCodes(Collections.singletonMap(serverErrorCode, 9), mockServerLayout,
+        expectedErrorCode, new ErrorCodeChecker() {
+          @Override
+          public void testAndAssert(RouterErrorCode expectedError) throws Exception {
+            Callback<GetBlobResultInternal> callback = new Callback<GetBlobResultInternal>() {
               @Override
-              public void testAndAssert(RouterErrorCode expectedError)
-                  throws Exception {
-                Callback<GetBlobResult> callback = new Callback<GetBlobResult>() {
-                  @Override
-                  public void onCompletion(final GetBlobResult result, final Exception exception) {
-                    if (exception != null) {
-                      asyncWritableChannel.close();
-                      readCompleteLatch.countDown();
-                    } else {
-                      Utils.newThread(new Runnable() {
-                        @Override
-                        public void run() {
-                          try {
-                            result.getBlobDataChannel().readInto(asyncWritableChannel, new Callback<Long>() {
-                              @Override
-                              public void onCompletion(Long result, Exception exception) {
-                                asyncWritableChannel.close();
-                              }
-                            });
-                            asyncWritableChannel.getNextChunk();
-                          } catch (Exception e) {
-                            readCompleteException.set(e);
-                          } finally {
-                            readCompleteLatch.countDown();
+              public void onCompletion(final GetBlobResultInternal result, final Exception exception) {
+                if (exception != null) {
+                  asyncWritableChannel.close();
+                  readCompleteLatch.countDown();
+                } else {
+                  Utils.newThread(new Runnable() {
+                    @Override
+                    public void run() {
+                      try {
+                        result.getBlobResult.getBlobDataChannel().readInto(asyncWritableChannel, new Callback<Long>() {
+                          @Override
+                          public void onCompletion(Long result, Exception exception) {
+                            asyncWritableChannel.close();
                           }
-                        }
-                      }, false).start();
+                        });
+                        asyncWritableChannel.getNextChunk();
+                      } catch (Exception e) {
+                        readCompleteException.set(e);
+                      } finally {
+                        readCompleteLatch.countDown();
+                      }
                     }
-                  }
-                };
-                GetBlobOperation op = createOperationAndComplete(callback);
-                Assert.assertTrue(readCompleteLatch.await(2, TimeUnit.SECONDS));
-                Assert.assertTrue("Operation should be complete at this time", op.isOperationComplete());
-                if (readCompleteException.get() != null) {
-                  throw readCompleteException.get();
+                  }, false).start();
                 }
-                Assert.assertFalse("AsyncWriteableChannel should have been closed.", asyncWritableChannel.isOpen());
-                assertFailureAndCheckErrorCode(op, expectedError);
               }
-            });
+            };
+            GetBlobOperation op = createOperationAndComplete(callback);
+            Assert.assertTrue(readCompleteLatch.await(2, TimeUnit.SECONDS));
+            Assert.assertTrue("Operation should be complete at this time", op.isOperationComplete());
+            if (readCompleteException.get() != null) {
+              throw readCompleteException.get();
+            }
+            Assert.assertFalse("AsyncWriteableChannel should have been closed.", asyncWritableChannel.isOpen());
+            assertFailureAndCheckErrorCode(op, expectedError);
+          }
+        });
   }
 
   /**
    * Construct GetBlob operations with appropriate callbacks, then poll those operations until they complete,
    * and ensure that the whole blob data is read out and the contents match.
    */
-  private void getAndAssertSuccess()
-      throws Exception {
+  private void getAndAssertSuccess() throws Exception {
     getAndAssertSuccess(false, false);
   }
 
@@ -794,23 +926,25 @@ public class GetBlobOperationTest {
     final AtomicReference<Exception> operationException = new AtomicReference<>(null);
     final int numChunks = ((blobSize + maxChunkSize - 1) / maxChunkSize) + (blobSize > maxChunkSize ? 1 : 0);
     mockNetworkClient.resetProcessedResponseCount();
-    Callback<GetBlobResult> callback = new Callback<GetBlobResult>() {
+    Callback<GetBlobResultInternal> callback = new Callback<GetBlobResultInternal>() {
       @Override
-      public void onCompletion(final GetBlobResult result, final Exception exception) {
+      public void onCompletion(final GetBlobResultInternal result, final Exception exception) {
         if (exception != null) {
           operationException.set(exception);
           readCompleteLatch.countDown();
         } else {
           try {
-            switch (options.getOperationType()) {
+            switch (options.getBlobOptions.getOperationType()) {
               case All:
-                BlobInfo blobInfo = result.getBlobInfo();
+                BlobInfo blobInfo = result.getBlobResult.getBlobInfo();
                 Assert.assertTrue("Blob properties must be the same",
                     RouterTestHelpers.haveEquivalentFields(blobProperties, blobInfo.getBlobProperties()));
+                Assert.assertEquals("Blob size should in received blobProperties should be the same as actual",
+                    blobSize, blobInfo.getBlobProperties().getBlobSize());
                 Assert.assertArrayEquals("User metadata must be the same", userMetadata, blobInfo.getUserMetadata());
                 break;
               case Data:
-                Assert.assertNull("Unexpected blob info in operation result", result.getBlobInfo());
+                Assert.assertNull("Unexpected blob info in operation result", result.getBlobResult.getBlobInfo());
                 break;
             }
           } catch (Exception e) {
@@ -819,7 +953,8 @@ public class GetBlobOperationTest {
 
           final ByteBufferAsyncWritableChannel asyncWritableChannel = new ByteBufferAsyncWritableChannel();
           final Future<Long> preSetReadIntoFuture =
-              initiateReadBeforeChunkGet ? result.getBlobDataChannel().readInto(asyncWritableChannel, null) : null;
+              initiateReadBeforeChunkGet ? result.getBlobResult.getBlobDataChannel()
+                  .readInto(asyncWritableChannel, null) : null;
           Utils.newThread(new Runnable() {
             @Override
             public void run() {
@@ -831,9 +966,10 @@ public class GetBlobOperationTest {
                 }
               }
               Future<Long> readIntoFuture = initiateReadBeforeChunkGet ? preSetReadIntoFuture
-                  : result.getBlobDataChannel().readInto(asyncWritableChannel, null);
-              assertBlobReadSuccess(options, readIntoFuture, asyncWritableChannel, result.getBlobDataChannel(),
-                  readCompleteLatch, readCompleteResult, readCompleteException);
+                  : result.getBlobResult.getBlobDataChannel().readInto(asyncWritableChannel, null);
+              assertBlobReadSuccess(options.getBlobOptions, readIntoFuture, asyncWritableChannel,
+                  result.getBlobResult.getBlobDataChannel(), readCompleteLatch, readCompleteResult,
+                  readCompleteException);
             }
           }, false).start();
         }
@@ -852,10 +988,10 @@ public class GetBlobOperationTest {
     }
     // Ensure that a ChannelClosed exception is not set when the ReadableStreamChannel is closed correctly.
     Assert.assertNull("Callback operation exception should be null", op.getOperationException());
-    if (options.getOperationType() != GetBlobOptions.OperationType.BlobInfo) {
+    if (options.getBlobOptions.getOperationType() != GetBlobOptions.OperationType.BlobInfo) {
       int sizeWritten = blobSize;
-      if (options.getRange() != null) {
-        ByteRange range = options.getRange().toResolvedByteRange(blobSize);
+      if (options.getBlobOptions.getRange() != null) {
+        ByteRange range = options.getBlobOptions.getRange().toResolvedByteRange(blobSize);
         sizeWritten = (int) (range.getEndOffset() - range.getStartOffset() + 1);
       }
       Assert.assertEquals("Size read must equal size written", sizeWritten, readCompleteResult.get());
@@ -868,16 +1004,14 @@ public class GetBlobOperationTest {
    * @return the operation
    * @throws Exception
    */
-  private GetBlobOperation createOperationAndComplete(Callback<GetBlobResult> callback)
-      throws Exception {
+  private GetBlobOperation createOperationAndComplete(Callback<GetBlobResultInternal> callback) throws Exception {
     GetBlobOperation op = createOperation(callback);
     while (!op.isOperationComplete()) {
       op.poll(requestRegistrationCallback);
       List<ResponseInfo> responses = sendAndWaitForResponses(requestRegistrationCallback.requestListToFill);
       for (ResponseInfo responseInfo : responses) {
-        GetResponse getResponse = responseInfo.getError() == null ? GetResponse
-            .readFrom(new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse())), mockClusterMap)
-            : null;
+        GetResponse getResponse = responseInfo.getError() == null ? GetResponse.readFrom(
+            new DataInputStream(new ByteBufferInputStream(responseInfo.getResponse())), mockClusterMap) : null;
         op.handleResponse(responseInfo, getResponse);
       }
     }
@@ -890,12 +1024,11 @@ public class GetBlobOperationTest {
    * @return the operation
    * @throws Exception
    */
-  private GetBlobOperation createOperation(Callback<GetBlobResult> callback)
-      throws Exception {
-    operationsCount.incrementAndGet();
+  private GetBlobOperation createOperation(Callback<GetBlobResultInternal> callback) throws Exception {
+    NonBlockingRouter.currentOperationsCount.incrementAndGet();
     GetBlobOperation op =
-        new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobIdStr, options,
-            operationFuture, callback, operationCompleteCallback, readyForPollCallback, blobIdFactory, time);
+        new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobId, options, callback,
+            routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
     requestRegistrationCallback.requestListToFill = new ArrayList<>();
     return op;
   }
@@ -937,9 +1070,7 @@ public class GetBlobOperationTest {
       // If a range is set, compare the result against the specified byte range.
       if (options != null && options.getRange() != null) {
         ByteRange range = options.getRange().toResolvedByteRange(blobSize);
-        int startOffset = (int) range.getStartOffset();
-        int endOffset = (int) range.getEndOffset();
-        putContentBuf = ByteBuffer.wrap(putContent, startOffset, endOffset - startOffset + 1);
+        putContentBuf = ByteBuffer.wrap(putContent, (int) range.getStartOffset(), (int) range.getRangeSize());
       }
       long written;
       Assert.assertTrue("ReadyForPollCallback should have been invoked as readInto() was called",
@@ -980,8 +1111,7 @@ public class GetBlobOperationTest {
    * @return the list of responses from the network client.
    * @throws IOException
    */
-  private List<ResponseInfo> sendAndWaitForResponses(List<RequestInfo> requestList)
-      throws IOException {
+  private List<ResponseInfo> sendAndWaitForResponses(List<RequestInfo> requestList) throws IOException {
     int sendCount = requestList.size();
     // Shuffle the replicas to introduce randomness in the order in which responses arrive.
     Collections.shuffle(requestList);
@@ -1007,6 +1137,7 @@ public class GetBlobOperationTest {
     properties.setProperty("router.max.put.chunk.size.bytes", Integer.toString(maxChunkSize));
     properties.setProperty("router.get.request.parallelism", Integer.toString(2));
     properties.setProperty("router.get.success.target", Integer.toString(1));
+    properties.setProperty("router.get.operation.tracker.type", operationTrackerType);
     return properties;
   }
 }

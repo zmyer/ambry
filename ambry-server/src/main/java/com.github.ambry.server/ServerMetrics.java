@@ -106,6 +106,30 @@ public class ServerMetrics {
   public final Histogram replicaMetadataSendTimeInMs;
   public final Histogram replicaMetadataTotalTimeInMs;
 
+  public final Histogram triggerCompactionRequestQueueTimeInMs;
+  public final Histogram triggerCompactionRequestProcessingTimeInMs;
+  public final Histogram triggerCompactionResponseQueueTimeInMs;
+  public final Histogram triggerCompactionResponseSendTimeInMs;
+  public final Histogram triggerCompactionRequestTotalTimeInMs;
+
+  public final Histogram requestControlRequestQueueTimeInMs;
+  public final Histogram requestControlRequestProcessingTimeInMs;
+  public final Histogram requestControlResponseQueueTimeInMs;
+  public final Histogram requestControlResponseSendTimeInMs;
+  public final Histogram requestControlRequestTotalTimeInMs;
+
+  public final Histogram replicationControlRequestQueueTimeInMs;
+  public final Histogram replicationControlRequestProcessingTimeInMs;
+  public final Histogram replicationControlResponseQueueTimeInMs;
+  public final Histogram replicationControlResponseSendTimeInMs;
+  public final Histogram replicationControlRequestTotalTimeInMs;
+
+  public final Histogram catchupStatusRequestQueueTimeInMs;
+  public final Histogram catchupStatusRequestProcessingTimeInMs;
+  public final Histogram catchupStatusResponseQueueTimeInMs;
+  public final Histogram catchupStatusResponseSendTimeInMs;
+  public final Histogram catchupStatusRequestTotalTimeInMs;
+
   public final Histogram blobSizeInBytes;
   public final Histogram blobUserMetadataSizeInBytes;
 
@@ -121,6 +145,10 @@ public class ServerMetrics {
   public final Meter deleteBlobRequestRate;
   public final Meter ttlBlobRequestRate;
   public final Meter replicaMetadataRequestRate;
+  public final Meter triggerCompactionRequestRate;
+  public final Meter requestControlRequestRate;
+  public final Meter replicationControlRequestRate;
+  public final Meter catchupStatusRequestRate;
 
   public final Meter putSmallBlobRequestRate;
   public final Meter getSmallBlobRequestRate;
@@ -139,6 +167,7 @@ public class ServerMetrics {
   public final Counter unExpectedStoreGetError;
   public final Counter unExpectedStoreTTLError;
   public final Counter unExpectedStoreDeleteError;
+  public final Counter unExpectedAdminOperationError;
   public final Counter unExpectedStoreFindEntriesError;
   public final Counter idAlreadyExistError;
   public final Counter dataCorruptError;
@@ -146,6 +175,10 @@ public class ServerMetrics {
   public final Counter idNotFoundError;
   public final Counter idDeletedError;
   public final Counter ttlExpiredError;
+  public final Counter badRequestError;
+  public final Counter temporarilyDisabledError;
+  public final Counter getAuthorizationFailure;
+  public final Counter deleteAuthorizationFailure;
 
   public ServerMetrics(MetricRegistry registry) {
     putBlobRequestQueueTimeInMs =
@@ -262,6 +295,50 @@ public class ServerMetrics {
     replicaMetadataTotalTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataTotalTime"));
 
+    triggerCompactionRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestQueueTimeInMs"));
+    triggerCompactionRequestProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestProcessingTimeInMs"));
+    triggerCompactionResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionResponseQueueTimeInMs"));
+    triggerCompactionResponseSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionResponseSendTimeInMs"));
+    triggerCompactionRequestTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestTotalTimeInMs"));
+
+    requestControlRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "RequestControlRequestQueueTimeInMs"));
+    requestControlRequestProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "RequestControlRequestProcessingTimeInMs"));
+    requestControlResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "RequestControlResponseQueueTimeInMs"));
+    requestControlResponseSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "RequestControlResponseSendTimeInMs"));
+    requestControlRequestTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "RequestControlRequestTotalTimeInMs"));
+
+    replicationControlRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicationControlRequestQueueTimeInMs"));
+    replicationControlRequestProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicationControlRequestProcessingTimeInMs"));
+    replicationControlResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicationControlResponseQueueTimeInMs"));
+    replicationControlResponseSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicationControlResponseSendTimeInMs"));
+    replicationControlRequestTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicationControlRequestTotalTimeInMs"));
+
+    catchupStatusRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestQueueTimeInMs"));
+    catchupStatusRequestProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestProcessingTimeInMs"));
+    catchupStatusResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusResponseQueueTimeInMs"));
+    catchupStatusResponseSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusResponseSendTimeInMs"));
+    catchupStatusRequestTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestTotalTimeInMs"));
+
     blobSizeInBytes = registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobSize"));
     blobUserMetadataSizeInBytes = registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobUserMetadataSize"));
 
@@ -279,6 +356,12 @@ public class ServerMetrics {
     deleteBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "DeleteBlobRequestRate"));
     ttlBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "TTLBlobRequestRate"));
     replicaMetadataRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataRequestRate"));
+    triggerCompactionRequestRate =
+        registry.meter(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestRate"));
+    requestControlRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "RequestControlRequestRate"));
+    replicationControlRequestRate =
+        registry.meter(MetricRegistry.name(AmbryRequests.class, "ReplicationControlRequestRate"));
+    catchupStatusRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestRate"));
 
     putSmallBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "PutSmallBlobRequestRate"));
     getSmallBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "GetSmallBlobRequestRate"));
@@ -299,13 +382,21 @@ public class ServerMetrics {
     idNotFoundError = registry.counter(MetricRegistry.name(AmbryRequests.class, "IDNotFoundError"));
     idDeletedError = registry.counter(MetricRegistry.name(AmbryRequests.class, "IDDeletedError"));
     ttlExpiredError = registry.counter(MetricRegistry.name(AmbryRequests.class, "TTLExpiredError"));
+    temporarilyDisabledError = registry.counter(MetricRegistry.name(AmbryRequests.class, "TemporarilyDisabledError"));
+    badRequestError = registry.counter(MetricRegistry.name(AmbryRequests.class, "BadRequestError"));
     unExpectedStorePutError = registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStorePutError"));
     unExpectedStoreGetError = registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreGetError"));
     unExpectedStoreDeleteError =
         registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreDeleteError"));
+    unExpectedAdminOperationError =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedAdminOperationError"));
     unExpectedStoreTTLError = registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreTTLError"));
     unExpectedStoreFindEntriesError =
         registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreFindEntriesError"));
+    getAuthorizationFailure =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "GetAuthorizationFailure"));
+    deleteAuthorizationFailure =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "DeleteAuthorizationFailure"));
   }
 
   public void markPutBlobRequestRateBySize(long blobSize) {

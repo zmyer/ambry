@@ -13,12 +13,15 @@
  */
 package com.github.ambry.rest;
 
+import com.github.ambry.account.Container;
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.router.ByteBufferRSC;
 import com.github.ambry.router.Callback;
 import com.github.ambry.router.GetBlobOptions;
+import com.github.ambry.router.GetBlobOptionsBuilder;
 import com.github.ambry.router.GetBlobResult;
 import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
@@ -74,8 +77,7 @@ public class MockBlobStorageService implements BlobStorageService {
   }
 
   @Override
-  public void start()
-      throws InstantiationException {
+  public void start() throws InstantiationException {
     serviceRunning = true;
   }
 
@@ -89,7 +91,8 @@ public class MockBlobStorageService implements BlobStorageService {
     if (shouldProceed(restRequest, restResponseChannel)) {
       String blobId = getBlobId(restRequest);
       MockGetCallback callback = new MockGetCallback(this, restRequest, restResponseChannel);
-      router.getBlob(blobId, new GetBlobOptions(GetBlobOptions.OperationType.All, null), callback);
+      router.getBlob(blobId, new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All).build(),
+          callback);
     }
   }
 
@@ -97,6 +100,8 @@ public class MockBlobStorageService implements BlobStorageService {
   public void handlePost(RestRequest restRequest, RestResponseChannel restResponseChannel) {
     if (shouldProceed(restRequest, restResponseChannel)) {
       try {
+        restRequest.setArg(RestUtils.InternalKeys.TARGET_ACCOUNT_KEY, InMemAccountService.UNKNOWN_ACCOUNT);
+        restRequest.setArg(RestUtils.InternalKeys.TARGET_CONTAINER_KEY, Container.UNKNOWN_CONTAINER);
         BlobProperties blobProperties = RestUtils.buildBlobProperties(restRequest.getArgs());
         byte[] usermetadata = RestUtils.buildUsermetadata(restRequest.getArgs());
         router.putBlob(blobProperties, usermetadata, restRequest,
@@ -107,11 +112,24 @@ public class MockBlobStorageService implements BlobStorageService {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   * <p/>
+   * PUT is not supported by {@link MockBlobStorageService}.
+   * @param restRequest the {@link RestRequest} that needs to be handled.
+   * @param restResponseChannel the {@link RestResponseChannel} over which response to {@code restRequest} can be sent.
+   */
+  @Override
+  public void handlePut(RestRequest restRequest, RestResponseChannel restResponseChannel) {
+    Exception exception = new RestServiceException("PUT is not supported", RestServiceErrorCode.UnsupportedHttpMethod);
+    handleResponse(restRequest, restResponseChannel, null, exception);
+  }
+
   @Override
   public void handleDelete(RestRequest restRequest, RestResponseChannel restResponseChannel) {
     if (shouldProceed(restRequest, restResponseChannel)) {
       String blobId = getBlobId(restRequest);
-      router.deleteBlob(blobId, new MockDeleteCallback(this, restRequest, restResponseChannel));
+      router.deleteBlob(blobId, null, new MockDeleteCallback(this, restRequest, restResponseChannel));
     }
   }
 
@@ -119,8 +137,22 @@ public class MockBlobStorageService implements BlobStorageService {
   public void handleHead(RestRequest restRequest, RestResponseChannel restResponseChannel) {
     if (shouldProceed(restRequest, restResponseChannel)) {
       String blobId = getBlobId(restRequest);
-      router.getBlob(blobId, new GetBlobOptions(GetBlobOptions.OperationType.BlobInfo, null),
+      router.getBlob(blobId, new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.BlobInfo).build(),
           new MockHeadCallback(this, restRequest, restResponseChannel));
+    }
+  }
+
+  @Override
+  public void handleOptions(RestRequest restRequest, RestResponseChannel restResponseChannel) {
+    if (shouldProceed(restRequest, restResponseChannel)) {
+      Exception exception = null;
+      try {
+        restResponseChannel.setStatus(ResponseStatus.Ok);
+      } catch (RestServiceException e) {
+        exception = e;
+      } finally {
+        handleResponse(restRequest, restResponseChannel, null, exception);
+      }
     }
   }
 
@@ -319,8 +351,7 @@ class MockGetCallback implements Callback<GetBlobResult> {
    * @param blobInfo the {@link BlobInfo} to refer to while setting headers.
    * @throws RestServiceException if there was any problem setting the headers.
    */
-  private void setResponseHeaders(BlobInfo blobInfo)
-      throws RestServiceException {
+  private void setResponseHeaders(BlobInfo blobInfo) throws RestServiceException {
     BlobProperties blobProperties = blobInfo.getBlobProperties();
     restResponseChannel.setHeader(RestUtils.Headers.LAST_MODIFIED, new Date(blobProperties.getCreationTimeInMs()));
     restResponseChannel.setHeader(RestUtils.Headers.BLOB_SIZE, blobProperties.getBlobSize());
@@ -385,8 +416,7 @@ class MockPostCallback implements Callback<String> {
    * @param location the location of the created resource.
    * @throws RestServiceException if there was any problem setting the headers.
    */
-  private void setResponseHeaders(String location)
-      throws RestServiceException {
+  private void setResponseHeaders(String location) throws RestServiceException {
     restResponseChannel.setStatus(ResponseStatus.Created);
     restResponseChannel.setHeader(RestUtils.Headers.LOCATION, location);
     restResponseChannel.setHeader(RestUtils.Headers.CONTENT_LENGTH, 0);
@@ -489,8 +519,7 @@ class MockHeadCallback implements Callback<GetBlobResult> {
    * @param blobInfo the {@link BlobInfo} to refer to while setting headers.
    * @throws RestServiceException if there was any problem setting the headers.
    */
-  private void setBlobPropertiesResponseHeaders(BlobInfo blobInfo)
-      throws RestServiceException {
+  private void setBlobPropertiesResponseHeaders(BlobInfo blobInfo) throws RestServiceException {
     BlobProperties blobProperties = blobInfo.getBlobProperties();
     restResponseChannel.setHeader(RestUtils.Headers.LAST_MODIFIED, new Date(blobProperties.getCreationTimeInMs()));
     restResponseChannel.setHeader(RestUtils.Headers.CONTENT_LENGTH, blobProperties.getBlobSize());

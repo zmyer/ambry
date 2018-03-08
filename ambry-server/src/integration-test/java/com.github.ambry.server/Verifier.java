@@ -16,7 +16,9 @@ package com.github.ambry.server;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.MockDataNodeId;
 import com.github.ambry.commons.BlobId;
+import com.github.ambry.commons.BlobIdFactory;
 import com.github.ambry.commons.ServerErrorCode;
+import com.github.ambry.messageformat.BlobAll;
 import com.github.ambry.messageformat.BlobData;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.MessageFormatException;
@@ -26,7 +28,7 @@ import com.github.ambry.network.ConnectedChannel;
 import com.github.ambry.network.ConnectionPool;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.PortType;
-import com.github.ambry.protocol.GetOptions;
+import com.github.ambry.protocol.GetOption;
 import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.PartitionRequestInfo;
@@ -90,7 +92,7 @@ class Verifier implements Runnable {
               partitionRequestInfoList.add(partitionRequestInfo);
               GetRequest getRequest =
                   new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList,
-                      GetOptions.None);
+                      GetOption.None);
               channel1.send(getRequest);
               InputStream stream = channel1.receive().getInputStream();
               GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
@@ -101,14 +103,39 @@ class Verifier implements Runnable {
                 try {
                   BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
                   if (propertyOutput.getBlobSize() != payload.blobProperties.getBlobSize()) {
-                    System.out.println("blob size not matching " + " expected " +
-                        payload.blobProperties.getBlobSize() + " actual " + propertyOutput.getBlobSize());
-                    throw new IllegalStateException();
+                    String exceptionMsg =
+                        "blob size not matching " + " expected " + payload.blobProperties.getBlobSize() + " actual "
+                            + propertyOutput.getBlobSize();
+                    System.out.println(exceptionMsg);
+                    throw new IllegalStateException(exceptionMsg);
                   }
                   if (!propertyOutput.getServiceId().equals(payload.blobProperties.getServiceId())) {
-                    System.out.println("service id not matching " + " expected " +
-                        payload.blobProperties.getServiceId() + " actual " + propertyOutput.getBlobSize());
-                    throw new IllegalStateException();
+                    String exceptionMsg =
+                        "service id not matching " + " expected " + payload.blobProperties.getServiceId() + " actual "
+                            + propertyOutput.getBlobSize();
+                    System.out.println(exceptionMsg);
+                    throw new IllegalStateException(exceptionMsg);
+                  }
+                  if (propertyOutput.getAccountId() != payload.blobProperties.getAccountId()) {
+                    String exceptionMsg =
+                        "accountid not matching " + " expected " + payload.blobProperties.getAccountId() + " actual "
+                            + propertyOutput.getAccountId();
+                    System.out.println(exceptionMsg);
+                    throw new IllegalStateException(exceptionMsg);
+                  }
+                  if (propertyOutput.getContainerId() != payload.blobProperties.getContainerId()) {
+                    String exceptionMsg =
+                        "containerId not matching " + " expected " + payload.blobProperties.getContainerId()
+                            + " actual " + propertyOutput.getContainerId();
+                    System.out.println(exceptionMsg);
+                    throw new IllegalStateException(exceptionMsg);
+                  }
+                  if (propertyOutput.isEncrypted() != payload.blobProperties.isEncrypted()) {
+                    String exceptionMsg =
+                        "IsEncrypted not matching " + " expected " + payload.blobProperties.isEncrypted() + " actual "
+                            + propertyOutput.isEncrypted();
+                    System.out.println(exceptionMsg);
+                    throw new IllegalStateException(exceptionMsg);
                   }
                 } catch (MessageFormatException e) {
                   e.printStackTrace();
@@ -123,7 +150,7 @@ class Verifier implements Runnable {
               partitionRequestInfo = new PartitionRequestInfo(ids.get(0).getPartition(), ids);
               partitionRequestInfoList.add(partitionRequestInfo);
               getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList,
-                  GetOptions.None);
+                  GetOption.None);
               channel1.send(getRequest);
               stream = channel1.receive().getInputStream();
               resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
@@ -149,7 +176,7 @@ class Verifier implements Runnable {
               partitionRequestInfo = new PartitionRequestInfo(ids.get(0).getPartition(), ids);
               partitionRequestInfoList.add(partitionRequestInfo);
               getRequest =
-                  new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOptions.None);
+                  new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
               channel1.send(getRequest);
               stream = channel1.receive().getInputStream();
               resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
@@ -164,6 +191,35 @@ class Verifier implements Runnable {
                   int readsize = 0;
                   while (readsize < blobData.getSize()) {
                     readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
+                  }
+                  if (ByteBuffer.wrap(blobout).compareTo(ByteBuffer.wrap(payload.blob)) != 0) {
+                    throw new IllegalStateException();
+                  }
+                } catch (MessageFormatException e) {
+                  e.printStackTrace();
+                  throw new IllegalStateException();
+                }
+              }
+
+              // get blob all
+              getRequest =
+                  new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+              channel1.send(getRequest);
+              stream = channel1.receive().getInputStream();
+              resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+              if (resp.getError() != ServerErrorCode.No_Error) {
+                System.out.println("Error after get blob " + resp.getError());
+                throw new IllegalStateException();
+              } else {
+                try {
+                  BlobAll blobAll =
+                      MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), new BlobIdFactory(clusterMap));
+                  byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
+                  int readsize = 0;
+                  while (readsize < blobAll.getBlobData().getSize()) {
+                    readsize += blobAll.getBlobData()
+                        .getStream()
+                        .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
                   }
                   if (ByteBuffer.wrap(blobout).compareTo(ByteBuffer.wrap(payload.blob)) != 0) {
                     throw new IllegalStateException();

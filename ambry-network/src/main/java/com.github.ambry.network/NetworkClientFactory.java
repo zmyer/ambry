@@ -13,6 +13,7 @@
  */
 package com.github.ambry.network;
 
+import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.NetworkConfig;
 import com.github.ambry.utils.Time;
 import java.io.IOException;
@@ -55,8 +56,7 @@ public class NetworkClientFactory {
    * @return return a new {@link NetworkClient}
    * @throws IOException if the {@link Selector} could not be instantiated.
    */
-  public NetworkClient getNetworkClient()
-      throws IOException {
+  public NetworkClient getNetworkClient() throws IOException {
     Selector selector = new Selector(networkMetrics, time, sslFactory);
     return new NetworkClient(selector, networkConfig, networkMetrics, maxConnectionsPerPortPlainText,
         maxConnectionsPerPortSsl, connectionCheckoutTimeoutMs, time);

@@ -31,18 +31,27 @@ import java.nio.ByteBuffer;
  *
  */
 public class DeleteMessageFormatInputStream extends MessageFormatInputStream {
-  public DeleteMessageFormatInputStream(StoreKey key)
+  public DeleteMessageFormatInputStream(StoreKey key, short accountId, short containerId, long deletionTimeMs)
       throws MessageFormatException {
-    int headerSize = MessageFormatRecord.MessageHeader_Format_V1.getHeaderSize();
-    int deleteRecordSize = MessageFormatRecord.Delete_Format_V1.getDeleteRecordSize();
+    int headerSize = MessageFormatRecord.getHeaderSizeForVersion(MessageFormatRecord.headerVersionToUse);
+    int deleteRecordSize = MessageFormatRecord.Delete_Format_V2.getDeleteRecordSize();
     buffer = ByteBuffer.allocate(headerSize + key.sizeInBytes() + deleteRecordSize);
-    MessageFormatRecord.MessageHeader_Format_V1
-        .serializeHeader(buffer, deleteRecordSize, MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
-            headerSize + key.sizeInBytes(), MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
-            MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+    if (MessageFormatRecord.headerVersionToUse == MessageFormatRecord.Message_Header_Version_V1) {
+      MessageFormatRecord.MessageHeader_Format_V1.serializeHeader(buffer, deleteRecordSize,
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+    } else {
+      MessageFormatRecord.MessageHeader_Format_V2.serializeHeader(buffer, deleteRecordSize,
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+          MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+    }
     buffer.put(key.toBytes());
     // set the message as deleted
-    MessageFormatRecord.Delete_Format_V1.serializeDeleteRecord(buffer, true);
+    MessageFormatRecord.Delete_Format_V2.serializeDeleteRecord(buffer,
+        new DeleteRecord(accountId, containerId, deletionTimeMs));
     messageLength = buffer.capacity();
     buffer.flip();
   }

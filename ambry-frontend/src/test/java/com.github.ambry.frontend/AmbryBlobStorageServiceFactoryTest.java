@@ -13,6 +13,7 @@
  */
 package com.github.ambry.frontend;
 
+import com.github.ambry.account.MockNotifier;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.config.VerifiableProperties;
@@ -24,9 +25,7 @@ import com.github.ambry.router.Router;
 import java.util.Properties;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 /**
@@ -40,15 +39,15 @@ public class AmbryBlobStorageServiceFactoryTest {
    * @throws Exception
    */
   @Test
-  public void getAmbryBlobStorageServiceTest()
-      throws Exception {
+  public void getAmbryBlobStorageServiceTest() throws Exception {
     // dud properties. server should pick up defaults
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
 
     AmbryBlobStorageServiceFactory ambryBlobStorageServiceFactory =
         new AmbryBlobStorageServiceFactory(verifiableProperties, new MockClusterMap(),
-            new MockRestRequestResponseHandler(), new InMemoryRouter(verifiableProperties));
+            new MockRestRequestResponseHandler(), new InMemoryRouter(verifiableProperties, new MockClusterMap()),
+            new MockNotifier());
     BlobStorageService ambryBlobStorageService = ambryBlobStorageServiceFactory.getBlobStorageService();
     assertNotNull("No BlobStorageService returned", ambryBlobStorageService);
     assertEquals("Did not receive an AmbryBlobStorageService instance",
@@ -60,18 +59,17 @@ public class AmbryBlobStorageServiceFactoryTest {
    * @throws Exception
    */
   @Test
-  public void getAmbryBlobStorageServiceFactoryWithBadInputTest()
-      throws Exception {
+  public void getAmbryBlobStorageServiceFactoryWithBadInputTest() throws Exception {
     // dud properties. server should pick up defaults
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
     ClusterMap clusterMap = new MockClusterMap();
     RestResponseHandler restResponseHandler = new MockRestRequestResponseHandler();
-    Router router = new InMemoryRouter(verifiableProperties);
+    Router router = new InMemoryRouter(verifiableProperties, clusterMap);
 
     // VerifiableProperties null.
     try {
-      new AmbryBlobStorageServiceFactory(null, clusterMap, restResponseHandler, router);
+      new AmbryBlobStorageServiceFactory(null, clusterMap, restResponseHandler, router, new MockNotifier());
       fail("Instantiation should have failed because one of the arguments was null");
     } catch (IllegalArgumentException e) {
       // expected. Nothing to do.
@@ -79,7 +77,7 @@ public class AmbryBlobStorageServiceFactoryTest {
 
     // ClusterMap null.
     try {
-      new AmbryBlobStorageServiceFactory(verifiableProperties, null, restResponseHandler, router);
+      new AmbryBlobStorageServiceFactory(verifiableProperties, null, restResponseHandler, router, new MockNotifier());
       fail("Instantiation should have failed because one of the arguments was null");
     } catch (IllegalArgumentException e) {
       // expected. Nothing to do.
@@ -87,7 +85,7 @@ public class AmbryBlobStorageServiceFactoryTest {
 
     // RestResponseHandler null.
     try {
-      new AmbryBlobStorageServiceFactory(verifiableProperties, clusterMap, null, router);
+      new AmbryBlobStorageServiceFactory(verifiableProperties, clusterMap, null, router, new MockNotifier());
       fail("Instantiation should have failed because one of the arguments was null");
     } catch (IllegalArgumentException e) {
       // expected. Nothing to do.
@@ -95,7 +93,8 @@ public class AmbryBlobStorageServiceFactoryTest {
 
     // Router null.
     try {
-      new AmbryBlobStorageServiceFactory(verifiableProperties, clusterMap, restResponseHandler, null);
+      new AmbryBlobStorageServiceFactory(verifiableProperties, clusterMap, restResponseHandler, null,
+          new MockNotifier());
       fail("Instantiation should have failed because one of the arguments was null");
     } catch (IllegalArgumentException e) {
       // expected. Nothing to do.

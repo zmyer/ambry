@@ -14,24 +14,30 @@
 package com.github.ambry.rest;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.NettyConfig;
 import com.github.ambry.config.VerifiableProperties;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.stream.ChunkedWriteHandler;
-import io.netty.handler.timeout.IdleStateHandler;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import org.junit.Test;
 
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 /**
  * Tests basic functionality of {@link NettyServer}.
  */
 public class NettyServerTest {
+  private static final NettyMetrics NETTY_METRICS = new NettyMetrics(new MetricRegistry());
+  private static final RestRequestHandler REQUEST_HANDLER = new MockRestRequestResponseHandler();
+  private static final PublicAccessLogger PUBLIC_ACCESS_LOGGER = new PublicAccessLogger(new String[]{}, new String[]{});
+  private static final RestServerState REST_SERVER_STATE = new RestServerState("/healthCheck");
+  private static final ConnectionStatsHandler CONNECTION_STATS_HANDLER = new ConnectionStatsHandler(NETTY_METRICS);
+  private static final SSLFactory SSL_FACTORY = RestTestUtils.getTestSSLFactory();
 
   /**
    * Tests {@link NettyServer#start()} and {@link NettyServer#shutdown()} given good input.
@@ -39,8 +45,7 @@ public class NettyServerTest {
    * @throws IOException
    */
   @Test
-  public void startShutdownTest()
-      throws InstantiationException, IOException {
+  public void startShutdownTest() throws InstantiationException, IOException {
     NioServer nioServer = getNettyServer(null);
     nioServer.start();
     nioServer.shutdown();
@@ -54,8 +59,7 @@ public class NettyServerTest {
    * @throws IOException
    */
   @Test
-  public void shutdownWithoutStartTest()
-      throws InstantiationException, IOException {
+  public void shutdownWithoutStartTest() throws InstantiationException, IOException {
     NioServer nioServer = getNettyServer(null);
     nioServer.shutdown();
   }
@@ -67,36 +71,16 @@ public class NettyServerTest {
    * @throws IOException
    */
   @Test
-  public void startWithBadInputTest()
-      throws InstantiationException, IOException {
+  public void startWithBadInputTest() throws InstantiationException, IOException {
     Properties properties = new Properties();
-    // Should be int. So will throw at instantiation.
-    properties.setProperty("netty.server.port", "abcd");
-    NioServer nioServer = null;
-    try {
-      nioServer = getNettyServer(properties);
-      fail("NettyServer instantiation should have failed because of bad nettyServerPort value");
-    } catch (NumberFormatException e) {
-      // nothing to do. expected.
-    } finally {
-      if (nioServer != null) {
-        nioServer.shutdown();
-      }
-    }
-
     // Should be > 0. So will throw at start().
     properties.setProperty("netty.server.port", "-1");
-    nioServer = getNettyServer(properties);
-    try {
-      nioServer.start();
-      fail("NettyServer start() should have failed because of bad nettyServerPort value");
-    } catch (IllegalArgumentException e) {
-      // nothing to do. expected.
-    } finally {
-      if (nioServer != null) {
-        nioServer.shutdown();
-      }
-    }
+    doStartFailureTest(properties);
+
+    properties = new Properties();
+    // Should be > 0. So will throw at start().
+    properties.setProperty("netty.server.ssl.port", "-1");
+    doStartFailureTest(properties);
   }
 
   // helpers
@@ -109,39 +93,39 @@ public class NettyServerTest {
    * @throws InstantiationException
    * @throws IOException
    */
-  private NettyServer getNettyServer(Properties properties)
-      throws InstantiationException, IOException {
+  private NettyServer getNettyServer(Properties properties) throws InstantiationException, IOException {
     if (properties == null) {
       // dud properties. should pick up defaults
       properties = new Properties();
     }
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
     final NettyConfig nettyConfig = new NettyConfig(verifiableProperties);
-    final NettyMetrics nettyMetrics = new NettyMetrics(new MetricRegistry());
-    final RestRequestHandler requestHandler = new MockRestRequestResponseHandler();
-    final PublicAccessLogger publicAccessLogger = new PublicAccessLogger(new String[]{}, new String[]{});
-    final RestServerState restServerState = new RestServerState("/healthCheck");
-    final ConnectionStatsHandler connectionStatsHandler = new ConnectionStatsHandler(nettyMetrics);
-    return new NettyServer(nettyConfig, nettyMetrics, new ChannelInitializer<SocketChannel>() {
-      @Override
-      protected void initChannel(SocketChannel ch) {
-        ch.pipeline()
-            // connection stats handler to track connection related metrics
-            .addLast("ConnectionStatsHandler", connectionStatsHandler)
-                // for http encoding/decoding. Note that we get content in 8KB chunks and a change to that number has
-                // to go here.
-            .addLast("codec", new HttpServerCodec())
-                // for health check request handling
-            .addLast("healthCheckHandler", new HealthCheckHandler(restServerState, nettyMetrics))
-                // for public access logging
-            .addLast("publicAccessLogHandler", new PublicAccessLogHandler(publicAccessLogger, nettyMetrics))
-                // for detecting connections that have been idle too long - probably because of an error.
-            .addLast("idleStateHandler", new IdleStateHandler(0, 0, nettyConfig.nettyServerIdleTimeSeconds))
-                // for safe writing of chunks for responses
-            .addLast("chunker", new ChunkedWriteHandler())
-                // custom processing class that interfaces with a BlobStorageService.
-            .addLast("processor", new NettyMessageProcessor(nettyMetrics, nettyConfig, requestHandler));
+
+    Map<Integer, ChannelInitializer<SocketChannel>> channelInitializers = new HashMap<>();
+    channelInitializers.put(nettyConfig.nettyServerPort,
+        new NettyServerChannelInitializer(nettyConfig, NETTY_METRICS, CONNECTION_STATS_HANDLER, REQUEST_HANDLER,
+            PUBLIC_ACCESS_LOGGER, REST_SERVER_STATE, null));
+    channelInitializers.put(nettyConfig.nettyServerSSLPort,
+        new NettyServerChannelInitializer(nettyConfig, NETTY_METRICS, CONNECTION_STATS_HANDLER, REQUEST_HANDLER,
+            PUBLIC_ACCESS_LOGGER, REST_SERVER_STATE, SSL_FACTORY));
+    return new NettyServer(nettyConfig, NETTY_METRICS, channelInitializers);
+  }
+
+  /**
+   * Test that the {@link NettyServer} fails to start up with the given properties.
+   * @param properties
+   */
+  private void doStartFailureTest(Properties properties) throws IOException, InstantiationException {
+    NioServer nioServer = getNettyServer(properties);
+    try {
+      nioServer.start();
+      fail("NettyServer start() should have failed because of bad port number value");
+    } catch (IllegalArgumentException e) {
+      // nothing to do. expected.
+    } finally {
+      if (nioServer != null) {
+        nioServer.shutdown();
       }
-    });
+    }
   }
 }

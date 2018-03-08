@@ -22,51 +22,83 @@ public enum ResponseStatus {
    * 200 OK - Resource found and all good.
    */
   Ok,
+
   /**
    * 201 - Resource was created.
    */
   Created,
+
   /**
    * 202 - Request was accepted.
    */
   Accepted,
 
+  /**
+   * 206 - Partial content.
+   */
+  PartialContent,
   // 3xx
   /**
    * 304 Not Modified
    */
   NotModified,
+
   // 4xx
   /**
    * 400 - Request was not correct.
    */
   BadRequest,
+
   /**
    * 401 - Request Unauthorized
    */
   Unauthorized,
+
   /**
    * 403 - Request forbidden
    */
   Forbidden,
+
   /**
    * 404 Not Found - Resource was not found.
    */
   NotFound,
+
   /**
    * 407 - Proxy authentication required
    */
   ProxyAuthenticationRequired,
+
   /**
    * 410 Gone - Resource has been deleted or has expired.
    */
   Gone,
 
+  /**
+   * 413 Request Entity Too Large - The request is larger than what the server is willing to accept
+   */
+  RequestTooLarge,
+
+  /**
+   * 416 Range Not Satisfiable - A range request is invalid or outside of the bounds of an object.
+   */
+  RangeNotSatisfiable,
+
   // 5xx
   /**
    * 500 - Internal server failure resulted in request not being honored.
    */
-  InternalServerError;
+  InternalServerError,
+
+  /**
+   * 503 - Service is unavailable
+   */
+  ServiceUnavailable,
+
+  /**
+   * 507 - Insufficient capacity to complete the request.
+   */
+  InsufficientCapacity;
 
   /**
    * Gets the ResponseStatus that corresponds to the {@code restServiceErrorCode}.
@@ -75,31 +107,41 @@ public enum ResponseStatus {
    */
   public static ResponseStatus getResponseStatus(RestServiceErrorCode restServiceErrorCode) {
     switch (restServiceErrorCode) {
+      case RequestTooLarge:
+        return RequestTooLarge;
       case Deleted:
-        return ResponseStatus.Gone;
+        return Gone;
       case NotFound:
-        return ResponseStatus.NotFound;
+        return NotFound;
       case BadRequest:
       case InvalidArgs:
+      case InvalidAccount:
+      case InvalidContainer:
       case InvalidRequestState:
       case MalformedRequest:
       case MissingArgs:
       case UnsupportedHttpMethod:
-        return ResponseStatus.BadRequest;
+        return BadRequest;
       case ResourceDirty:
-        return ResponseStatus.Forbidden;
+      case AccessDenied:
+        return Forbidden;
       case Unauthorized:
-        return ResponseStatus.Unauthorized;
+        return Unauthorized;
       case ResourceScanInProgress:
-        return ResponseStatus.ProxyAuthenticationRequired;
+        return ProxyAuthenticationRequired;
+      case RangeNotSatisfiable:
+        return RangeNotSatisfiable;
+      case ServiceUnavailable:
+        return ServiceUnavailable;
+      case InsufficientCapacity:
+        return InsufficientCapacity;
       case IdConverterServiceError:
       case InternalServerError:
       case RequestChannelClosed:
       case RequestResponseQueuingFailure:
-      case ServiceUnavailable:
       case UnsupportedRestMethod:
       default:
-        return ResponseStatus.InternalServerError;
+        return InternalServerError;
     }
   }
 }

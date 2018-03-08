@@ -50,6 +50,9 @@ class PutManager {
 
   private final Set<PutOperation> putOperations;
   private final NotificationSystem notificationSystem;
+  private final KeyManagementService kms;
+  private final CryptoService cryptoService;
+  private final CryptoJobHandler cryptoJobHandler;
   private final Time time;
   private final Thread chunkFillerThread;
   private final Object chunkFillerSynchronizer = new Object();
@@ -61,9 +64,7 @@ class PutManager {
   // get cleaned up periodically.
   private final Map<Integer, PutOperation> correlationIdToPutOperation;
   private final AtomicBoolean isOpen = new AtomicBoolean(true);
-  private final OperationCompleteCallback operationCompleteCallback;
-  private final ReadyForPollCallback readyForPollCallback;
-  private final List<String> idsToDeleteList;
+  private final RouterCallback routerCallback;
   private final ByteBufferAsyncWritableChannel.ChannelEventListener chunkArrivalListener;
 
   // shared by all PutOperations
@@ -94,26 +95,22 @@ class PutManager {
    * @param notificationSystem The {@link NotificationSystem} used for notifying blob creations.
    * @param routerConfig  The {@link RouterConfig} containing the configs for the PutManager.
    * @param routerMetrics The {@link NonBlockingRouterMetrics} to be used for reporting metrics.
-   * @param operationCompleteCallback The {@link OperationCompleteCallback} to use to complete operations.
-   * @param readyForPollCallback The callback to be used to notify the router of any state changes within the
-   *                             operations.
-   * @param idsToDeleteList The list to fill with ids of successfully put data chunks of an unsuccessful
-   *                        overall put operation.
-   * @param index the index of the {@link NonBlockingRouter.OperationController} in the {@link NonBlockingRouter}
+   * @param routerCallback The {@link RouterCallback} to use for callbacks to the router.
+   * @param suffix the suffix to associate with the names of the threads created by this PutManager
+   * @param kms {@link KeyManagementService} to assist in fetching container keys for encryption or decryption
+   * @param cryptoService {@link CryptoService} to assist in encryption or decryption
+   * @param cryptoJobHandler {@link CryptoJobHandler} to assist in the execution of crypto jobs
    * @param time The {@link Time} instance to use.
    */
   PutManager(ClusterMap clusterMap, ResponseHandler responseHandler, NotificationSystem notificationSystem,
-      RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics,
-      OperationCompleteCallback operationCompleteCallback, ReadyForPollCallback readyForPollCallback,
-      List<String> idsToDeleteList, int index, Time time) {
+      RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, RouterCallback routerCallback, String suffix,
+      KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time) {
     this.clusterMap = clusterMap;
     this.responseHandler = responseHandler;
     this.notificationSystem = notificationSystem;
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
-    this.operationCompleteCallback = operationCompleteCallback;
-    this.readyForPollCallback = readyForPollCallback;
-    this.idsToDeleteList = idsToDeleteList;
+    this.routerCallback = routerCallback;
     this.chunkArrivalListener = new ByteBufferAsyncWritableChannel.ChannelEventListener() {
       @Override
       public void onEvent(ByteBufferAsyncWritableChannel.EventType e) {
@@ -127,10 +124,13 @@ class PutManager {
         }
       }
     };
+    this.kms = kms;
+    this.cryptoService = cryptoService;
+    this.cryptoJobHandler = cryptoJobHandler;
     this.time = time;
     putOperations = Collections.newSetFromMap(new ConcurrentHashMap<PutOperation, Boolean>());
     correlationIdToPutOperation = new HashMap<Integer, PutOperation>();
-    chunkFillerThread = Utils.newThread("ChunkFillerThread-" + index, new ChunkFiller(), true);
+    chunkFillerThread = Utils.newThread("ChunkFillerThread-" + suffix, new ChunkFiller(), true);
     chunkFillerThread.start();
     routerMetrics.initializePutManagerMetrics(chunkFillerThread);
   }
@@ -147,14 +147,15 @@ class PutManager {
       FutureResult<String> futureResult, Callback<String> callback) {
     try {
       PutOperation putOperation =
-          new PutOperation(routerConfig, routerMetrics, clusterMap, responseHandler, blobProperties, userMetaData,
-              channel, futureResult, callback, readyForPollCallback, chunkArrivalListener, time);
+          new PutOperation(routerConfig, routerMetrics, clusterMap, responseHandler, notificationSystem, userMetaData,
+              channel, futureResult, callback, routerCallback, chunkArrivalListener, kms, cryptoService,
+              cryptoJobHandler, time, blobProperties);
       putOperations.add(putOperation);
       putOperation.startReadingFromChannel();
     } catch (RouterException e) {
       routerMetrics.operationDequeuingRate.mark();
-      routerMetrics.onPutBlobError(e);
-      operationCompleteCallback.completeOperation(futureResult, callback, null, e);
+      routerMetrics.onPutBlobError(e, blobProperties != null && blobProperties.isEncrypted());
+      NonBlockingRouter.completeOperation(futureResult, callback, null, e);
     }
   }
 
@@ -247,21 +248,26 @@ class PutManager {
   void onComplete(PutOperation op) {
     Exception e = op.getOperationException();
     String blobId = op.getBlobIdString();
+    op.maybeNotifyForBlobCreation();
     if (blobId == null && e == null) {
       e = new RouterException("Operation failed, but exception was not set", RouterErrorCode.UnexpectedInternalError);
       routerMetrics.operationFailureWithUnsetExceptionCount.inc();
     }
     if (e != null) {
       blobId = null;
-      routerMetrics.onPutBlobError(e);
-      op.addSuccessfullyPutChunkIds(idsToDeleteList);
+      routerMetrics.onPutBlobError(e, op.isEncryptionEnabled());
+      routerCallback.scheduleDeletes(op.getSuccessfullyPutChunkIdsIfComposite(), op.getServiceId());
     } else {
-      notificationSystem.onBlobCreated(op.getBlobIdString(), op.getBlobProperties(), op.getUserMetadata());
       updateChunkingAndSizeMetricsOnSuccessfulPut(op);
     }
     routerMetrics.operationDequeuingRate.mark();
-    routerMetrics.putBlobOperationLatencyMs.update(time.milliseconds() - op.getSubmissionTimeMs());
-    operationCompleteCallback.completeOperation(op.getFuture(), op.getCallback(), blobId, e);
+    long operationLatencyMs = time.milliseconds() - op.getSubmissionTimeMs();
+    if (op.isEncryptionEnabled()) {
+      routerMetrics.putEncryptedBlobOperationLatencyMs.update(operationLatencyMs);
+    } else {
+      routerMetrics.putBlobOperationLatencyMs.update(operationLatencyMs);
+    }
+    NonBlockingRouter.completeOperation(op.getFuture(), op.getCallback(), blobId, e);
   }
 
   /**
@@ -322,8 +328,8 @@ class PutManager {
         Exception e = new RouterException("Aborted operation because Router is closed.", RouterErrorCode.RouterClosed);
         routerMetrics.operationDequeuingRate.mark();
         routerMetrics.operationAbortCount.inc();
-        routerMetrics.onPutBlobError(e);
-        operationCompleteCallback.completeOperation(op.getFuture(), op.getCallback(), null, e);
+        routerMetrics.onPutBlobError(e, op.isEncryptionEnabled());
+        NonBlockingRouter.completeOperation(op.getFuture(), op.getCallback(), null, e);
       }
     }
   }
@@ -339,14 +345,14 @@ class PutManager {
         while (isOpen.get()) {
           chunkFillerThreadMaySleep = true;
           for (PutOperation op : putOperations) {
-            if (!op.isChunkFillComplete()) {
-              op.fillChunks();
+            op.fillChunks();
+            if (!op.isChunkFillingDone()) {
               chunkFillerThreadMaySleep = false;
             }
           }
           if (chunkFillerThreadMaySleep) {
             synchronized (chunkFillerSynchronizer) {
-              while (chunkFillerThreadMaySleep) {
+              while (chunkFillerThreadMaySleep && isOpen.get()) {
                 isChunkFillerThreadAsleep = true;
                 chunkFillerSynchronizer.wait();
               }

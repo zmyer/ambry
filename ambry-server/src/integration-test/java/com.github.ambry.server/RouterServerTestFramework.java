@@ -21,14 +21,18 @@ import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
+import com.github.ambry.network.Selector;
+import com.github.ambry.protocol.GetOption;
 import com.github.ambry.router.Callback;
 import com.github.ambry.router.GetBlobOptions;
+import com.github.ambry.router.GetBlobOptionsBuilder;
 import com.github.ambry.router.GetBlobResult;
 import com.github.ambry.router.NonBlockingRouterFactory;
 import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
 import com.github.ambry.router.RouterErrorCode;
 import com.github.ambry.router.RouterException;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -38,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
-import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -62,30 +65,44 @@ class RouterServerTestFramework {
   private final MockClusterMap clusterMap;
   private final MockNotificationSystem notificationSystem;
   private final Router router;
+  private boolean testEncryption = false;
+
+  public static String sslSendBytesMetricName = Selector.class.getName() + ".SslSendBytesRate";
+  public static String sslReceiveBytesMetricName = Selector.class.getName() + ".SslReceiveBytesRate";
+  public static String plaintextSendBytesMetricName = Selector.class.getName() + ".PlaintextSendBytesRate";
+  public static String plaintextReceiveBytesMetricName = Selector.class.getName() + ".PlaintextReceiveBytesRate";
 
   /**
    * Instantiate a framework for testing router-server interaction. Creates a non-blocking router to interact with the
    * passed-in {@link MockCluster}.
    * @param routerProps All of the properties to be used when instantiating the router.
-   * @param cluster A {@link MockCluster} that contains the servers to be used in the tests.
+   * @param clusterMap A {@link MockClusterMap} to be used in the tests.
    * @param notificationSystem A {@link MockNotificationSystem} that is used to determine if
    * @throws Exception
    */
-  RouterServerTestFramework(Properties routerProps, MockCluster cluster, MockNotificationSystem notificationSystem)
-      throws Exception {
-    clusterMap = cluster.getClusterMap();
+  RouterServerTestFramework(Properties routerProps, MockClusterMap clusterMap,
+      MockNotificationSystem notificationSystem) throws Exception {
+    this.clusterMap = clusterMap;
     this.notificationSystem = notificationSystem;
 
     VerifiableProperties routerVerifiableProps = new VerifiableProperties(routerProps);
-    router = new NonBlockingRouterFactory(routerVerifiableProps, clusterMap, notificationSystem).getRouter();
+    router = new NonBlockingRouterFactory(routerVerifiableProps, clusterMap, notificationSystem,
+        ServerTestUtil.getSSLFactoryIfRequired(routerVerifiableProps)).getRouter();
+  }
+
+  /**
+   * Sets {@link #testEncryption}
+   * @param testEncryption {@code true} if encryption needs to be tested. {@code false} otherwise
+   */
+  void setTestEncryption(boolean testEncryption) {
+    this.testEncryption = testEncryption;
   }
 
   /**
    * Close the instantiated routers.
    * @throws IOException
    */
-  void cleanup()
-      throws IOException {
+  void cleanup() throws IOException {
     if (router != null) {
       router.close();
     }
@@ -98,8 +115,7 @@ class RouterServerTestFramework {
    * @param opChains the {@link OperationChain}s to await and check.
    * @throws Exception
    */
-  void checkOperationChains(List<OperationChain> opChains)
-      throws Exception {
+  void checkOperationChains(List<OperationChain> opChains) throws Exception {
     Map<PartitionId, Integer> partitionCount = new HashMap<>();
     double blobsPut = 0;
     for (OperationChain opChain : opChains) {
@@ -139,9 +155,11 @@ class RouterServerTestFramework {
   OperationChain startOperationChain(int blobSize, int chainId, Queue<OperationType> operations) {
     byte[] userMetadata = new byte[1000];
     byte[] data = new byte[blobSize];
-    new Random().nextBytes(userMetadata);
-    new Random().nextBytes(data);
-    BlobProperties properties = new BlobProperties(blobSize, "serviceid1");
+    TestUtils.RANDOM.nextBytes(userMetadata);
+    TestUtils.RANDOM.nextBytes(data);
+    short accountId = Utils.getRandomShort(TestUtils.RANDOM);
+    short containerId = Utils.getRandomShort(TestUtils.RANDOM);
+    BlobProperties properties = new BlobProperties(blobSize, "serviceid1", accountId, containerId, testEncryption);
     OperationChain opChain = new OperationChain(chainId, properties, userMetadata, data, operations);
     continueChain(opChain);
     return opChain;
@@ -161,6 +179,10 @@ class RouterServerTestFramework {
     properties.setProperty("router.request.timeout.ms", "10000");
     properties.setProperty("router.max.put.chunk.size.bytes", Integer.toString(CHUNK_SIZE));
     properties.setProperty("router.put.success.target", "1");
+    properties.setProperty("clustermap.cluster.name", "test");
+    properties.setProperty("clustermap.datacenter.name", routerDatacenter);
+    properties.setProperty("clustermap.host.name", "localhost");
+    properties.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
     return properties;
   }
 
@@ -225,14 +247,14 @@ class RouterServerTestFramework {
 
   /**
    * Generate a readable label for a router operation.  For example, for a "getBlob" operation after a delete, this
-   * function will generate the label "getBlob-deleted". This is used by {@link TestFuture} to provide tracking info to
-   * the user if a test assertion fails.
+   * function will generate the label "getBlob-failureExpected". This is used by {@link TestFuture} to provide tracking
+   * info to the user if a test assertion fails.
    * @param name the type of operation (i.e. putBlob, getBlob, etc.)
-   * @param afterDelete {@code true} if the operation comes after a blob was deleted.
+   * @param expectFailure {@code true} if the operation is expected to fail.
    * @return the label of the operation
    */
-  private static String genLabel(String name, boolean afterDelete) {
-    return name + (afterDelete ? "-deleted" : "");
+  private static String genLabel(String name, boolean expectFailure) {
+    return name + (expectFailure ? "-failureExpected" : "");
   }
 
   /**
@@ -250,8 +272,7 @@ class RouterServerTestFramework {
     Future<String> future = router.putBlob(opChain.properties, opChain.userMetadata, putChannel, callback);
     TestFuture<String> testFuture = new TestFuture<String>(future, genLabel("putBlob", false), opChain) {
       @Override
-      void check()
-          throws Exception {
+      void check() throws Exception {
         checkBlobId(get(), getOperationName());
       }
     };
@@ -260,19 +281,20 @@ class RouterServerTestFramework {
 
   /**
    * Submit a getBlobInfo operation.
-   * @param afterDelete if {@code true}, verify that the blob info was not retrievable.
+   * @param options the {@link GetOption} associated with the request.
+   * @param checkDeleted {@code true}, checks that the blob is deleted.
    * @param opChain the {@link OperationChain} object that this operation is a part of.
    */
-  private void startGetBlobInfo(final boolean afterDelete, final OperationChain opChain) {
-    Callback<GetBlobResult> callback = new TestCallback<>(opChain, afterDelete);
-    Future<GetBlobResult> future =
-        router.getBlob(opChain.blobId, new GetBlobOptions(GetBlobOptions.OperationType.BlobInfo, null), callback);
+  private void startGetBlobInfo(GetOption options, final boolean checkDeleted, final OperationChain opChain) {
+    Callback<GetBlobResult> callback = new TestCallback<>(opChain, checkDeleted);
+    Future<GetBlobResult> future = router.getBlob(opChain.blobId,
+        new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.BlobInfo).getOption(options).build(),
+        callback);
     TestFuture<GetBlobResult> testFuture =
-        new TestFuture<GetBlobResult>(future, genLabel("getBlobInfo", afterDelete), opChain) {
+        new TestFuture<GetBlobResult>(future, genLabel("getBlobInfo", checkDeleted), opChain) {
           @Override
-          void check()
-              throws Exception {
-            if (afterDelete) {
+          void check() throws Exception {
+            if (checkDeleted) {
               checkDeleted();
             } else {
               checkBlobInfo(get().getBlobInfo(), opChain, getOperationName());
@@ -284,18 +306,20 @@ class RouterServerTestFramework {
 
   /**
    * Submit a getBlob operation.
-   * @param afterDelete if {@code true}, verify that the blob was not retrievable.
+   * @param options the {@link GetOption} associated with the request.
+   * @param checkDeleted {@code true}, checks that the blob is deleted.
    * @param opChain the {@link OperationChain} object that this operation is a part of.
    */
-  private void startGetBlob(final boolean afterDelete, final OperationChain opChain) {
-    Callback<GetBlobResult> callback = new TestCallback<>(opChain, afterDelete);
-    Future<GetBlobResult> future = router.getBlob(opChain.blobId, new GetBlobOptions(), callback);
+  private void startGetBlob(GetOption options, final boolean checkDeleted, final OperationChain opChain) {
+    Callback<GetBlobResult> callback = new TestCallback<>(opChain, checkDeleted);
+    Future<GetBlobResult> future = router.getBlob(opChain.blobId,
+        new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All).getOption(options).build(),
+        callback);
     TestFuture<GetBlobResult> testFuture =
-        new TestFuture<GetBlobResult>(future, genLabel("getBlob", afterDelete), opChain) {
+        new TestFuture<GetBlobResult>(future, genLabel("getBlob", checkDeleted), opChain) {
           @Override
-          void check()
-              throws Exception {
-            if (afterDelete) {
+          void check() throws Exception {
+            if (checkDeleted) {
               checkDeleted();
             } else {
               checkBlobInfo(get().getBlobInfo(), opChain, getOperationName());
@@ -312,11 +336,10 @@ class RouterServerTestFramework {
    */
   private void startDeleteBlob(final OperationChain opChain) {
     Callback<Void> callback = new TestCallback<>(opChain, false);
-    Future<Void> future = router.deleteBlob(opChain.blobId, callback);
+    Future<Void> future = router.deleteBlob(opChain.blobId, null, callback);
     TestFuture<Void> testFuture = new TestFuture<Void>(future, genLabel("deleteBlob", false), opChain) {
       @Override
-      void check()
-          throws Exception {
+      void check() throws Exception {
         get();
       }
     };
@@ -355,17 +378,22 @@ class RouterServerTestFramework {
         opChain.latch.countDown();
         return;
       }
+      GetOption options = GetOption.None;
       switch (nextOp) {
         case PUT:
           startPutBlob(opChain);
           break;
+        case GET_INFO_DELETED_SUCCESS:
+          options = GetOption.Include_Deleted_Blobs;
         case GET_INFO:
         case GET_INFO_DELETED:
-          startGetBlobInfo(nextOp.afterDelete, opChain);
+          startGetBlobInfo(options, nextOp.checkDeleted, opChain);
           break;
+        case GET_DELETED_SUCCESS:
+          options = GetOption.Include_Deleted_Blobs;
         case GET:
         case GET_DELETED:
-          startGetBlob(nextOp.afterDelete, opChain);
+          startGetBlob(options, nextOp.checkDeleted, opChain);
           break;
         case DELETE:
           startDeleteBlob(opChain);
@@ -376,6 +404,8 @@ class RouterServerTestFramework {
         case AWAIT_DELETION:
           startAwaitDeletion(opChain);
           break;
+        default:
+          throw new IllegalArgumentException("Unknown op: " + nextOp);
       }
     }
   }
@@ -387,47 +417,48 @@ class RouterServerTestFramework {
     /**
      * PutBlob with the nonblocking router
      */
-    PUT(false),
-    /**
+    PUT(false), /**
      * GetBlobInfo with the nonblocking router and check the blob info against what was put in.
      */
-    GET_INFO(false),
-    /**
+    GET_INFO(false), /**
      * GetBlob with the nonblocking router and check the blob contents against what was put in.
      */
-    GET(false),
-    /**
+    GET(false), /**
      * DeleteBlob with the nonblocking router
      */
-    DELETE(false),
-    /**
+    DELETE(false), /**
      * GetBlobInfo with the nonblocking router. Expect an exception to occur because the blob should have already been
      * deleted
      */
-    GET_INFO_DELETED(true),
-    /**
+    GET_INFO_DELETED(true), /**
      * GetBlob with the nonblocking router. Expect an exception to occur because the blob should have already been
      * deleted
      */
-    GET_DELETED(true),
-    /**
+    GET_DELETED(true), /**
+     * GetBlobInfo with the nonblocking router. Will use {@link GetOption#Include_Deleted_Blobs} and is expected to
+     * succeed even though the blob is deleted.
+     */
+    GET_INFO_DELETED_SUCCESS(false), /**
+     * GetBlob with the nonblocking router. Will use {@link GetOption#Include_Deleted_Blobs} and is expected to
+     * succeed even though the blob is deleted.
+     */
+    GET_DELETED_SUCCESS(false), /**
      * Wait for the operation chain's blob ID to be reported as created on all replicas. Continue with the remaining
      * actions in the operation chain afterwards.
      */
-    AWAIT_CREATION(false),
-    /**
+    AWAIT_CREATION(false), /**
      * Wait for the operation chain's blob ID to be reported as deleted on all replicas. Continue with the remaining
      * actions in the operation chain afterwards.
      */
     AWAIT_DELETION(false);
 
     /**
-     * {@code true} if this operation follows a delete operation.
+     * {@code true} if this operation needs to check that the response returned indicates that the blob is deleted.
      */
-    final boolean afterDelete;
+    final boolean checkDeleted;
 
-    OperationType(boolean afterDelete) {
-      this.afterDelete = afterDelete;
+    OperationType(boolean checkDeleted) {
+      this.checkDeleted = checkDeleted;
     }
   }
 
@@ -484,8 +515,7 @@ class RouterServerTestFramework {
      * occurred.
      * @return the value inside the future
      */
-    T get()
-        throws Exception {
+    T get() throws Exception {
       try {
         return future.get(AWAIT_TIMEOUT, TimeUnit.SECONDS);
       } catch (Exception e) {
@@ -497,8 +527,7 @@ class RouterServerTestFramework {
      * Check that a requested blob is deleted.
      * @throws Exception
      */
-    void checkDeleted()
-        throws Exception {
+    void checkDeleted() throws Exception {
       try {
         future.get(AWAIT_TIMEOUT, TimeUnit.SECONDS);
         Assert.fail("Blob should have been deleted in operation: " + getOperationName());
@@ -516,8 +545,7 @@ class RouterServerTestFramework {
     /**
      * Implement any testing logic here.
      */
-    abstract void check()
-        throws Exception;
+    abstract void check() throws Exception;
   }
 
   /**

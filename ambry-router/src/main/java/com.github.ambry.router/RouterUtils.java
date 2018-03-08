@@ -17,6 +17,7 @@ import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.config.RouterConfig;
+import com.github.ambry.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,8 +36,7 @@ class RouterUtils {
    * @return BlobId
    * @throws RouterException If parsing a string blobId fails.
    */
-  static BlobId getBlobIdFromString(String blobIdString, ClusterMap clusterMap)
-      throws RouterException {
+  static BlobId getBlobIdFromString(String blobIdString, ClusterMap clusterMap) throws RouterException {
     BlobId blobId;
     try {
       blobId = new BlobId(blobIdString, clusterMap);
@@ -61,6 +61,7 @@ class RouterUtils {
 
   /**
    * Determine if an error is indicative of the health of the system, and not a user error.
+   * If it is a system health error, then the error is logged.
    * @param exception The {@link Exception} to check.
    * @return true if this is an internal error and not a user error; false otherwise.
    */
@@ -82,7 +83,22 @@ class RouterUtils {
           isSystemHealthError = false;
           break;
       }
+    } else if (Utils.isPossibleClientTermination(exception)) {
+      isSystemHealthError = false;
+    }
+    if (isSystemHealthError) {
+      logger.error("Router operation met with a system health error: ", exception);
     }
     return isSystemHealthError;
+  }
+
+  /**
+   * Return the number of data chunks for the given blob and chunk sizes.
+   * @param blobSize the size of the overall blob.
+   * @param chunkSize the size of each data chunk (except, possibly the last one).
+   * @return the number of data chunks for the given blob and chunk sizes.
+   */
+  static int getNumChunksForBlobAndChunkSize(long blobSize, int chunkSize) {
+    return (int) (blobSize == 0 ? 1 : (blobSize - 1) / chunkSize + 1);
   }
 }

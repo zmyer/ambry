@@ -47,6 +47,8 @@ public class NettyMetrics {
 
   // Latencies
   // NettyMessageProcessor
+  public final Histogram channelActiveToFirstMessageReceiveTimeInMs;
+  public final Histogram sslChannelActiveToFirstMessageReceiveTimeInMs;
   public final Histogram requestChunkProcessingTimeInMs;
   // NettyResponseChannel
   public final Histogram channelWriteFailureProcessingTimeInMs;
@@ -110,17 +112,23 @@ public class NettyMetrics {
   public final Counter processorUnknownExceptionCount;
 
   // NettyResponseChannel
+  public final Counter clientEarlyTerminationCount;
   public final Counter acceptedCount;
   public final Counter createdCount;
   public final Counter okCount;
+  public final Counter partialContentCount;
   public final Counter notModifiedCount;
   public final Counter badRequestCount;
   public final Counter unauthorizedCount;
   public final Counter goneCount;
   public final Counter internalServerErrorCount;
+  public final Counter serviceUnavailableErrorCount;
+  public final Counter insufficientCapacityErrorCount;
   public final Counter notFoundCount;
   public final Counter forbiddenCount;
   public final Counter proxyAuthRequiredCount;
+  public final Counter rangeNotSatisfiableCount;
+  public final Counter requestTooLargeCount;
   public final Counter throwableCount;
   public final Counter unknownResponseStatusCount;
   // NettyServer
@@ -129,6 +137,7 @@ public class NettyMetrics {
   // ConnectionStatsHandler
   public final Counter connectionsConnectedCount;
   public final Counter connectionsDisconnectedCount;
+  public final Counter handshakeFailureCount;
 
   // PublicAccessLogHandler
   public final Counter publicAccessLogRequestDisconnectWhileInProgressCount;
@@ -161,11 +170,15 @@ public class NettyMetrics {
 
     // Latencies
     // NettyMessageProcessor
+    channelActiveToFirstMessageReceiveTimeInMs = metricRegistry.histogram(
+        MetricRegistry.name(NettyMessageProcessor.class, "ChannelActiveToFirstMessageReceiveTimeInMs"));
+    sslChannelActiveToFirstMessageReceiveTimeInMs = metricRegistry.histogram(
+        MetricRegistry.name(NettyMessageProcessor.class, "SslChannelActiveToFirstMessageReceiveTimeInMs"));
     requestChunkProcessingTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(NettyMessageProcessor.class, "RequestChunkProcessingTimeInMs"));
     // NettyResponseChannel
-    channelWriteFailureProcessingTimeInMs = metricRegistry
-        .histogram(MetricRegistry.name(NettyResponseChannel.class, "ChannelWriteFailureProcessingTimeInMs"));
+    channelWriteFailureProcessingTimeInMs = metricRegistry.histogram(
+        MetricRegistry.name(NettyResponseChannel.class, "ChannelWriteFailureProcessingTimeInMs"));
     chunkDispenseTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(NettyResponseChannel.class, "ChunkDispenseTimeInMs"));
     chunkQueueTimeInMs =
@@ -179,8 +192,8 @@ public class NettyMetrics {
     headerSetTimeInMs = metricRegistry.histogram(MetricRegistry.name(NettyResponseChannel.class, "HeaderSetTimeInMs"));
     responseFinishProcessingTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(NettyResponseChannel.class, "ResponseFinishProcessingTimeInMs"));
-    responseMetadataAfterWriteProcessingTimeInMs = metricRegistry
-        .histogram(MetricRegistry.name(NettyResponseChannel.class, "ResponseMetadataAfterWriteProcessingTimeInMs"));
+    responseMetadataAfterWriteProcessingTimeInMs = metricRegistry.histogram(
+        MetricRegistry.name(NettyResponseChannel.class, "ResponseMetadataAfterWriteProcessingTimeInMs"));
     responseMetadataProcessingTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(NettyResponseChannel.class, "ResponseMetadataProcessingTimeInMs"));
     writeProcessingTimeInMs =
@@ -237,10 +250,10 @@ public class NettyMetrics {
     nettyServerShutdownError = metricRegistry.counter(MetricRegistry.name(NettyServer.class, "ShutdownError"));
     nettyServerStartError = metricRegistry.counter(MetricRegistry.name(NettyServer.class, "StartError"));
     // PublicAccessLogHandler
-    publicAccessLogRequestDisconnectWhileInProgressCount = metricRegistry
-        .counter(MetricRegistry.name(PublicAccessLogHandler.class, "ChannelDisconnectWhileRequestInProgressCount"));
-    publicAccessLogRequestCloseWhileRequestInProgressCount = metricRegistry
-        .counter(MetricRegistry.name(PublicAccessLogHandler.class, "ChannelCloseWhileRequestInProgressCount"));
+    publicAccessLogRequestDisconnectWhileInProgressCount = metricRegistry.counter(
+        MetricRegistry.name(PublicAccessLogHandler.class, "ChannelDisconnectWhileRequestInProgressCount"));
+    publicAccessLogRequestCloseWhileRequestInProgressCount = metricRegistry.counter(
+        MetricRegistry.name(PublicAccessLogHandler.class, "ChannelCloseWhileRequestInProgressCount"));
     // HealthCheckHandler
     healthCheckHandlerChannelCloseOnWriteCount =
         metricRegistry.counter(MetricRegistry.name(HealthCheckHandler.class, "ChannelCloseOnWriteCount"));
@@ -269,19 +282,31 @@ public class NettyMetrics {
     processorUnknownExceptionCount =
         metricRegistry.counter(MetricRegistry.name(NettyMessageProcessor.class, "UnknownExceptionCount"));
     // NettyResponseChannel
+    clientEarlyTerminationCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "ClientEarlyTerminationCount"));
     acceptedCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "AcceptedCount"));
     createdCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "CreatedCount"));
     okCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "OkCount"));
+    partialContentCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "PartialContentCount"));
     notModifiedCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "NotModifiedCount"));
     badRequestCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "BadRequestCount"));
     unauthorizedCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "UnauthorizedCount"));
     goneCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "GoneCount"));
     internalServerErrorCount =
         metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "InternalServerErrorCount"));
+    serviceUnavailableErrorCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "ServiceUnavailableErrorCount"));
+    insufficientCapacityErrorCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "InsufficientCapacityErrorCount"));
     notFoundCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "NotFoundCount"));
     forbiddenCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "ForbiddenCount"));
     proxyAuthRequiredCount =
         metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "ProxyAuthenticationRequiredCount"));
+    rangeNotSatisfiableCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "RangeNotSatisfiableCount"));
+    requestTooLargeCount =
+        metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "RequestTooLargeCount"));
     throwableCount = metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "ThrowableCount"));
     unknownResponseStatusCount =
         metricRegistry.counter(MetricRegistry.name(NettyResponseChannel.class, "UnknownResponseStatusCount"));
@@ -293,6 +318,8 @@ public class NettyMetrics {
         metricRegistry.counter(MetricRegistry.name(ConnectionStatsHandler.class, "ConnectionsConnectedCount"));
     connectionsDisconnectedCount =
         metricRegistry.counter(MetricRegistry.name(ConnectionStatsHandler.class, "ConnectionsDisconnectedCount"));
+    handshakeFailureCount =
+        metricRegistry.counter(MetricRegistry.name(ConnectionStatsHandler.class, "HandshakeFailureCount"));
   }
 
   /**
@@ -300,12 +327,7 @@ public class NettyMetrics {
    * @param openConnectionsCount open connections count to be tracked
    */
   void registerConnectionsStatsHandler(final AtomicLong openConnectionsCount) {
-    Gauge<Long> openConnections = new Gauge<Long>() {
-      @Override
-      public Long getValue() {
-        return openConnectionsCount.get();
-      }
-    };
+    Gauge<Long> openConnections = openConnectionsCount::get;
     metricRegistry.register(MetricRegistry.name(ConnectionStatsHandler.class, "OpenConnections"), openConnections);
   }
 }

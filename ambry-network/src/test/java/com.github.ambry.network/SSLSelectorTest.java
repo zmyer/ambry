@@ -14,6 +14,8 @@
 package com.github.ambry.network;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.commons.SSLFactory;
+import com.github.ambry.commons.TestSSLUtils;
 import com.github.ambry.config.SSLConfig;
 import com.github.ambry.utils.SystemTime;
 import java.io.File;
@@ -27,9 +29,8 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import static java.util.Arrays.asList;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static java.util.Arrays.*;
+import static org.junit.Assert.*;
 
 
 public class SSLSelectorTest {
@@ -40,12 +41,12 @@ public class SSLSelectorTest {
   private File trustStoreFile;
 
   @Before
-  public void setup()
-      throws Exception {
+  public void setup() throws Exception {
     trustStoreFile = File.createTempFile("truststore", ".jks");
-    SSLConfig sslConfig = TestSSLUtils.createSSLConfig("DC1,DC2,DC3", SSLFactory.Mode.SERVER, trustStoreFile, "server");
+    SSLConfig sslConfig =
+        new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.SERVER, trustStoreFile, "server"));
     SSLConfig clientSSLConfig =
-        TestSSLUtils.createSSLConfig("DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client");
+        new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client"));
     SSLFactory serverSSLFactory = new SSLFactory(sslConfig);
     SSLFactory clientSSLFactory = new SSLFactory(clientSSLConfig);
     server = new EchoServer(serverSSLFactory, 18383);
@@ -54,8 +55,7 @@ public class SSLSelectorTest {
   }
 
   @After
-  public void teardown()
-      throws Exception {
+  public void teardown() throws Exception {
     selector.close();
     server.close();
   }
@@ -64,8 +64,7 @@ public class SSLSelectorTest {
    * Validate that when the server disconnects, a client send ends up with that node in the disconnected list.
    */
   @Test
-  public void testServerDisconnect()
-      throws Exception {
+  public void testServerDisconnect() throws Exception {
     // connect and do a simple request
     String connectionId = blockingSSLConnect();
     assertEquals("hello", blockingRequest(connectionId, "hello"));
@@ -85,8 +84,7 @@ public class SSLSelectorTest {
    * Validate that the client can intentionally disconnect and reconnect
    */
   @Test
-  public void testClientDisconnect()
-      throws Exception {
+  public void testClientDisconnect() throws Exception {
     String connectionId = blockingSSLConnect();
     selector.disconnect(connectionId);
     selector.poll(10, asList(SelectorTest.createSend(connectionId, "hello1")));
@@ -101,8 +99,7 @@ public class SSLSelectorTest {
    * Sending a request with one already in flight should result in an exception
    */
   @Test(expected = IllegalStateException.class)
-  public void testCantSendWithInProgress()
-      throws Exception {
+  public void testCantSendWithInProgress() throws Exception {
     String connectionId = blockingSSLConnect();
     selector.poll(1000L,
         asList(SelectorTest.createSend(connectionId, "test1"), SelectorTest.createSend(connectionId, "test2")));
@@ -112,8 +109,7 @@ public class SSLSelectorTest {
    * Sending a request to a node with a bad hostname should result in an exception during connect
    */
   @Test(expected = IOException.class)
-  public void testNoRouteToHost()
-      throws Exception {
+  public void testNoRouteToHost() throws Exception {
     selector.connect(new InetSocketAddress("asdf.asdf.dsc", server.port), BUFFER_SIZE, BUFFER_SIZE, PortType.SSL);
   }
 
@@ -121,8 +117,7 @@ public class SSLSelectorTest {
    * Sending a request to a node not listening on that port should result in disconnection
    */
   @Test
-  public void testConnectionRefused()
-      throws Exception {
+  public void testConnectionRefused() throws Exception {
     String connectionId =
         selector.connect(new InetSocketAddress("localhost", 6668), BUFFER_SIZE, BUFFER_SIZE, PortType.SSL);
     while (selector.disconnected().contains(connectionId)) {
@@ -135,8 +130,7 @@ public class SSLSelectorTest {
    * requests were sent.
    */
   @Test
-  public void testNormalOperation()
-      throws Exception {
+  public void testNormalOperation() throws Exception {
     int conns = 5;
 
     // create connections
@@ -185,8 +179,7 @@ public class SSLSelectorTest {
    * Validate that we can send and receive a message larger than the receive and send buffer size
    */
   @Test
-  public void testSendLargeRequest()
-      throws Exception {
+  public void testSendLargeRequest() throws Exception {
     String connectionId = blockingSSLConnect();
     String big = SelectorTest.randomString(10 * BUFFER_SIZE, new Random());
     assertEquals(big, blockingRequest(connectionId, big));
@@ -196,15 +189,13 @@ public class SSLSelectorTest {
    * Test sending an empty string
    */
   @Test
-  public void testEmptyRequest()
-      throws Exception {
+  public void testEmptyRequest() throws Exception {
     String connectionId = blockingSSLConnect();
     assertEquals("", blockingRequest(connectionId, ""));
   }
 
   @Test
-  public void testSSLConnect()
-      throws IOException {
+  public void testSSLConnect() throws IOException {
     String connectionId =
         selector.connect(new InetSocketAddress("localhost", server.port), BUFFER_SIZE, BUFFER_SIZE, PortType.SSL);
     while (!selector.connected().contains(connectionId)) {
@@ -214,8 +205,7 @@ public class SSLSelectorTest {
   }
 
   @Test
-  public void testCloseAfterConnectCall()
-      throws IOException {
+  public void testCloseAfterConnectCall() throws IOException {
     String connectionId =
         selector.connect(new InetSocketAddress("localhost", server.port), BUFFER_SIZE, BUFFER_SIZE, PortType.SSL);
     selector.close(connectionId);
@@ -224,8 +214,7 @@ public class SSLSelectorTest {
         selector.disconnected().contains(connectionId));
   }
 
-  private String blockingRequest(String connectionId, String s)
-      throws Exception {
+  private String blockingRequest(String connectionId, String s) throws Exception {
     selector.poll(1000L, asList(SelectorTest.createSend(connectionId, s)));
     while (true) {
       selector.poll(1000L);
@@ -238,8 +227,7 @@ public class SSLSelectorTest {
   }
 
   /* connect and wait for the connection to complete */
-  private String blockingSSLConnect()
-      throws IOException {
+  private String blockingSSLConnect() throws IOException {
     String connectionId =
         selector.connect(new InetSocketAddress("localhost", server.port), BUFFER_SIZE, BUFFER_SIZE, PortType.SSL);
     while (!selector.connected().contains(connectionId)) {

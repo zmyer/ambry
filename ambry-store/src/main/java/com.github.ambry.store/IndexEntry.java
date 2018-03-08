@@ -16,20 +16,35 @@ package com.github.ambry.store;
 /**
  * A key and value that represents an index entry
  */
-public class IndexEntry {
-  private StoreKey key;
-  private IndexValue value;
+class IndexEntry {
+  private final StoreKey key;
+  private final IndexValue value;
+  private final Long crc;
 
-  public IndexEntry(StoreKey key, IndexValue value) {
+  IndexEntry(StoreKey key, IndexValue value, Long crc) {
     this.key = key;
     this.value = value;
+    this.crc = crc;
   }
 
-  public StoreKey getKey() {
+  IndexEntry(StoreKey key, IndexValue value) {
+    this(key, value, null);
+  }
+
+  StoreKey getKey() {
     return this.key;
   }
 
-  public IndexValue getValue() {
+  IndexValue getValue() {
     return this.value;
+  }
+
+  Long getCrc() {
+    return this.crc;
+  }
+
+  @Override
+  public String toString() {
+    return "(Key: [" + key + "]. Value: [" + value + "]. CRC: [" + crc + "])";
   }
 }

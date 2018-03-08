@@ -13,6 +13,7 @@
  */
 package com.github.ambry.network;
 
+import com.github.ambry.commons.SSLFactory;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -42,16 +43,14 @@ public class EchoServer extends Thread {
   /**
    * Create an EchoServer that supports plaintext connections
    */
-  public EchoServer(int port)
-      throws Exception {
+  public EchoServer(int port) throws Exception {
     this(null, port);
   }
 
   /**
    * Create an EchoServer that supports SSL connections
    */
-  public EchoServer(SSLFactory sslFactory, int port)
-      throws Exception {
+  public EchoServer(SSLFactory sslFactory, int port) throws Exception {
     this.port = port;
     if (sslFactory == null) {
       this.serverSocket = new ServerSocket(port);
@@ -60,7 +59,7 @@ public class EchoServer extends Thread {
       this.serverSocket = sslContext.getServerSocketFactory().createServerSocket(port);
 
       // enable mutual authentication
-      ((SSLServerSocket)this.serverSocket).setNeedClientAuth(true);
+      ((SSLServerSocket) this.serverSocket).setNeedClientAuth(true);
     }
     this.threads = Collections.synchronizedList(new ArrayList<Thread>());
     this.sockets = Collections.synchronizedList(new ArrayList<Socket>());
@@ -118,15 +117,13 @@ public class EchoServer extends Thread {
     }
   }
 
-  public void closeConnections()
-      throws IOException {
+  public void closeConnections() throws IOException {
     for (Socket socket : sockets) {
       socket.close();
     }
   }
 
-  public void close()
-      throws IOException, InterruptedException {
+  public void close() throws IOException, InterruptedException {
     this.serverSocket.close();
     closeConnections();
     for (Thread t : threads) {

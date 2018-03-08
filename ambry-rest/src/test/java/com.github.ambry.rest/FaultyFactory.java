@@ -29,48 +29,48 @@ public class FaultyFactory implements BlobStorageServiceFactory, NioServerFactor
     // don't care.
   }
 
-  // for RestRequestHandlerFactory and RouterFactory
+  // for RestRequestHandlerFactory
   public FaultyFactory(Object obj1, Object obj2, Object obj3) {
     // don't care.
   }
 
-  // for NioServerFactory
-  public FaultyFactory(Object obj1, Object obj2, Object obj3, Object obj4, Object obj5) {
+  // for RouterFactory
+  public FaultyFactory(Object obj1, Object obj2, Object obj3, Object obj4) {
     // don't care.
   }
 
   // for BlobStorageServiceFactory
-  public FaultyFactory(Object... objs) {
+  public FaultyFactory(Object obj1, Object obj2, Object obj3, Object obj4, Object obj5) {
+    // don't care.
+  }
+
+  // for NioServerFactory
+  public FaultyFactory(Object obj1, Object obj2, Object obj3, Object obj4, Object obj5, Object obj6) {
     // don't care.
   }
 
   @Override
-  public BlobStorageService getBlobStorageService()
-      throws InstantiationException {
+  public BlobStorageService getBlobStorageService() throws InstantiationException {
     return null;
   }
 
   @Override
-  public NioServer getNioServer()
-      throws InstantiationException {
+  public NioServer getNioServer() throws InstantiationException {
     return null;
   }
 
   @Override
-  public Router getRouter()
-      throws InstantiationException {
+  public Router getRouter() throws InstantiationException {
     return null;
   }
 
   @Override
-  public RestResponseHandler getRestResponseHandler()
-      throws InstantiationException {
+  public RestResponseHandler getRestResponseHandler() throws InstantiationException {
     return null;
   }
 
   @Override
-  public RestRequestHandler getRestRequestHandler()
-      throws InstantiationException {
+  public RestRequestHandler getRestRequestHandler() throws InstantiationException {
     return null;
   }
 }

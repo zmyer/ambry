@@ -33,8 +33,7 @@ public interface BlobStorageService {
    * Does startup tasks for the BlobStorageService. When the function returns, startup is FULLY complete.
    * @throws InstantiationException if BlobStorageService is unable to start.
    */
-  public void start()
-      throws InstantiationException;
+  public void start() throws InstantiationException;
 
   /**
    * Does shutdown tasks for the BlobStorageService. When the function returns, shutdown is FULLY complete.
@@ -62,6 +61,16 @@ public interface BlobStorageService {
   public void handlePost(RestRequest restRequest, RestResponseChannel restResponseChannel);
 
   /**
+   * Handles a PUT operation.
+   * <p/>
+   * The {@code restRequest} provided will have both metadata and any content associated with the request. The
+   * {@code restResponseChannel} can be used to send responses to the client.
+   * @param restRequest the {@link RestRequest} that needs to be handled.
+   * @param restResponseChannel the {@link RestResponseChannel} over which response to {@code restRequest} can be sent.
+   */
+  public void handlePut(RestRequest restRequest, RestResponseChannel restResponseChannel);
+
+  /**
    * Handles a DELETE operation.
    * <p/>
    * The {@code restRequest} provided will have both metadata and any content associated with the request. The
@@ -80,4 +89,14 @@ public interface BlobStorageService {
    * @param restResponseChannel the {@link RestResponseChannel} over which response to {@code restRequest} can be sent.
    */
   public void handleHead(RestRequest restRequest, RestResponseChannel restResponseChannel);
+
+  /**
+   * Handles an OPTIONS request.
+   * <p/>
+   * The {@code restRequest} provided will have both metadata and any content associated with the request. The
+   * {@code restResponseChannel} can be used to send responses to the client.
+   * @param restRequest the {@link RestRequest} that needs to be handled.
+   * @param restResponseChannel the {@link RestResponseChannel} over which response to {@code restRequest} can be sent.
+   */
+  public void handleOptions(RestRequest restRequest, RestResponseChannel restResponseChannel);
 }

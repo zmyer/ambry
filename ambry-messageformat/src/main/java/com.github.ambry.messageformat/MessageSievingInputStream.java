@@ -30,6 +30,8 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static com.github.ambry.messageformat.MessageFormatRecord.*;
+
 
 /**
  * InputStream that skips invalid blobs based on some validation criteria.
@@ -55,13 +57,12 @@ public class MessageSievingInputStream extends InputStream {
    * @throws java.io.IOException
    */
   public MessageSievingInputStream(InputStream stream, List<MessageInfo> messageInfoList,
-      StoreKeyFactory storeKeyFactory, MetricRegistry metricRegistry)
-      throws IOException {
+      StoreKeyFactory storeKeyFactory, MetricRegistry metricRegistry) throws IOException {
     this.logger = LoggerFactory.getLogger(getClass());
     messageFormatValidationTime =
         metricRegistry.histogram(MetricRegistry.name(MessageSievingInputStream.class, "MessageFormatValidationTime"));
-    messageFormatBatchValidationTime = metricRegistry
-        .histogram(MetricRegistry.name(MessageSievingInputStream.class, "MessageFormatBatchValidationTime"));
+    messageFormatBatchValidationTime = metricRegistry.histogram(
+        MetricRegistry.name(MessageSievingInputStream.class, "MessageFormatBatchValidationTime"));
     validSize = 0;
     hasInvalidMessages = false;
     validMessageInfoList = new ArrayList<MessageInfo>();
@@ -119,8 +120,7 @@ public class MessageSievingInputStream extends InputStream {
   }
 
   @Override
-  public int read()
-      throws IOException {
+  public int read() throws IOException {
     if (!byteBuffer.hasRemaining()) {
       return -1;
     }
@@ -128,8 +128,7 @@ public class MessageSievingInputStream extends InputStream {
   }
 
   @Override
-  public int read(byte[] bytes, int offset, int length)
-      throws IOException {
+  public int read(byte[] bytes, int offset, int length) throws IOException {
     if (bytes == null) {
       throw new IllegalArgumentException("Byte array cannot be null");
     } else if (offset < 0 || length < 0 || length > bytes.length - offset) {
@@ -167,67 +166,63 @@ public class MessageSievingInputStream extends InputStream {
    * @throws IOException
    */
   private boolean checkForMessageValidity(ByteArrayInputStream byteArrayInputStream, int currentOffset, long size,
-      StoreKeyFactory storeKeyFactory, MessageInfo msgInfo)
-      throws IOException {
+      StoreKeyFactory storeKeyFactory, MessageInfo msgInfo) throws IOException {
     boolean isValid = false;
-    BlobProperties props = null;
-    ByteBuffer metadata = null;
-    BlobData blobData = null;
+    ByteBuffer encryptionKey;
+    BlobProperties props;
+    ByteBuffer metadata;
+    BlobData blobData;
     long startTime = SystemTime.getInstance().milliseconds();
     try {
       int availableBeforeParsing = byteArrayInputStream.available();
-      byte[] headerVersionInBytes = new byte[MessageFormatRecord.Version_Field_Size_In_Bytes];
-      byteArrayInputStream.read(headerVersionInBytes, 0, MessageFormatRecord.Version_Field_Size_In_Bytes);
+      byte[] headerVersionInBytes = new byte[Version_Field_Size_In_Bytes];
+      byteArrayInputStream.read(headerVersionInBytes, 0, Version_Field_Size_In_Bytes);
       ByteBuffer headerVersion = ByteBuffer.wrap(headerVersionInBytes);
       short version = headerVersion.getShort();
-      if (version == 1) {
-        ByteBuffer headerBuffer = ByteBuffer.allocate(MessageFormatRecord.MessageHeader_Format_V1.getHeaderSize());
-        headerBuffer.putShort(version);
-        byteArrayInputStream.read(headerBuffer.array(), 2, headerBuffer.capacity() - 2);
-        headerBuffer.position(headerBuffer.capacity());
-        headerBuffer.flip();
-        MessageFormatRecord.MessageHeader_Format_V1 header =
-            new MessageFormatRecord.MessageHeader_Format_V1(headerBuffer);
-        StoreKey storeKey = storeKeyFactory.getStoreKey(new DataInputStream(byteArrayInputStream));
-
-        if (header.getBlobPropertiesRecordRelativeOffset()
-            != MessageFormatRecord.Message_Header_Invalid_Relative_Offset) {
-          props = MessageFormatRecord.deserializeBlobProperties(byteArrayInputStream);
-          metadata = MessageFormatRecord.deserializeUserMetadata(byteArrayInputStream);
-          blobData = MessageFormatRecord.deserializeBlob(byteArrayInputStream);
-        } else {
-          throw new IllegalStateException("Message cannot be a deleted record ");
-        }
-        if (byteArrayInputStream.available() != 0) {
-          logger.error("Parsed message size " + (availableBeforeParsing + byteArrayInputStream.available())
-              + " is not equivalent to the size in message info " + availableBeforeParsing);
-        } else {
-          if (logger.isTraceEnabled()) {
-            logger.trace("Message Successfully read");
-            logger.trace(
-                "Header - version {} Message Size {} Starting offset of the blob {} BlobPropertiesRelativeOffset {}"
-                    + " UserMetadataRelativeOffset {} DataRelativeOffset {} DeleteRecordRelativeOffset {} Crc {}",
-                header.getVersion(), header.getMessageSize(), currentOffset,
-                header.getBlobPropertiesRecordRelativeOffset(), header.getUserMetadataRecordRelativeOffset(),
-                header.getBlobRecordRelativeOffset(), header.getDeleteRecordRelativeOffset(), header.getCrc());
-            logger.trace("Id {} Blob Properties - blobSize {} Metadata - size {} Blob - size {} ", storeKey.getID(),
-                props.getBlobSize(), metadata.capacity(), blobData.getSize());
-          }
-          if (msgInfo.getStoreKey().equals(storeKey)) {
-            isValid = true;
-          } else {
-            logger.error(
-                "StoreKey in log " + storeKey + " failed to match store key from Index " + msgInfo.getStoreKey());
-          }
-        }
-      } else {
+      if (!isValidHeaderVersion(version)) {
         throw new MessageFormatException("Header version not supported " + version,
             MessageFormatErrorCodes.Data_Corrupt);
       }
+      ByteBuffer headerBuffer = ByteBuffer.allocate(getHeaderSizeForVersion(version));
+      headerBuffer.putShort(version);
+      byteArrayInputStream.read(headerBuffer.array(), 2, headerBuffer.capacity() - 2);
+      headerBuffer.position(headerBuffer.capacity());
+      headerBuffer.flip();
+      MessageHeader_Format header = getMessageHeader(version, headerBuffer);
+      StoreKey storeKey = storeKeyFactory.getStoreKey(new DataInputStream(byteArrayInputStream));
+      if (header.isPutRecord()) {
+        encryptionKey = header.hasEncryptionKeyRecord() ? deserializeBlobEncryptionKey(byteArrayInputStream) : null;
+        props = deserializeBlobProperties(byteArrayInputStream);
+        metadata = deserializeUserMetadata(byteArrayInputStream);
+        blobData = deserializeBlob(byteArrayInputStream);
+      } else {
+        throw new IllegalStateException("Message cannot be a deleted record ");
+      }
+      if (byteArrayInputStream.available() != 0) {
+        logger.error("Parsed message size {} is not equivalent to the size in message info {}",
+            (availableBeforeParsing + byteArrayInputStream.available()), availableBeforeParsing);
+      } else {
+        logger.trace("Message Successfully read");
+        logger.trace(
+            "Header - version {} Message Size {} Starting offset of the blob {} BlobEncryptionKeyRecord {} BlobPropertiesRelativeOffset {}"
+                + " UserMetadataRelativeOffset {} DataRelativeOffset {} DeleteRecordRelativeOffset {} Crc {}",
+            header.getVersion(), header.getMessageSize(), currentOffset,
+            header.getBlobEncryptionKeyRecordRelativeOffset(), header.getBlobPropertiesRecordRelativeOffset(),
+            header.getUserMetadataRecordRelativeOffset(), header.getBlobRecordRelativeOffset(),
+            header.getDeleteRecordRelativeOffset(), header.getCrc());
+        logger.trace("Id {} Encryption Key -size {} Blob Properties - blobSize {} Metadata - size {} Blob - size {} ",
+            storeKey.getID(), encryptionKey == null ? 0 : encryptionKey.capacity(), props.getBlobSize(),
+            metadata.capacity(), blobData.getSize());
+        if (msgInfo.getStoreKey().equals(storeKey)) {
+          isValid = true;
+        } else {
+          logger.error(
+              "StoreKey in log " + storeKey + " failed to match store key from Index " + msgInfo.getStoreKey());
+        }
+      }
     } catch (MessageFormatException e) {
-      logger
-          .error("MessageFormat exception thrown for a blob starting at offset " + currentOffset + " with exception: ",
-              e);
+      logger.error(
+          "MessageFormat exception thrown for a blob starting at offset " + currentOffset + " with exception: ", e);
     } finally {
       messageFormatValidationTime.update(SystemTime.getInstance().milliseconds() - startTime);
     }

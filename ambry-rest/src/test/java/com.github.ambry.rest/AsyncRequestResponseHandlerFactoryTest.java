@@ -14,15 +14,15 @@
 package com.github.ambry.rest;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.router.InMemoryRouter;
 import com.github.ambry.router.Router;
+import java.io.IOException;
 import java.util.Properties;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 /**
@@ -37,11 +37,10 @@ public class AsyncRequestResponseHandlerFactoryTest {
    * @throws InstantiationException
    */
   @Test
-  public void getAsyncRequestResponseHandlerTest()
-      throws InstantiationException {
+  public void getAsyncRequestResponseHandlerTest() throws InstantiationException, IOException {
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
-    Router router = new InMemoryRouter(verifiableProperties);
+    Router router = new InMemoryRouter(verifiableProperties, new MockClusterMap());
 
     // Get response handler.
     AsyncRequestResponseHandlerFactory responseHandlerFactory =
@@ -73,9 +72,9 @@ public class AsyncRequestResponseHandlerFactoryTest {
    * Tests instantiation of {@link AsyncRequestResponseHandlerFactory} with bad input.
    */
   @Test
-  public void getFactoryTestWithBadInputTest() {
+  public void getFactoryTestWithBadInputTest() throws IOException {
     VerifiableProperties verifiableProperties = new VerifiableProperties(new Properties());
-    Router router = new InMemoryRouter(verifiableProperties);
+    Router router = new InMemoryRouter(verifiableProperties, new MockClusterMap());
     MockRestRequestResponseHandler restRequestResponseHandler = new MockRestRequestResponseHandler();
     BlobStorageService blobStorageService =
         new MockBlobStorageService(verifiableProperties, restRequestResponseHandler, router);

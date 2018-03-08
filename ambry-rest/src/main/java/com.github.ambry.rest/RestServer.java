@@ -19,6 +19,10 @@ import com.codahale.metrics.Histogram;
 import com.codahale.metrics.JmxReporter;
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.clustermap.ClusterMap;
+import com.github.ambry.commons.HelixNotifier;
+import com.github.ambry.commons.Notifier;
+import com.github.ambry.commons.SSLFactory;
+import com.github.ambry.config.HelixPropertyStoreConfig;
 import com.github.ambry.config.RestServerConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.notification.NotificationSystem;
@@ -144,11 +148,11 @@ public class RestServer {
    * @param verifiableProperties the properties that define the behavior of the RestServer and its components.
    * @param clusterMap the {@link ClusterMap} instance that needs to be used.
    * @param notificationSystem the {@link NotificationSystem} instance that needs to be used.
+   * @param sslFactory the {@link SSLFactory} to be used. This can be {@code null} if no components require SSL support.
    * @throws InstantiationException if there is any error instantiating an instance of RestServer.
    */
   public RestServer(VerifiableProperties verifiableProperties, ClusterMap clusterMap,
-      NotificationSystem notificationSystem)
-      throws Exception {
+      NotificationSystem notificationSystem, SSLFactory sslFactory) throws Exception {
     if (verifiableProperties == null || clusterMap == null || notificationSystem == null) {
       throw new IllegalArgumentException("Null arg(s) received during instantiation of RestServer");
     }
@@ -158,18 +162,25 @@ public class RestServer {
     RestRequestMetricsTracker.setDefaults(metricRegistry);
     restServerState = new RestServerState(restServerConfig.restServerHealthCheckUri);
     restServerMetrics = new RestServerMetrics(metricRegistry, restServerState);
+
     RouterFactory routerFactory =
-        Utils.getObj(restServerConfig.restServerRouterFactory, verifiableProperties, clusterMap, notificationSystem);
+        Utils.getObj(restServerConfig.restServerRouterFactory, verifiableProperties, clusterMap, notificationSystem,
+            sslFactory);
     router = routerFactory.getRouter();
 
-    RestResponseHandlerFactory restResponseHandlerFactory = Utils
-        .getObj(restServerConfig.restServerResponseHandlerFactory,
+    RestResponseHandlerFactory restResponseHandlerFactory =
+        Utils.getObj(restServerConfig.restServerResponseHandlerFactory,
             restServerConfig.restServerResponseHandlerScalingUnitCount, metricRegistry);
     restResponseHandler = restResponseHandlerFactory.getRestResponseHandler();
 
-    BlobStorageServiceFactory blobStorageServiceFactory = Utils
-        .getObj(restServerConfig.restServerBlobStorageServiceFactory, verifiableProperties, clusterMap,
-            restResponseHandler, router);
+    HelixPropertyStoreConfig helixStoreConfig = new HelixPropertyStoreConfig(verifiableProperties);
+    Notifier notifier = null;
+    if (helixStoreConfig.zkClientConnectString != HelixPropertyStoreConfig.INVALID_ZK_CLIENT_CONNECT_STRING) {
+      notifier = new HelixNotifier(helixStoreConfig);
+    }
+    BlobStorageServiceFactory blobStorageServiceFactory =
+        Utils.getObj(restServerConfig.restServerBlobStorageServiceFactory, verifiableProperties, clusterMap,
+            restResponseHandler, router, notifier);
     blobStorageService = blobStorageServiceFactory.getBlobStorageService();
 
     RestRequestHandlerFactory restRequestHandlerFactory = Utils.getObj(restServerConfig.restServerRequestHandlerFactory,
@@ -177,10 +188,12 @@ public class RestServer {
     restRequestHandler = restRequestHandlerFactory.getRestRequestHandler();
     publicAccessLogger = new PublicAccessLogger(restServerConfig.restServerPublicAccessLogRequestHeaders.split(","),
         restServerConfig.restServerPublicAccessLogResponseHeaders.split(","));
-    NioServerFactory nioServerFactory = Utils
-        .getObj(restServerConfig.restServerNioServerFactory, verifiableProperties, metricRegistry, restRequestHandler,
-            publicAccessLogger, restServerState);
+
+    NioServerFactory nioServerFactory =
+        Utils.getObj(restServerConfig.restServerNioServerFactory, verifiableProperties, metricRegistry,
+            restRequestHandler, publicAccessLogger, restServerState, sslFactory);
     nioServer = nioServerFactory.getNioServer();
+
     if (router == null || restResponseHandler == null || blobStorageService == null || restRequestHandler == null
         || nioServer == null) {
       throw new InstantiationException("Some of the server components were null");
@@ -192,8 +205,7 @@ public class RestServer {
    * Starts up all the components required. Returns when startup is FULLY complete.
    * @throws InstantiationException if the RestServer is unable to start.
    */
-  public void start()
-      throws InstantiationException {
+  public void start() throws InstantiationException {
     logger.info("Starting RestServer");
     long startupBeginTime = System.currentTimeMillis();
     try {
@@ -238,6 +250,8 @@ public class RestServer {
 
   /**
    * Shuts down all the components. Returns when shutdown is FULLY complete.
+   * This method is expected to be called in the exit path as long as the RestServer instance construction was
+   * successful. This is expected to be called even if {@link #start()} did not succeed.
    */
   public void shutdown() {
     logger.info("Shutting down RestServer");
@@ -294,8 +308,7 @@ public class RestServer {
    * Wait for shutdown to be triggered and for it to complete.
    * @throws InterruptedException if the wait for shutdown is interrupted.
    */
-  public void awaitShutdown()
-      throws InterruptedException {
+  public void awaitShutdown() throws InterruptedException {
     shutdownLatch.await();
   }
 }

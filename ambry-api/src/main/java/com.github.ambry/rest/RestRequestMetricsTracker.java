@@ -62,11 +62,12 @@ public class RestRequestMetricsTracker {
    * These are usually updated in classes implemented by the {@link NioServer} framework (e.g. Implementations of
    * {@link RestRequest}, {@link RestResponseChannel} or any other classes that form a part of the framework).
    */
-  public class NioMetricsTracker {
+  public static class NioMetricsTracker {
     private final AtomicLong requestProcessingTimeInMs = new AtomicLong(0);
     private final AtomicLong responseProcessingTimeInMs = new AtomicLong(0);
 
     private long requestReceivedTime = 0;
+    private long timeToFirstByteInMs = 0;
     private long roundTripTimeInMs = 0;
 
     /**
@@ -97,6 +98,16 @@ public class RestRequestMetricsTracker {
     }
 
     /**
+     * Marks the time at which the first byte of the response is sent.
+     */
+    public void markFirstByteSent() {
+      if (requestReceivedTime == 0) {
+        throw new IllegalStateException("First response byte was marked as sent without request being marked received");
+      }
+      timeToFirstByteInMs = System.currentTimeMillis() - requestReceivedTime;
+    }
+
+    /**
      * Marks the time at which request was completed so that request RTT can be calculated.
      */
     public void markRequestCompleted() {
@@ -111,7 +122,7 @@ public class RestRequestMetricsTracker {
    * Helper for updating scaling related metrics. These metrics are updated in the classes that provide scaling
    * capabilities when transferring control from {@link NioServer} to {@link BlobStorageService}.
    */
-  public class ScalingMetricsTracker {
+  public static class ScalingMetricsTracker {
     private final AtomicLong requestProcessingTimeInMs = new AtomicLong(0);
     private final AtomicLong requestProcessingWaitTimeInMs = new AtomicLong(0);
     private final AtomicLong responseProcessingTimeInMs = new AtomicLong(0);
@@ -210,6 +221,7 @@ public class RestRequestMetricsTracker {
         metrics.nioRequestProcessingTimeInMs.update(nioMetricsTracker.requestProcessingTimeInMs.get());
         metrics.nioResponseProcessingTimeInMs.update(nioMetricsTracker.responseProcessingTimeInMs.get());
         metrics.nioRoundTripTimeInMs.update(nioMetricsTracker.roundTripTimeInMs);
+        metrics.nioTimeToFirstByteInMs.update(nioMetricsTracker.timeToFirstByteInMs);
 
         metrics.scRequestProcessingTimeInMs.update(scalingMetricsTracker.requestProcessingTimeInMs.get());
         metrics.scRequestProcessingWaitTimeInMs.update(scalingMetricsTracker.requestProcessingWaitTimeInMs.get());

@@ -14,38 +14,41 @@
 package com.github.ambry.clustermap;
 
 import com.github.ambry.config.ClusterMapConfig;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-
 
 /**
  * A Datacenter in an Ambry cluster. A Datacenter must be uniquely identifiable by its name. A Datacenter is the primary
  * unit at which Ambry hardware is organized (see {@link HardwareLayout})). A Datacenter has zero or more {@link
  * DataNode}s.
+ *
+ * This class is meant to be used within the {@link StaticClusterManager}.
  */
-public class Datacenter {
+class Datacenter {
   private final HardwareLayout hardwareLayout;
   private final String name;
+  private final byte id;
   private final ArrayList<DataNode> dataNodes;
   private final long rawCapacityInBytes;
   private boolean rackAware = false;
 
   private Logger logger = LoggerFactory.getLogger(getClass());
 
-  public Datacenter(HardwareLayout hardwareLayout, JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
+  Datacenter(HardwareLayout hardwareLayout, JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
       throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("Datacenter " + jsonObject.toString());
     }
     this.hardwareLayout = hardwareLayout;
     this.name = jsonObject.getString("name");
+    id = Byte.parseByte(jsonObject.getString("id"));
 
     this.dataNodes = new ArrayList<DataNode>(jsonObject.getJSONArray("dataNodes").length());
     for (int i = 0; i < jsonObject.getJSONArray("dataNodes").length(); ++i) {
@@ -55,15 +58,19 @@ public class Datacenter {
     validate();
   }
 
-  public HardwareLayout getHardwareLayout() {
+  HardwareLayout getHardwareLayout() {
     return hardwareLayout;
   }
 
-  public String getName() {
+  String getName() {
     return name;
   }
 
-  public long getRawCapacityInBytes() {
+  byte getId() {
+    return id;
+  }
+
+  long getRawCapacityInBytes() {
     return rawCapacityInBytes;
   }
 
@@ -75,7 +82,7 @@ public class Datacenter {
     return capacityInBytes;
   }
 
-  public List<DataNode> getDataNodes() {
+  List<DataNode> getDataNodes() {
     return dataNodes;
   }
 
@@ -83,7 +90,7 @@ public class Datacenter {
    * Returns {@code true} if all nodes in the datacenter have rack IDs
    * @return {@code true} if all nodes in the datacenter have rack IDs, {@code false} otherwise
    */
-  public boolean isRackAware() {
+  boolean isRackAware() {
     return rackAware;
   }
 
@@ -114,8 +121,8 @@ public class Datacenter {
       boolean hasRackId = (dataNodeIter.next().getRackId() >= 0);
       while (dataNodeIter.hasNext()) {
         if (hasRackId != (dataNodeIter.next().getRackId() >= 0)) {
-          throw new IllegalStateException("dataNodes in datacenter: " + name
-              + " must all have defined rack IDs or none at all");
+          throw new IllegalStateException(
+              "dataNodes in datacenter: " + name + " must all have defined rack IDs or none at all");
         }
       }
       this.rackAware = hasRackId;
@@ -130,9 +137,8 @@ public class Datacenter {
     logger.trace("complete validate.");
   }
 
-  public JSONObject toJSONObject()
-      throws JSONException {
-    JSONObject jsonObject = new JSONObject().put("name", name).put("dataNodes", new JSONArray());
+  JSONObject toJSONObject() throws JSONException {
+    JSONObject jsonObject = new JSONObject().put("name", name).put("id", id).put("dataNodes", new JSONArray());
     for (DataNode dataNode : dataNodes) {
       jsonObject.accumulate("dataNodes", dataNode.toJSONObject());
     }

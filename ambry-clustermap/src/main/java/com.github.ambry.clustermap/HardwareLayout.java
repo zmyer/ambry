@@ -14,23 +14,22 @@
 package com.github.ambry.clustermap;
 
 import com.github.ambry.config.ClusterMapConfig;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-
 
 /**
  * An Ambry hardwareLayout consists of a set of {@link Datacenter}s.
  */
-public class HardwareLayout {
+class HardwareLayout {
   private final String clusterName;
   private final long version;
   private final ArrayList<Datacenter> datacenters;
@@ -39,21 +38,22 @@ public class HardwareLayout {
   private final long diskCount;
   private final Map<HardwareState, Long> dataNodeInHardStateCount;
   private final Map<HardwareState, Long> diskInHardStateCount;
+  private final ClusterMapConfig clusterMapConfig;
 
   private Logger logger = LoggerFactory.getLogger(getClass());
 
-  public HardwareLayout(JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
-      throws JSONException {
+  public HardwareLayout(JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("HardwareLayout " + jsonObject.toString());
     }
     this.clusterName = jsonObject.getString("clusterName");
     this.version = jsonObject.getLong("version");
+    this.clusterMapConfig = clusterMapConfig;
 
     this.datacenters = new ArrayList<Datacenter>(jsonObject.getJSONArray("datacenters").length());
     for (int i = 0; i < jsonObject.getJSONArray("datacenters").length(); ++i) {
-      this.datacenters
-          .add(i, new Datacenter(this, jsonObject.getJSONArray("datacenters").getJSONObject(i), clusterMapConfig));
+      this.datacenters.add(i,
+          new Datacenter(this, jsonObject.getJSONArray("datacenters").getJSONObject(i), clusterMapConfig));
     }
 
     this.rawCapacityInBytes = calculateRawCapacityInBytes();
@@ -160,7 +160,7 @@ public class HardwareLayout {
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
         for (Disk disk : dataNode.getDisks()) {
-          diskInStateCount.put(dataNode.getState(), diskInStateCount.get(dataNode.getState()) + 1);
+          diskInStateCount.put(disk.getState(), diskInStateCount.get(disk.getState()) + 1);
         }
       }
     }
@@ -204,7 +204,8 @@ public class HardwareLayout {
    * @return DataNode or null if not found.
    */
   public DataNode findDataNode(String hostname, int port) {
-    String canonicalHostname = DataNode.getFullyQualifiedDomainName(hostname);
+    String canonicalHostname =
+        clusterMapConfig.clusterMapResolveHostnames ? ClusterMapUtils.getFullyQualifiedDomainName(hostname) : hostname;
     logger.trace("host to find host {} port {}", canonicalHostname, port);
     for (Datacenter datacenter : datacenters) {
       logger.trace("datacenter {}", datacenter.getName());
@@ -246,8 +247,7 @@ public class HardwareLayout {
   }
 
   // Validate each hardware component (Datacenter, DataNode, and Disk) are unique
-  protected void validateUniqueness()
-      throws IllegalStateException {
+  protected void validateUniqueness() throws IllegalStateException {
     logger.trace("begin validateUniqueness.");
     HashSet<Datacenter> datacenterSet = new HashSet<Datacenter>();
     HashSet<DataNode> dataNodeSet = new HashSet<DataNode>();
@@ -278,8 +278,7 @@ public class HardwareLayout {
     logger.trace("complete validate.");
   }
 
-  public JSONObject toJSONObject()
-      throws JSONException {
+  public JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject =
         new JSONObject().put("clusterName", clusterName).put("version", version).put("datacenters", new JSONArray());
     for (Datacenter datacenter : datacenters) {

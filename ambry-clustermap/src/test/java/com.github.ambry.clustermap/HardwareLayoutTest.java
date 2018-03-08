@@ -15,17 +15,15 @@ package com.github.ambry.clustermap;
 
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.VerifiableProperties;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 /**
@@ -38,32 +36,34 @@ public class HardwareLayoutTest {
   private static final int datacenterCount = 3;
   private static final int basePort = 6666;
   private static final int baseSslPort = 7666;
+  private Properties props;
 
-  private JSONArray getDisks()
-      throws JSONException {
+  public HardwareLayoutTest() {
+    props = new Properties();
+    props.setProperty("clustermap.cluster.name", "test");
+    props.setProperty("clustermap.datacenter.name", "dc1");
+    props.setProperty("clustermap.host.name", "localhost");
+  }
+
+  private JSONArray getDisks() throws JSONException {
     return TestUtils.getJsonArrayDisks(diskCount, "/mnt", HardwareState.AVAILABLE, diskCapacityInBytes);
   }
 
-  private JSONArray getDuplicateDisks()
-      throws JSONException {
+  private JSONArray getDuplicateDisks() throws JSONException {
     return TestUtils.getJsonArrayDuplicateDisks(diskCount, "/mnt", HardwareState.AVAILABLE, diskCapacityInBytes);
   }
 
-  private JSONArray getDataNodes(int basePort, int sslPort, JSONArray disks)
-      throws JSONException {
-    return TestUtils
-        .getJsonArrayDataNodes(dataNodeCount, TestUtils.getLocalHost(), basePort, sslPort, HardwareState.AVAILABLE,
-            disks);
+  private JSONArray getDataNodes(int basePort, int sslPort, JSONArray disks) throws JSONException {
+    return TestUtils.getJsonArrayDataNodes(dataNodeCount, TestUtils.getLocalHost(), basePort, sslPort,
+        HardwareState.AVAILABLE, disks);
   }
 
-  private JSONArray getDuplicateDataNodes(int basePort, int sslPort, JSONArray disks)
-      throws JSONException {
+  private JSONArray getDuplicateDataNodes(int basePort, int sslPort, JSONArray disks) throws JSONException {
     return TestUtils.getJsonArrayDuplicateDataNodes(dataNodeCount, TestUtils.getLocalHost(), basePort, sslPort,
         HardwareState.AVAILABLE, disks);
   }
 
-  private JSONArray getDatacenters()
-      throws JSONException {
+  private JSONArray getDatacenters() throws JSONException {
     List<String> names = new ArrayList<String>(datacenterCount);
     List<JSONArray> dataNodes = new ArrayList<JSONArray>(datacenterCount);
 
@@ -79,8 +79,7 @@ public class HardwareLayoutTest {
     return TestUtils.getJsonArrayDatacenters(names, dataNodes);
   }
 
-  private JSONArray getDatacentersWithDuplicateDisks()
-      throws JSONException {
+  private JSONArray getDatacentersWithDuplicateDisks() throws JSONException {
     List<String> names = new ArrayList<String>(datacenterCount);
     List<JSONArray> dataNodes = new ArrayList<JSONArray>(datacenterCount);
 
@@ -97,8 +96,7 @@ public class HardwareLayoutTest {
   }
 
   // All nodes within each datacenter are duplicates. Each datacenter hosts a different repeated node.
-  private JSONArray getDatacentersWithDuplicateDataNodes()
-      throws JSONException {
+  private JSONArray getDatacentersWithDuplicateDataNodes() throws JSONException {
     List<String> names = new ArrayList<String>(datacenterCount);
     List<JSONArray> dataNodes = new ArrayList<JSONArray>(datacenterCount);
 
@@ -114,8 +112,7 @@ public class HardwareLayoutTest {
     return TestUtils.getJsonArrayDatacenters(names, dataNodes);
   }
 
-  private JSONArray getDuplicateDatacenters()
-      throws JSONException {
+  private JSONArray getDuplicateDatacenters() throws JSONException {
     List<String> names = new ArrayList<String>(datacenterCount);
     List<JSONArray> dataNodes = new ArrayList<JSONArray>(datacenterCount);
 
@@ -132,12 +129,11 @@ public class HardwareLayoutTest {
   }
 
   @Test
-  public void basics()
-      throws JSONException {
+  public void basics() throws JSONException {
     JSONObject jsonObject = TestUtils.getJsonHardwareLayout("Alpha", getDatacenters());
 
     HardwareLayout hardwareLayout =
-        new HardwareLayout(jsonObject, new ClusterMapConfig(new VerifiableProperties(new Properties())));
+        new HardwareLayout(jsonObject, new ClusterMapConfig(new VerifiableProperties(props)));
 
     assertEquals(hardwareLayout.getVersion(), TestUtils.defaultHardwareLayoutVersion);
     assertEquals(hardwareLayout.getClusterName(), "Alpha");
@@ -155,10 +151,9 @@ public class HardwareLayoutTest {
     assertEquals(hardwareLayout.calculateUnavailableDiskCount(), 0);
   }
 
-  public void failValidation(JSONObject jsonObject)
-      throws JSONException {
+  public void failValidation(JSONObject jsonObject) throws JSONException {
     try {
-      new HardwareLayout(jsonObject, new ClusterMapConfig(new VerifiableProperties(new Properties())));
+      new HardwareLayout(jsonObject, new ClusterMapConfig(new VerifiableProperties(props)));
       fail("Should have failed validation: " + jsonObject.toString(2));
     } catch (IllegalStateException e) {
       // Expected.
@@ -166,8 +161,7 @@ public class HardwareLayoutTest {
   }
 
   @Test
-  public void validation()
-      throws JSONException {
+  public void validation() throws JSONException {
     JSONObject jsonObject;
 
     // Bad cluster name

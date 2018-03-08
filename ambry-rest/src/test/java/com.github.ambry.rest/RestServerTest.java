@@ -16,6 +16,7 @@ package com.github.ambry.rest;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.LoggingNotificationSystem;
+import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.notification.NotificationSystem;
 import com.github.ambry.router.InMemoryRouterFactory;
@@ -23,27 +24,27 @@ import java.io.IOException;
 import java.util.Properties;
 import org.junit.Test;
 
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 
 /**
  * Test functionality of {@link RestServer}.
  */
 public class RestServerTest {
+  private static final SSLFactory SSL_FACTORY = RestTestUtils.getTestSSLFactory();
 
   /**
    * Tests {@link RestServer#start()} and {@link RestServer#shutdown()}.
    * @throws Exception
    */
   @Test
-  public void startShutdownTest()
-      throws Exception {
+  public void startShutdownTest() throws Exception {
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = getVProps(properties);
     ClusterMap clusterMap = new MockClusterMap();
     NotificationSystem notificationSystem = new LoggingNotificationSystem();
 
-    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem);
+    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem, SSL_FACTORY);
     server.start();
     server.shutdown();
     server.awaitShutdown();
@@ -55,14 +56,13 @@ public class RestServerTest {
    * @throws Exception
    */
   @Test
-  public void shutdownWithoutStartTest()
-      throws Exception {
+  public void shutdownWithoutStartTest() throws Exception {
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = getVProps(properties);
     ClusterMap clusterMap = new MockClusterMap();
     NotificationSystem notificationSystem = new LoggingNotificationSystem();
 
-    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem);
+    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem, SSL_FACTORY);
     server.shutdown();
     server.awaitShutdown();
   }
@@ -73,8 +73,7 @@ public class RestServerTest {
    * @throws IOException
    */
   @Test
-  public void serverCreationWithBadInputTest()
-      throws Exception {
+  public void serverCreationWithBadInputTest() throws Exception {
     badArgumentsTest();
     badFactoriesTest();
   }
@@ -85,8 +84,7 @@ public class RestServerTest {
    * @throws Exception
    */
   @Test
-  public void startShutdownTestWithBadComponent()
-      throws Exception {
+  public void startShutdownTestWithBadComponent() throws Exception {
     Properties properties = new Properties();
     properties.setProperty("rest.server.nio.server.factory", MockNioServerFactory.class.getCanonicalName());
     // makes MockNioServer throw exceptions.
@@ -94,7 +92,7 @@ public class RestServerTest {
     VerifiableProperties verifiableProperties = getVProps(properties);
     ClusterMap clusterMap = new MockClusterMap();
     NotificationSystem notificationSystem = new LoggingNotificationSystem();
-    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem);
+    RestServer server = new RestServer(verifiableProperties, clusterMap, notificationSystem, SSL_FACTORY);
     try {
       server.start();
       fail("start() should not be successful. MockNioServer::start() would have thrown InstantiationException");
@@ -119,6 +117,15 @@ public class RestServerTest {
    * @return an instance of {@link VerifiableProperties}.
    */
   private VerifiableProperties getVProps(Properties properties) {
+    setMandatoryValues(properties);
+    return new VerifiableProperties(properties);
+  }
+
+  /**
+   * Set some mandatory values in the {@link Properties} passed in.
+   * @param properties The {@link Properties} to set these values in.
+   */
+  private void setMandatoryValues(Properties properties) {
     properties.setProperty("rest.server.router.factory", InMemoryRouterFactory.class.getCanonicalName());
     properties.setProperty("rest.server.response.handler.factory",
         MockRestRequestResponseHandlerFactory.class.getCanonicalName());
@@ -127,7 +134,6 @@ public class RestServerTest {
     properties.setProperty("rest.server.request.handler.factory",
         MockRestRequestResponseHandlerFactory.class.getCanonicalName());
     properties.setProperty("rest.server.nio.server.factory", MockNioServerFactory.class.getCanonicalName());
-    return new VerifiableProperties(properties);
   }
 
   // serverCreationWithBadInputTest() helpers
@@ -137,8 +143,7 @@ public class RestServerTest {
    * @throws Exception
    * @throws IOException
    */
-  private void badArgumentsTest()
-      throws Exception {
+  private void badArgumentsTest() throws Exception {
     // dud properties. server should pick up defaults
     Properties properties = new Properties();
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
@@ -147,7 +152,7 @@ public class RestServerTest {
 
     try {
       // no props.
-      new RestServer(null, clusterMap, notificationSystem);
+      new RestServer(null, clusterMap, notificationSystem, SSL_FACTORY);
       fail("Properties missing, yet no exception was thrown");
     } catch (IllegalArgumentException e) {
       // nothing to do. expected.
@@ -155,7 +160,7 @@ public class RestServerTest {
 
     try {
       // no ClusterMap.
-      new RestServer(verifiableProperties, null, notificationSystem);
+      new RestServer(verifiableProperties, null, notificationSystem, SSL_FACTORY);
       fail("ClusterMap missing, yet no exception was thrown");
     } catch (IllegalArgumentException e) {
       // nothing to do. expected.
@@ -163,7 +168,7 @@ public class RestServerTest {
 
     try {
       // no NotificationSystem.
-      new RestServer(verifiableProperties, clusterMap, null);
+      new RestServer(verifiableProperties, clusterMap, null, SSL_FACTORY);
       fail("NotificationSystem missing, yet no exception was thrown");
     } catch (IllegalArgumentException e) {
       // nothing to do. expected.
@@ -174,8 +179,7 @@ public class RestServerTest {
    * Tests for bad factory class names in {@link RestServer}.
    * @throws Exception
    */
-  private void badFactoriesTest()
-      throws Exception {
+  private void badFactoriesTest() throws Exception {
     doBadFactoryClassTest("rest.server.nio.server.factory");
     doBadFactoryClassTest("rest.server.blob.storage.service.factory");
     doBadFactoryClassTest("rest.server.router.factory");
@@ -188,23 +192,15 @@ public class RestServerTest {
    * @param configKey the property whose value is the bad factory class
    * @throws Exception
    */
-  private void doBadFactoryClassTest(String configKey)
-      throws Exception {
+  private void doBadFactoryClassTest(String configKey) throws Exception {
     Properties properties = new Properties();
-    properties.setProperty("rest.server.router.factory", InMemoryRouterFactory.class.getCanonicalName());
-    properties.setProperty("rest.server.response.handler.factory",
-        MockRestRequestResponseHandlerFactory.class.getCanonicalName());
-    properties.setProperty("rest.server.blob.storage.service.factory",
-        MockBlobStorageServiceFactory.class.getCanonicalName());
-    properties.setProperty("rest.server.request.handler.factory",
-        MockRestRequestResponseHandlerFactory.class.getCanonicalName());
-    properties.setProperty("rest.server.nio.server.factory", MockNioServerFactory.class.getCanonicalName());
+    setMandatoryValues(properties);
 
     // Non existent class.
     properties.setProperty(configKey, "non.existent.factory");
     VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
     try {
-      new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem());
+      new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem(), SSL_FACTORY);
       fail("Properties file contained non existent " + configKey + ", yet no exception was thrown");
     } catch (ClassNotFoundException e) {
       // nothing to do. expected.
@@ -214,7 +210,7 @@ public class RestServerTest {
     properties.setProperty(configKey, RestServerTest.class.getCanonicalName());
     verifiableProperties = new VerifiableProperties(properties);
     try {
-      new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem());
+      new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem(), SSL_FACTORY);
       fail("Properties file contained invalid " + configKey + " class, yet no exception was thrown");
     } catch (NullPointerException e) {
       // nothing to do. expected.
@@ -225,10 +221,10 @@ public class RestServerTest {
     verifiableProperties = new VerifiableProperties(properties);
     try {
       RestServer restServer =
-          new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem());
+          new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem(), SSL_FACTORY);
       restServer.start();
       fail("Properties file contained faulty " + configKey + " class, yet no exception was thrown");
-    } catch (InstantiationException | NullPointerException e) {
+    } catch (InstantiationException e) {
       // nothing to do. expected.
     }
   }

@@ -19,14 +19,20 @@ import com.github.ambry.store.Read;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.utils.ByteBufferInputStream;
+import com.github.ambry.utils.SystemTime;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Random;
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 
 class MockId extends StoreKey {
@@ -38,8 +44,7 @@ class MockId extends StoreKey {
     this.id = id;
   }
 
-  public MockId(DataInputStream stream)
-      throws IOException {
+  public MockId(DataInputStream stream) throws IOException {
     id = Utils.readShortString(stream);
   }
 
@@ -59,6 +64,16 @@ class MockId extends StoreKey {
   @Override
   public String getLongForm() {
     return getID();
+  }
+
+  @Override
+  public short getAccountId() {
+    return -1;
+  }
+
+  @Override
+  public short getContainerId() {
+    return -1;
   }
 
   @Override
@@ -107,13 +122,34 @@ class MockId extends StoreKey {
 class MockIdFactory implements StoreKeyFactory {
 
   @Override
-  public StoreKey getStoreKey(DataInputStream value)
-      throws IOException {
+  public StoreKey getStoreKey(DataInputStream value) throws IOException {
     return new MockId(value);
   }
 }
 
+@RunWith(Parameterized.class)
 public class BlobStoreRecoveryTest {
+  private static short messageFormatHeaderVersionSaved;
+
+  @BeforeClass
+  public static void saveMessageFormatHeaderVersionToUse() {
+    messageFormatHeaderVersionSaved = MessageFormatRecord.headerVersionToUse;
+  }
+
+  @After
+  public void resetMessageFormatHeaderVersionToUse() {
+    MessageFormatRecord.headerVersionToUse = messageFormatHeaderVersionSaved;
+  }
+
+  @Parameterized.Parameters
+  public static List<Object[]> data() {
+    return Arrays.asList(
+        new Object[][]{{MessageFormatRecord.Message_Header_Version_V1}, {MessageFormatRecord.Message_Header_Version_V2}});
+  }
+
+  public BlobStoreRecoveryTest(short headerVersionToUse) {
+    MessageFormatRecord.headerVersionToUse = headerVersionToUse;
+  }
 
   public class ReadImp implements Read {
 
@@ -121,46 +157,49 @@ public class BlobStoreRecoveryTest {
     public StoreKey[] keys = {new MockId("id1"), new MockId("id2"), new MockId("id3"), new MockId("id4")};
     long expectedExpirationTimeMs = 0;
 
-    public void initialize()
-        throws MessageFormatException, IOException {
+    public void initialize() throws MessageFormatException, IOException {
       // write 3 new blob messages, and delete update messages. write the last
       // message that is partial
+      byte[] encryptionKey = new byte[256];
       byte[] usermetadata = new byte[2000];
       byte[] blob = new byte[4000];
-      new Random().nextBytes(usermetadata);
-      new Random().nextBytes(blob);
+      TestUtils.RANDOM.nextBytes(usermetadata);
+      TestUtils.RANDOM.nextBytes(blob);
+      TestUtils.RANDOM.nextBytes(encryptionKey);
+      short accountId = Utils.getRandomShort(TestUtils.RANDOM);
+      short containerId = Utils.getRandomShort(TestUtils.RANDOM);
+      long deletionTimeMs = SystemTime.getInstance().milliseconds() + TestUtils.RANDOM.nextInt();
 
       // 1st message
-      BlobProperties blobProperties = new BlobProperties(4000, "test", "mem1", "img", false, 9999);
+      BlobProperties blobProperties =
+          new BlobProperties(4000, "test", "mem1", "img", false, 9999, accountId, containerId, true);
       expectedExpirationTimeMs =
           Utils.addSecondsToEpochTime(blobProperties.getCreationTimeInMs(), blobProperties.getTimeToLiveInSeconds());
       PutMessageFormatInputStream msg1 =
-          new PutMessageFormatInputStream(keys[0], blobProperties, ByteBuffer.wrap(usermetadata),
-              new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
+          new PutMessageFormatInputStream(keys[0], ByteBuffer.wrap(encryptionKey), blobProperties,
+              ByteBuffer.wrap(usermetadata), new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
 
       // 2nd message
-      PutMessageFormatInputStream msg2 =
-          new PutMessageFormatInputStream(keys[1], new BlobProperties(4000, "test"), ByteBuffer.wrap(usermetadata),
-              new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
+      PutMessageFormatInputStream msg2 = new PutMessageFormatInputStream(keys[1], ByteBuffer.wrap(encryptionKey),
+          new BlobProperties(4000, "test", accountId, containerId, false), ByteBuffer.wrap(usermetadata),
+          new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
 
-      // 3rd message
-      PutMessageFormatInputStream msg3 =
-          new PutMessageFormatInputStream(keys[2], new BlobProperties(4000, "test"), ByteBuffer.wrap(usermetadata),
-              new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
+      // 3rd message (null encryption key)
+      PutMessageFormatInputStream msg3 = new PutMessageFormatInputStream(keys[2], null,
+          new BlobProperties(4000, "test", accountId, containerId, false), ByteBuffer.wrap(usermetadata),
+          new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
 
       // 4th message
-      DeleteMessageFormatInputStream msg4 = new DeleteMessageFormatInputStream(keys[1]);
+      DeleteMessageFormatInputStream msg4 =
+          new DeleteMessageFormatInputStream(keys[1], accountId, containerId, deletionTimeMs);
 
       // 5th message
-      PutMessageFormatInputStream msg5 =
-          new PutMessageFormatInputStream(keys[3], new BlobProperties(4000, "test"), ByteBuffer.wrap(usermetadata),
-              new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
+      PutMessageFormatInputStream msg5 = new PutMessageFormatInputStream(keys[3], ByteBuffer.wrap(encryptionKey),
+          new BlobProperties(4000, "test", accountId, containerId, false), ByteBuffer.wrap(usermetadata),
+          new ByteBufferInputStream(ByteBuffer.wrap(blob)), 4000);
 
-      buffer = ByteBuffer.allocate((int) (msg1.getSize() +
-          msg2.getSize() +
-          msg3.getSize() +
-          msg4.getSize() +
-          msg5.getSize() / 2));
+      buffer = ByteBuffer.allocate(
+          (int) (msg1.getSize() + msg2.getSize() + msg3.getSize() + msg4.getSize() + msg5.getSize() / 2));
 
       writeToBuffer(msg1, (int) msg1.getSize());
       writeToBuffer(msg2, (int) msg2.getSize());
@@ -170,8 +209,7 @@ public class BlobStoreRecoveryTest {
       buffer.position(0);
     }
 
-    private void writeToBuffer(MessageFormatInputStream stream, int sizeToWrite)
-        throws IOException {
+    private void writeToBuffer(MessageFormatInputStream stream, int sizeToWrite) throws IOException {
       long sizeWritten = 0;
       while (sizeWritten < sizeToWrite) {
         int read = stream.read(buffer.array(), buffer.position(), (int) sizeToWrite);
@@ -181,8 +219,7 @@ public class BlobStoreRecoveryTest {
     }
 
     @Override
-    public void readInto(ByteBuffer bufferToWrite, long position)
-        throws IOException {
+    public void readInto(ByteBuffer bufferToWrite, long position) throws IOException {
       bufferToWrite.put(buffer.array(), (int) position, bufferToWrite.remaining());
     }
 
@@ -192,8 +229,7 @@ public class BlobStoreRecoveryTest {
   }
 
   @Test
-  public void recoveryTest()
-      throws MessageFormatException, IOException {
+  public void recoveryTest() throws MessageFormatException, IOException {
     MessageStoreRecovery recovery = new BlobStoreRecovery();
     // create log and write to it
     ReadImp readrecovery = new ReadImp();

@@ -15,22 +15,26 @@ package com.github.ambry.router;
 
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.ReplicaId;
+import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.ResponseHandler;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.messageformat.BlobInfo;
+import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.MessageFormatException;
 import com.github.ambry.messageformat.MessageFormatFlags;
 import com.github.ambry.messageformat.MessageFormatRecord;
+import com.github.ambry.messageformat.MessageMetadata;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.RequestInfo;
 import com.github.ambry.network.ResponseInfo;
-import com.github.ambry.protocol.GetOptions;
 import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
+import com.github.ambry.protocol.PartitionResponseInfo;
 import com.github.ambry.utils.Time;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
@@ -44,8 +48,16 @@ import org.slf4j.LoggerFactory;
  * which is either the only chunk in the case of a simple blob, or the metadata chunk in the case of composite blobs.
  */
 class GetBlobInfoOperation extends GetOperation {
-  private final OperationCompleteCallback operationCompleteCallback;
-  private final SimpleOperationTracker operationTracker;
+  // the callback to use to notify the router about events and state changes
+  private final RouterCallback routerCallback;
+  private final OperationTracker operationTracker;
+  // progress tracker used to track whether the operation is completed or not and whether it succeeded or failed on complete
+  private final ProgressTracker progressTracker;
+  // refers to blob properties received from the server
+  private BlobProperties serverBlobProperties;
+  // metrics tracker to track decrypt jobs
+  private final CryptoJobMetricsTracker decryptJobMetricsTracker =
+      new CryptoJobMetricsTracker(routerMetrics.decryptJobMetrics);
   // map of correlation id to the request metadata for every request issued for this operation.
   private final Map<Integer, GetRequestInfo> correlationIdToGetRequestInfo = new TreeMap<Integer, GetRequestInfo>();
 
@@ -57,28 +69,30 @@ class GetBlobInfoOperation extends GetOperation {
    * @param routerMetrics The {@link NonBlockingRouterMetrics} to be used for reporting metrics.
    * @param clusterMap the {@link ClusterMap} of the cluster
    * @param responseHandler the {@link ResponseHandler} responsible for failure detection.
-   * @param blobIdStr the blob id associated with the operation in string form.
-   * @param futureResult the future that will contain the result of the operation.
+   * @param blobId the {@link BlobId} associated with the operation.
+   * @param options the {@link GetBlobOptionsInternal} containing the options associated with this operation.
    * @param callback the callback that is to be called when the operation completes.
-   * @param operationCompleteCallback the {@link OperationCompleteCallback} to use to complete operations.
+   * @param routerCallback the {@link RouterCallback} to use to complete operations.
+   * @param kms {@link KeyManagementService} to assist in fetching container keys for encryption or decryption
+   * @param cryptoService {@link CryptoService} to assist in encryption or decryption
+   * @param cryptoJobHandler {@link CryptoJobHandler} to assist in the execution of crypto jobs
    * @param time the Time instance to use.
-   * @throws RouterException if there is an error with any of the parameters, such as an invalid blob id.
    */
   GetBlobInfoOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ClusterMap clusterMap,
-      ResponseHandler responseHandler, String blobIdStr, GetBlobOptions options,
-      FutureResult<GetBlobResult> futureResult, Callback<GetBlobResult> callback,
-      OperationCompleteCallback operationCompleteCallback, Time time)
-      throws RouterException {
-    super(routerConfig, routerMetrics, clusterMap, responseHandler, blobIdStr, options, futureResult, callback, time);
-    this.operationCompleteCallback = operationCompleteCallback;
-    operationTracker = new SimpleOperationTracker(routerConfig.routerDatacenterName, blobId.getPartition(),
-        routerConfig.routerGetCrossDcEnabled, routerConfig.routerGetSuccessTarget,
-        routerConfig.routerGetRequestParallelism);
+      ResponseHandler responseHandler, BlobId blobId, GetBlobOptionsInternal options,
+      Callback<GetBlobResultInternal> callback, RouterCallback routerCallback, KeyManagementService kms,
+      CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time) {
+    super(routerConfig, routerMetrics, clusterMap, responseHandler, blobId, options, callback,
+        routerMetrics.getBlobInfoLocalColoLatencyMs, routerMetrics.getBlobInfoCrossColoLatencyMs,
+        routerMetrics.getBlobInfoPastDueCount, kms, cryptoService, cryptoJobHandler, time);
+    this.routerCallback = routerCallback;
+    operationTracker = getOperationTracker(blobId.getPartition());
+    progressTracker = new ProgressTracker(operationTracker);
   }
 
   @Override
   void abort(Exception abortCause) {
-    operationCompleteCallback.completeOperation(operationFuture, operationCallback, null, abortCause);
+    NonBlockingRouter.completeOperation(null, getOperationCallback, null, abortCause);
     operationCompleted = true;
   }
 
@@ -115,6 +129,8 @@ class GetBlobInfoOperation extends GetOperation {
       Map.Entry<Integer, GetRequestInfo> entry = inFlightRequestsIterator.next();
       if (time.milliseconds() - entry.getValue().startTimeMs > routerConfig.routerRequestTimeoutMs) {
         onErrorResponse(entry.getValue().replicaId);
+        logger.trace("GetBlobInfoRequest with correlationId {} in flight has expired for replica {} ", entry.getKey(),
+            entry.getValue().replicaId.getDataNodeId());
         // Do not notify this as a failure to the response handler, as this timeout could simply be due to
         // connection unavailability. If there is indeed a network error, the NetworkClient will provide an error
         // response and the response handler will be notified accordingly.
@@ -137,15 +153,19 @@ class GetBlobInfoOperation extends GetOperation {
       ReplicaId replicaId = replicaIterator.next();
       String hostname = replicaId.getDataNodeId().getHostname();
       Port port = replicaId.getDataNodeId().getPortToConnectTo();
-      GetRequest getRequest = createGetRequest(blobId, getOperationFlag(), GetOptions.None);
+      GetRequest getRequest = createGetRequest(blobId, getOperationFlag(), options.getBlobOptions.getGetOption());
       RouterRequestInfo request = new RouterRequestInfo(hostname, port, getRequest, replicaId);
       int correlationId = getRequest.getCorrelationId();
       correlationIdToGetRequestInfo.put(correlationId, new GetRequestInfo(replicaId, time.milliseconds()));
       requestRegistrationCallback.registerRequestToSend(this, request);
       replicaIterator.remove();
       if (RouterUtils.isRemoteReplica(routerConfig, replicaId)) {
-        logger.trace("Making request to a remote replica in", replicaId.getDataNodeId().getDatacenterName());
+        logger.trace("Making request with correlationId {} to a remote replica {} in {} ", correlationId,
+            replicaId.getDataNodeId(), replicaId.getDataNodeId().getDatacenterName());
         routerMetrics.crossColoRequestCount.inc();
+      } else {
+        logger.trace("Making request with correlationId {} to a local replica {} ", correlationId,
+            replicaId.getDataNodeId());
       }
       routerMetrics.getDataNodeBasedMetrics(replicaId.getDataNodeId()).getBlobInfoRequestRate.mark();
     }
@@ -160,7 +180,9 @@ class GetBlobInfoOperation extends GetOperation {
    */
   @Override
   void handleResponse(ResponseInfo responseInfo, GetResponse getResponse) {
-    if (isOperationComplete()) {
+    if (isOperationComplete() || operationTracker.isDone()) {
+      // If the successTarget is more than 1, then, different responses will have to be reconciled in some way. Here is where that
+      // would be done. Since the store is immutable, currently we handle this by ignoring subsequent responses.
       return;
     }
     int correlationId = ((GetRequest) responseInfo.getRequestInfo().getRequest()).getCorrelationId();
@@ -172,13 +194,18 @@ class GetBlobInfoOperation extends GetOperation {
     }
     long requestLatencyMs = time.milliseconds() - getRequestInfo.startTimeMs;
     routerMetrics.routerRequestLatencyMs.update(requestLatencyMs);
-    routerMetrics.getDataNodeBasedMetrics(getRequestInfo.replicaId.getDataNodeId()).getBlobInfoRequestLatencyMs
-        .update(requestLatencyMs);
+    routerMetrics.getDataNodeBasedMetrics(getRequestInfo.replicaId.getDataNodeId()).getBlobInfoRequestLatencyMs.update(
+        requestLatencyMs);
     if (responseInfo.getError() != null) {
+      logger.trace("GetBlobInfoRequest with response correlationId {} timed out for replica {} ", correlationId,
+          getRequestInfo.replicaId.getDataNodeId());
       setOperationException(new RouterException("Operation timed out", RouterErrorCode.OperationTimedOut));
       onErrorResponse(getRequestInfo.replicaId);
     } else {
       if (getResponse == null) {
+        logger.trace(
+            "GetBlobInfoRequest with response correlationId {} received an unexpected error on response deserialization from replica {} ",
+            correlationId, getRequestInfo.replicaId.getDataNodeId());
         setOperationException(new RouterException("Response deserialization received an unexpected error",
             RouterErrorCode.UnexpectedInternalError));
         onErrorResponse(getRequestInfo.replicaId);
@@ -189,6 +216,8 @@ class GetBlobInfoOperation extends GetOperation {
           // sent over it. The check here ensures that is indeed the case. If not, log an error and fail this request.
           // There is no other way to handle it.
           routerMetrics.unknownReplicaResponseError.inc();
+          logger.trace("GetBlobInfoRequest with response correlationId {} mismatch from response {} for replica {} ",
+              correlationId, getResponse.getCorrelationId(), getRequestInfo.replicaId.getDataNodeId());
           setOperationException(new RouterException(
               "The correlation id in the GetResponse " + getResponse.getCorrelationId()
                   + "is not the same as the correlation id in the associated GetRequest: " + correlationId,
@@ -201,6 +230,9 @@ class GetBlobInfoOperation extends GetOperation {
           } catch (IOException | MessageFormatException e) {
             // This should really not happen. Again, we do not notify the ResponseHandler responsible for failure
             // detection.
+            logger.trace(
+                "GetBlobInfoRequest with response correlationId {} response deserialization failed for replica {} ",
+                correlationId, getRequestInfo.replicaId.getDataNodeId());
             routerMetrics.responseDeserializationErrorCount.inc();
             setOperationException(new RouterException("Response deserialization received an unexpected error", e,
                 RouterErrorCode.UnexpectedInternalError));
@@ -234,15 +266,29 @@ class GetBlobInfoOperation extends GetOperation {
       } else {
         getError = getResponse.getPartitionResponseInfoList().get(0).getErrorCode();
         if (getError == ServerErrorCode.No_Error) {
-          handleBody(getResponse.getInputStream());
-          operationTracker.onResponse(getRequestInfo.replicaId, true);
-          if (RouterUtils.isRemoteReplica(routerConfig, getRequestInfo.replicaId)) {
-            logger.trace("Cross colo request successful for remote replica in ",
-                getRequestInfo.replicaId.getDataNodeId().getDatacenterName());
-            routerMetrics.crossColoSuccessCount.inc();
+          PartitionResponseInfo partitionResponseInfo = getResponse.getPartitionResponseInfoList().get(0);
+          int msgsInResponse = partitionResponseInfo.getMessageInfoList().size();
+          if (msgsInResponse != 1) {
+            setOperationException(new RouterException(
+                "Unexpected number of messages in a partition response, expected: 1, " + "received: " + msgsInResponse,
+                RouterErrorCode.UnexpectedInternalError));
+            onErrorResponse(getRequestInfo.replicaId);
+          } else {
+            MessageMetadata messageMetadata = partitionResponseInfo.getMessageMetadataList().get(0);
+            handleBody(getResponse.getInputStream(), messageMetadata);
+            operationTracker.onResponse(getRequestInfo.replicaId, true);
+            if (RouterUtils.isRemoteReplica(routerConfig, getRequestInfo.replicaId)) {
+              logger.trace("Cross colo request successful for remote replica in {} ",
+                  getRequestInfo.replicaId.getDataNodeId().getDatacenterName());
+              routerMetrics.crossColoSuccessCount.inc();
+            }
           }
         } else {
           // process and set the most relevant exception.
+          if (getError != ServerErrorCode.No_Error) {
+            logger.trace("Replica  {} returned error {} with response correlationId {} ",
+                getRequestInfo.replicaId.getDataNodeId(), getError, getResponse.getCorrelationId());
+          }
           processServerError(getError);
           if (getError == ServerErrorCode.Blob_Deleted || getError == ServerErrorCode.Blob_Expired) {
             // this is a successful response and one that completes the operation regardless of whether the
@@ -254,6 +300,8 @@ class GetBlobInfoOperation extends GetOperation {
         }
       }
     } else {
+      logger.trace("Replica {} returned an error {} for a GetBlobInfoRequest with response correlationId : {} ",
+          getRequestInfo.replicaId.getDataNodeId(), getError, getResponse.getCorrelationId());
       onErrorResponse(getRequestInfo.replicaId);
     }
   }
@@ -269,20 +317,52 @@ class GetBlobInfoOperation extends GetOperation {
   }
 
   /**
-   * Handle the body of the response: Deserialize and set the {@link BlobInfo} to return.
+   * Handle the body of the response: Deserialize and set the {@link BlobInfo} to return if no decryption is required.
+   * If decryption is required, submit a job for decryption.
    * @param payload the body of the response.
+   * @param messageMetadata the {@link MessageMetadata} associated with the message.
    * @throws IOException if there is an IOException while deserializing the body.
    * @throws MessageFormatException if there is a MessageFormatException while deserializing the body.
    */
-  private void handleBody(InputStream payload)
+  private void handleBody(InputStream payload, MessageMetadata messageMetadata)
       throws IOException, MessageFormatException {
-    if (operationResult == null) {
-      operationResult = new GetBlobResult(new BlobInfo(MessageFormatRecord.deserializeBlobProperties(payload),
-          MessageFormatRecord.deserializeUserMetadata(payload).array()), null);
+    ByteBuffer encryptionKey = messageMetadata == null ? null : messageMetadata.getEncryptionKey();
+    serverBlobProperties = MessageFormatRecord.deserializeBlobProperties(payload);
+    ByteBuffer userMetadata = MessageFormatRecord.deserializeUserMetadata(payload);
+    if (encryptionKey == null) {
+      // if blob is not encrypted, move the state to Complete
+      operationResult =
+          new GetBlobResultInternal(new GetBlobResult(new BlobInfo(serverBlobProperties, userMetadata.array()), null),
+              null);
     } else {
-      // If the successTarget is 1, this case will never get executed.
-      // If it is more than 1, then, different responses will have to be reconciled in some way. Here is where that
-      // would be done. Since the store is immutable, currently we handle this by ignoring subsequent responses.
+      // submit decrypt job
+      progressTracker.initializeDecryptionTracker();
+      logger.trace("Submitting decrypt job for {}", blobId);
+      decryptJobMetricsTracker.onJobSubmission();
+      long startTimeMs = System.currentTimeMillis();
+      cryptoJobHandler.submitJob(
+          new DecryptJob(blobId, encryptionKey.duplicate(), null, userMetadata, cryptoService, kms,
+              decryptJobMetricsTracker, (DecryptJob.DecryptJobResult result, Exception exception) -> {
+            decryptJobMetricsTracker.onJobResultProcessingStart();
+            logger.trace("Handling decrypt job callback results for {}", blobId);
+            routerMetrics.decryptTimeMs.update(System.currentTimeMillis() - startTimeMs);
+            if (exception == null) {
+              logger.trace("Successfully updating decrypt job callback results for {}", blobId);
+              operationResult = new GetBlobResultInternal(
+                  new GetBlobResult(new BlobInfo(serverBlobProperties, result.getDecryptedUserMetadata().array()),
+                      null), null);
+              progressTracker.setDecryptionSuccess();
+            } else {
+              decryptJobMetricsTracker.incrementOperationError();
+              logger.trace("Exception {} thrown on decryption for {}", exception, blobId);
+              setOperationException(
+                  new RouterException("Exception thrown on decrypting the content for " + blobId, exception,
+                      RouterErrorCode.UnexpectedInternalError));
+              progressTracker.setDecryptionFailed();
+            }
+            decryptJobMetricsTracker.onJobResultProcessingComplete();
+            routerCallback.onPollReady();
+          }));
     }
   }
 
@@ -291,7 +371,6 @@ class GetBlobInfoOperation extends GetOperation {
    * @param errorCode the {@link ServerErrorCode} to process.
    */
   private void processServerError(ServerErrorCode errorCode) {
-    logger.trace("Server returned an error: ", errorCode);
     switch (errorCode) {
       case Blob_Deleted:
         logger.trace("Requested blob was deleted");
@@ -316,8 +395,8 @@ class GetBlobInfoOperation extends GetOperation {
    * Check whether the operation can be completed, if so complete it.
    */
   private void checkAndMaybeComplete() {
-    if (operationTracker.isDone()) {
-      if (operationTracker.hasSucceeded()) {
+    if (progressTracker.isDone()) {
+      if (progressTracker.hasSucceeded()) {
         operationException.set(null);
       }
       operationCompleted = true;
@@ -331,10 +410,15 @@ class GetBlobInfoOperation extends GetOperation {
       }
       if (e != null) {
         operationResult = null;
-        routerMetrics.onGetBlobError(e, options);
+        routerMetrics.onGetBlobError(e, options, blobId.isEncrypted());
       }
-      routerMetrics.getBlobInfoOperationLatencyMs.update(time.milliseconds() - submissionTimeMs);
-      operationCompleteCallback.completeOperation(operationFuture, operationCallback, operationResult, e);
+      long operationLatencyMs = time.milliseconds() - submissionTimeMs;
+      if (blobId.isEncrypted()) {
+        routerMetrics.getEncryptedBlobInfoOperationLatencyMs.update(operationLatencyMs);
+      } else {
+        routerMetrics.getBlobInfoOperationLatencyMs.update(operationLatencyMs);
+      }
+      NonBlockingRouter.completeOperation(null, getOperationCallback, operationResult, e);
     }
   }
 }

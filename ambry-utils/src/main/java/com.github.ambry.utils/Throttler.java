@@ -13,7 +13,6 @@
  */
 package com.github.ambry.utils;
 
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,12 +23,11 @@ import org.slf4j.LoggerFactory;
  * an appropriate amount of time when maybeThrottle() is called to attain the desired rate.
  */
 public class Throttler {
-
   private double desiredRatePerSec;
   private long checkIntervalMs;
   private boolean throttleDown;
-  private Object lock = new Object();
-  private Object waitGuard = new Object();
+  private final Object lock = new Object();
+  private final Object waitGuard = new Object();
   private long periodStartNs;
   private double observedSoFar;
   private Logger logger = LoggerFactory.getLogger(getClass());
@@ -38,7 +36,7 @@ public class Throttler {
 
   /**
    * @param desiredRatePerSec: The rate we want to hit in units/sec
-   * @param checkIntervalMs: The interval at which to check our rate
+   * @param checkIntervalMs: The interval at which to check our rate. If < 0, rate is checked on every call
    * @param throttleDown: Does throttling increase or decrease our rate?
    * @param time: The time implementation to use
    **/
@@ -56,8 +54,7 @@ public class Throttler {
    * Throttle if required
    * @param observed the newly observed units since the last time this method was called.
    */
-  public void maybeThrottle(double observed)
-      throws InterruptedException {
+  public void maybeThrottle(double observed) throws InterruptedException {
     synchronized (lock) {
       observedSoFar += observed;
       long now = time.nanoseconds();
@@ -65,10 +62,9 @@ public class Throttler {
 
       // if we have completed an interval AND we have observed something, maybe
       // we should take a little nap
-      if (elapsedNs > checkIntervalMs * Time.NsPerMs && observedSoFar > 0) {
-        double rateInSecs = (observedSoFar * Time.NsPerSec) / elapsedNs;
-        boolean needAdjustment = !(throttleDown ^ (rateInSecs > desiredRatePerSec));
-        if (needAdjustment) {
+      if ((checkIntervalMs < 0 || elapsedNs > checkIntervalMs * Time.NsPerMs) && observedSoFar > 0) {
+        double rateInSecs = elapsedNs > 0 ? (observedSoFar * Time.NsPerSec) / elapsedNs : Double.MAX_VALUE;
+        if (throttleDown == rateInSecs > desiredRatePerSec) {
           // solve for the amount of time to sleep to make us hit the desired rate
           double desiredRateMs = desiredRatePerSec / Time.MsPerSec;
           double elapsedMs = elapsedNs / Time.NsPerMs;
@@ -92,7 +88,7 @@ public class Throttler {
   /**
    * Disable the throttler for good.
    */
-  public void close() {
+  public void disable() {
     synchronized (waitGuard) {
       enabled = false;
       waitGuard.notify();

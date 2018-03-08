@@ -14,10 +14,9 @@
 package com.github.ambry.protocol;
 
 import com.github.ambry.clustermap.ClusterMap;
-import com.github.ambry.network.Send;
 import com.github.ambry.commons.ServerErrorCode;
+import com.github.ambry.network.Send;
 import com.github.ambry.utils.Utils;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,11 +37,16 @@ public class GetResponse extends Response {
   private int partitionResponseInfoSize;
 
   private static int Partition_Response_Info_List_Size = 4;
-  private static final short Get_Response_Version_V1 = 1;
+  static final short GET_RESPONSE_VERSION_V_1 = 1;
+  static final short GET_RESPONSE_VERSION_V_2 = 2;
+  static final short GET_RESPONSE_VERSION_V_3 = 3;
+  static final short GET_RESPONSE_VERSION_V_4 = 4;
+
+  static short CURRENT_VERSION = GET_RESPONSE_VERSION_V_4;
 
   public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
       Send send, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, Get_Response_Version_V1, correlationId, clientId, error);
+    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
     this.partitionResponseInfoList = partitionResponseInfoList;
     this.partitionResponseInfoSize = 0;
     for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
@@ -53,7 +57,7 @@ public class GetResponse extends Response {
 
   public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
       InputStream stream, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, Get_Response_Version_V1, correlationId, clientId, error);
+    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
     this.partitionResponseInfoList = partitionResponseInfoList;
     this.partitionResponseInfoSize = 0;
     for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
@@ -63,7 +67,7 @@ public class GetResponse extends Response {
   }
 
   public GetResponse(int correlationId, String clientId, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, Get_Response_Version_V1, correlationId, clientId, error);
+    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
     this.partitionResponseInfoList = null;
     this.partitionResponseInfoSize = 0;
   }
@@ -76,8 +80,7 @@ public class GetResponse extends Response {
     return partitionResponseInfoList;
   }
 
-  public static GetResponse readFrom(DataInputStream stream, ClusterMap map)
-      throws IOException {
+  public static GetResponse readFrom(DataInputStream stream, ClusterMap map) throws IOException {
     short typeval = stream.readShort();
     RequestOrResponseType type = RequestOrResponseType.values()[typeval];
     if (type != RequestOrResponseType.GetResponse) {
@@ -96,7 +99,7 @@ public class GetResponse extends Response {
       ArrayList<PartitionResponseInfo> partitionResponseInfoList =
           new ArrayList<PartitionResponseInfo>(partitionResponseInfoCount);
       for (int i = 0; i < partitionResponseInfoCount; i++) {
-        PartitionResponseInfo partitionResponseInfo = PartitionResponseInfo.readFrom(stream, map);
+        PartitionResponseInfo partitionResponseInfo = PartitionResponseInfo.readFrom(stream, map, versionId);
         partitionResponseInfoList.add(partitionResponseInfo);
       }
       return new GetResponse(correlationId, clientId, partitionResponseInfoList, stream, error);
@@ -104,12 +107,11 @@ public class GetResponse extends Response {
   }
 
   @Override
-  public long writeTo(WritableByteChannel channel)
-      throws IOException {
+  public long writeTo(WritableByteChannel channel) throws IOException {
     long written = 0;
     if (bufferToSend == null) {
-      bufferToSend = ByteBuffer
-          .allocate((int) super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize));
+      bufferToSend = ByteBuffer.allocate(
+          (int) super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize));
       writeHeader();
       if (partitionResponseInfoList != null) {
         bufferToSend.putInt(partitionResponseInfoList.size());
@@ -135,8 +137,8 @@ public class GetResponse extends Response {
 
   @Override
   public long sizeInBytes() {
-    return super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize) +
-        ((toSend == null) ? 0 : toSend.sizeInBytes());
+    return super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize) + ((toSend == null) ? 0
+        : toSend.sizeInBytes());
   }
 
   @Override
@@ -152,5 +154,12 @@ public class GetResponse extends Response {
     }
     sb.append("]");
     return sb.toString();
+  }
+
+  /**
+   * @return the current version in which new GetResponse objects are created.
+   */
+  static short getCurrentVersion() {
+    return CURRENT_VERSION;
   }
 }

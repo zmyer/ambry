@@ -17,6 +17,8 @@ import com.codahale.metrics.Counter;
 import com.codahale.metrics.Gauge;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
+import com.github.ambry.commons.SSLFactory;
+import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.ConnectionPoolConfig;
 import com.github.ambry.config.SSLConfig;
 import java.io.IOException;
@@ -295,8 +297,8 @@ public final class BlockingChannelConnectionPool implements ConnectionPool {
   // Represents the number of sslSocketFactory Initialization Error by client
   public Counter sslSocketFactoryClientInitializationErrorCount;
 
-  public BlockingChannelConnectionPool(ConnectionPoolConfig config, SSLConfig sslConfig, MetricRegistry registry)
-      throws Exception {
+  public BlockingChannelConnectionPool(ConnectionPoolConfig config, SSLConfig sslConfig,
+      ClusterMapConfig clusterMapConfig, MetricRegistry registry) throws Exception {
     connections = new ConcurrentHashMap<String, BlockingChannelInfo>();
     this.config = config;
     this.registry = registry;
@@ -349,7 +351,7 @@ public final class BlockingChannelConnectionPool implements ConnectionPool {
     sslSocketFactoryClientInitializationErrorCount = registry.counter(
         MetricRegistry.name(BlockingChannelConnectionPool.class, "SslSocketFactoryClientInitializationErrorCount"));
 
-    if (sslConfig.sslEnabledDatacenters.length() > 0) {
+    if (clusterMapConfig.clusterMapSslEnabledDatacenters.length() > 0) {
       initializeSSLSocketFactory();
     } else {
       this.sslSocketFactory = null;
@@ -369,8 +371,7 @@ public final class BlockingChannelConnectionPool implements ConnectionPool {
     }
   }
 
-  private void initializeSSLSocketFactory()
-      throws Exception {
+  private void initializeSSLSocketFactory() throws Exception {
     try {
       SSLFactory sslFactory = new SSLFactory(sslConfig);
       SSLContext sslContext = sslFactory.getSSLContext();

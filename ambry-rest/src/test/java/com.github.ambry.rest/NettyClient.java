@@ -13,6 +13,7 @@
  */
 package com.github.ambry.rest;
 
+import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.router.Callback;
 import com.github.ambry.router.FutureResult;
 import io.netty.bootstrap.Bootstrap;
@@ -20,6 +21,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -27,11 +29,12 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.stream.ChunkedInput;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.ReferenceCountUtil;
@@ -64,8 +67,8 @@ public class NettyClient implements Closeable {
 
   private HttpRequest request;
   private ChunkedInput<HttpContent> content;
-  private FutureResult<Queue<HttpObject>> responseFuture;
-  private Callback<Queue<HttpObject>> callback;
+  private FutureResult<ResponseParts> responseFuture;
+  private Callback<ResponseParts> callback;
 
   private volatile ChannelFuture channelConnectFuture;
   private volatile Exception exception = null;
@@ -75,16 +78,20 @@ public class NettyClient implements Closeable {
    * Create a NettyClient.
    * @param hostname the host to connect to.
    * @param port the port to connect to.
+   * @param sslFactory the {@link SSLFactory} to use if SSL is enabled.
    */
-  public NettyClient(String hostname, int port)
-      throws InterruptedException {
+  public NettyClient(final String hostname, final int port, final SSLFactory sslFactory) throws InterruptedException {
     this.hostname = hostname;
     this.port = port;
     b.group(group).channel(NioSocketChannel.class).handler(new ChannelInitializer<SocketChannel>() {
       @Override
-      public void initChannel(SocketChannel ch)
-          throws Exception {
-        ch.pipeline().addLast(new HttpClientCodec()).addLast(new ChunkedWriteHandler()).addLast(communicationHandler);
+      public void initChannel(SocketChannel ch) throws Exception {
+        ChannelPipeline pipeline = ch.pipeline();
+        if (sslFactory != null) {
+          pipeline.addLast("sslHandler",
+              new SslHandler(sslFactory.createSSLEngine(hostname, port, SSLFactory.Mode.CLIENT)));
+        }
+        pipeline.addLast(new HttpClientCodec()).addLast(new ChunkedWriteHandler()).addLast(communicationHandler);
       }
     });
     createChannel();
@@ -102,8 +109,8 @@ public class NettyClient implements Closeable {
    * @param callback the callback to invoke when the response is available. Can be null.
    * @return a {@link Future} that tracks the arrival of the response for this request.
    */
-  public Future<Queue<HttpObject>> sendRequest(HttpRequest request, ChunkedInput<HttpContent> content,
-      Callback<Queue<HttpObject>> callback) {
+  public Future<ResponseParts> sendRequest(HttpRequest request, ChunkedInput<HttpContent> content,
+      Callback<ResponseParts> callback) {
     this.request = request;
     this.content = content;
     this.callback = callback;
@@ -134,7 +141,7 @@ public class NettyClient implements Closeable {
    * Resets the request tracking state of the client.
    */
   private void resetState() {
-    responseFuture = new FutureResult<Queue<HttpObject>>();
+    responseFuture = new FutureResult<>();
     responseParts.clear();
     exception = null;
     callbackInvoked.set(false);
@@ -145,8 +152,7 @@ public class NettyClient implements Closeable {
    * success of the connect.
    * @throws InterruptedException if the connect is interrupted.
    */
-  private void createChannel()
-      throws InterruptedException {
+  private void createChannel() throws InterruptedException {
     channelConnectFuture = b.connect(hostname, port);
     // add a listener to create a new channel if this channel disconnects.
     ChannelFuture channelCloseFuture = channelConnectFuture.channel().closeFuture();
@@ -155,12 +161,13 @@ public class NettyClient implements Closeable {
 
   /**
    * Invokes the future and callback associated with the current request.
+   * @param completionContext a description of where this method was called from.
    */
-  private void invokeFutureAndCallback() {
+  private void invokeFutureAndCallback(String completionContext) {
     if (callbackInvoked.compareAndSet(false, true)) {
-      responseFuture.done(responseParts, exception);
+      responseFuture.done(new ResponseParts(responseParts, completionContext), exception);
       if (callback != null) {
-        callback.onCompletion(responseParts, exception);
+        callback.onCompletion(new ResponseParts(responseParts, completionContext), exception);
       }
     }
   }
@@ -180,7 +187,7 @@ public class NettyClient implements Closeable {
         future.channel().flush();
       } else {
         exception = (Exception) future.cause();
-        invokeFutureAndCallback();
+        invokeFutureAndCallback("RequestSender::operationComplete");
       }
     }
   }
@@ -194,7 +201,7 @@ public class NettyClient implements Closeable {
     public void operationComplete(ChannelFuture future) {
       if (!future.isSuccess()) {
         exception = (Exception) future.cause();
-        invokeFutureAndCallback();
+        invokeFutureAndCallback("WriteResultListener::operationComplete");
       }
     }
   }
@@ -205,12 +212,11 @@ public class NettyClient implements Closeable {
   private class ChannelCloseListener implements GenericFutureListener<ChannelFuture> {
 
     @Override
-    public void operationComplete(ChannelFuture future)
-        throws InterruptedException {
+    public void operationComplete(ChannelFuture future) throws InterruptedException {
       if (isOpen.get()) {
         createChannel();
       }
-      invokeFutureAndCallback();
+      invokeFutureAndCallback("ChannelCloseListener::operationComplete");
     }
   }
 
@@ -225,21 +231,21 @@ public class NettyClient implements Closeable {
       // Make sure that we increase refCnt because we are going to process it async. The other end has to release
       // after processing.
       responseParts.offer(ReferenceCountUtil.retain(in));
-      if (in instanceof HttpResponse && in.getDecoderResult().isSuccess()) {
-        isKeepAlive = HttpHeaders.isKeepAlive((HttpResponse) in);
-      } else if (in.getDecoderResult().isFailure()) {
-        Throwable cause = in.getDecoderResult().cause();
+      if (in instanceof HttpResponse && in.decoderResult().isSuccess()) {
+        isKeepAlive = HttpUtil.isKeepAlive((HttpResponse) in);
+      } else if (in.decoderResult().isFailure()) {
+        Throwable cause = in.decoderResult().cause();
         if (cause instanceof Exception) {
           exception = (Exception) cause;
         } else {
           exception =
               new Exception("Encountered Throwable when trying to decode response. Message: " + cause.getMessage());
         }
-        invokeFutureAndCallback();
+        invokeFutureAndCallback("CommunicationHandler::channelRead0 - decoder failure");
       }
       if (in instanceof LastHttpContent) {
         if (isKeepAlive) {
-          invokeFutureAndCallback();
+          invokeFutureAndCallback("CommunicationHandler::channelRead0 - last content");
         } else {
           // if not, the future will be invoked when the channel is closed.
           ctx.close();
@@ -260,6 +266,19 @@ public class NettyClient implements Closeable {
       } else {
         ctx.fireExceptionCaught(cause);
       }
+    }
+  }
+
+  /**
+   * A struct to hold the queue containing response parts and the context in which the request was completed.
+   */
+  public static class ResponseParts {
+    public final Queue<HttpObject> queue;
+    public final String completionContext;
+
+    private ResponseParts(Queue<HttpObject> queue, String completionContext) {
+      this.queue = queue;
+      this.completionContext = completionContext;
     }
   }
 }

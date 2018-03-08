@@ -1,4 +1,7 @@
 # Ambry
+
+[![Build Status](https://travis-ci.org/linkedin/ambry.svg?branch=master)](https://travis-ci.org/linkedin/ambry) [![codecov.io](https://codecov.io/github/linkedin/ambry/branch/master/graph/badge.svg)](https://codecov.io/github/linkedin/ambry) [![license](https://img.shields.io/github/license/linkedin/ambry.svg)](LICENSE)
+
 Ambry is a distributed object store that supports storage of trillion of small immutable objects (50K -100K) as well as billions of large objects. It was specifically designed to store and serve media objects in web companies. However, it can be used as a general purpose storage system to store DB backups, search indexes or business reports. The system has the following characterisitics: 
 
 1. Highly available and horizontally scalable
@@ -7,7 +10,7 @@ Ambry is a distributed object store that supports storage of trillion of small i
 4. Cost effective
 5. Easy to use
 
-Requires JDK 1.7 or higher.
+Requires at least JDK 1.8.
 ## Documentation
 Detailed documentation is available at https://github.com/linkedin/ambry/wiki
 

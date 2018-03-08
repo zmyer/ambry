@@ -50,7 +50,7 @@ class DeleteManager {
   private final NonBlockingRouterMetrics routerMetrics;
   private final ClusterMap clusterMap;
   private final RouterConfig routerConfig;
-  private final OperationCompleteCallback operationCompleteCallback;
+  private final RouterCallback routerCallback;
 
   private static final Logger logger = LoggerFactory.getLogger(DeleteManager.class);
 
@@ -63,8 +63,8 @@ class DeleteManager {
     @Override
     public void registerRequestToSend(DeleteOperation deleteOperation, RequestInfo requestInfo) {
       requestListToFill.add(requestInfo);
-      correlationIdToDeleteOperation
-          .put(((RequestOrResponse) requestInfo.getRequest()).getCorrelationId(), deleteOperation);
+      correlationIdToDeleteOperation.put(((RequestOrResponse) requestInfo.getRequest()).getCorrelationId(),
+          deleteOperation);
     }
   }
 
@@ -78,18 +78,17 @@ class DeleteManager {
    * @param notificationSystem The {@link NotificationSystem} used for notifying blob deletions.
    * @param routerConfig The {@link RouterConfig} containing the configs for the DeleteManager.
    * @param routerMetrics The {@link NonBlockingRouterMetrics} to be used for reporting metrics.
-   * @param operationCompleteCallback The {@link OperationCompleteCallback} to use to complete operations.
+   * @param routerCallback The {@link RouterCallback} to use for callbacks to the router.
    * @param time The {@link Time} instance to use.
    */
   DeleteManager(ClusterMap clusterMap, ResponseHandler responseHandler, NotificationSystem notificationSystem,
-      RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics,
-      OperationCompleteCallback operationCompleteCallback, Time time) {
+      RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, RouterCallback routerCallback, Time time) {
     this.clusterMap = clusterMap;
     this.responseHandler = responseHandler;
     this.notificationSystem = notificationSystem;
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
-    this.operationCompleteCallback = operationCompleteCallback;
+    this.routerCallback = routerCallback;
     this.time = time;
     deleteOperations = Collections.newSetFromMap(new ConcurrentHashMap<DeleteOperation, Boolean>());
     correlationIdToDeleteOperation = new HashMap<Integer, DeleteOperation>();
@@ -97,21 +96,17 @@ class DeleteManager {
 
   /**
    * Submits a {@link DeleteOperation} to this {@code DeleteManager}.
-   * @param blobIdString The blobId string to be deleted.
+   * @param blobId The {@link BlobId} to be deleted.
+   * @param serviceId The service ID of the service deleting the blob. This can be null if unknown.
    * @param futureResult The {@link FutureResult} that will contain the result eventually and exception if any.
    * @param callback The {@link Callback} that will be called on completion of the request.
    */
-  void submitDeleteBlobOperation(String blobIdString, FutureResult<Void> futureResult, Callback<Void> callback) {
-    try {
-      BlobId blobId = RouterUtils.getBlobIdFromString(blobIdString, clusterMap);
-      DeleteOperation deleteOperation =
-          new DeleteOperation(routerConfig, routerMetrics, responseHandler, blobId, futureResult, callback, time);
-      deleteOperations.add(deleteOperation);
-    } catch (RouterException e) {
-      routerMetrics.operationDequeuingRate.mark();
-      routerMetrics.onDeleteBlobError(e);
-      operationCompleteCallback.completeOperation(futureResult, callback, null, e);
-    }
+  void submitDeleteBlobOperation(BlobId blobId, String serviceId, FutureResult<Void> futureResult,
+      Callback<Void> callback) {
+    DeleteOperation deleteOperation =
+        new DeleteOperation(routerConfig, routerMetrics, responseHandler, blobId, serviceId, callback, time,
+            futureResult);
+    deleteOperations.add(deleteOperation);
   }
 
   /**
@@ -207,14 +202,14 @@ class DeleteManager {
   void onComplete(DeleteOperation op) {
     Exception e = op.getOperationException();
     if (e == null) {
-      notificationSystem.onBlobDeleted(op.getBlobId().getID());
+      notificationSystem.onBlobDeleted(op.getBlobId().getID(), op.getServiceId());
     } else {
       routerMetrics.onDeleteBlobError(e);
     }
     routerMetrics.operationDequeuingRate.mark();
     routerMetrics.deleteBlobOperationLatencyMs.update(time.milliseconds() - op.getSubmissionTimeMs());
-    operationCompleteCallback
-        .completeOperation(op.getFutureResult(), op.getCallback(), op.getOperationResult(), op.getOperationException());
+    NonBlockingRouter.completeOperation(op.getFutureResult(), op.getCallback(), op.getOperationResult(),
+        op.getOperationException());
   }
 
   /**
@@ -231,7 +226,7 @@ class DeleteManager {
         routerMetrics.operationDequeuingRate.mark();
         routerMetrics.operationAbortCount.inc();
         routerMetrics.onDeleteBlobError(e);
-        operationCompleteCallback.completeOperation(op.getFutureResult(), op.getCallback(), null, e);
+        NonBlockingRouter.completeOperation(op.getFutureResult(), op.getCallback(), null, e);
       }
     }
   }

@@ -1,5 +1,5 @@
-/**
- * Copyright 2016 LinkedIn Corp. All rights reserved.
+/*
+ * Copyright 2017 LinkedIn Corp. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,11 +19,14 @@ import com.github.ambry.network.PortType;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+
+import static com.github.ambry.clustermap.ClusterMapUtils.*;
 
 
 /**
@@ -31,11 +34,15 @@ import java.util.Map;
  */
 public class MockClusterMap implements ClusterMap {
 
-  private final Map<Long, PartitionId> partitions;
-  private final List<MockDataNodeId> dataNodes;
-  private final int numMountPointsPerNode;
-  private final HashSet<String> dataCentersInClusterMap = new HashSet<>();
-  private boolean partitionsUnavailable = false;
+  protected final boolean enableSSLPorts;
+  protected final Map<Long, PartitionId> partitions;
+  protected final List<MockDataNodeId> dataNodes;
+  protected final int numMountPointsPerNode;
+  protected final int numStoresPerMountPoint;
+  protected final HashSet<String> dataCentersInClusterMap = new HashSet<>();
+  protected boolean partitionsUnavailable = false;
+  private boolean createNewRegistry = true;
+  private MetricRegistry metricRegistry;
 
   /**
    * The default constructor sets up a 9 node cluster with 3 mount points in each, with 3 partitions/replicas per
@@ -43,8 +50,7 @@ public class MockClusterMap implements ClusterMap {
    * is going to be used to start a cluster, use it judiciously to avoid resource consumption issues on the test
    * machine.
    */
-  public MockClusterMap()
-      throws IOException {
+  public MockClusterMap() throws IOException {
     this(false, 9, 3, 3);
   }
 
@@ -77,7 +83,9 @@ public class MockClusterMap implements ClusterMap {
    */
   public MockClusterMap(boolean enableSSLPorts, int numNodes, int numMountPointsPerNode, int numStoresPerMountPoint)
       throws IOException {
+    this.enableSSLPorts = enableSSLPorts;
     this.numMountPointsPerNode = numMountPointsPerNode;
+    this.numStoresPerMountPoint = numStoresPerMountPoint;
     dataNodes = new ArrayList<MockDataNodeId>(numNodes);
     //Every group of 3 nodes will be put in the same DC.
     int dcIndex = 0;
@@ -108,20 +116,20 @@ public class MockClusterMap implements ClusterMap {
     }
   }
 
-  ArrayList<Port> getListOfPorts(int port) {
+  protected ArrayList<Port> getListOfPorts(int port) {
     ArrayList<Port> ports = new ArrayList<Port>();
     ports.add(new Port(port, PortType.PLAINTEXT));
     return ports;
   }
 
-  ArrayList<Port> getListOfPorts(int port, int sslPort) {
+  protected ArrayList<Port> getListOfPorts(int port, int sslPort) {
     ArrayList<Port> ports = new ArrayList<Port>();
     ports.add(new Port(port, PortType.PLAINTEXT));
     ports.add(new Port(sslPort, PortType.SSL));
     return ports;
   }
 
-  private int getPlainTextPort(ArrayList<Port> ports) {
+  protected int getPlainTextPort(ArrayList<Port> ports) {
     for (Port port : ports) {
       if (port.getPortType() == PortType.PLAINTEXT) {
         return port.getPort();
@@ -130,8 +138,7 @@ public class MockClusterMap implements ClusterMap {
     throw new IllegalArgumentException("No PlainText port found ");
   }
 
-  private MockDataNodeId createDataNode(ArrayList<Port> ports, String datacenter)
-      throws IOException {
+  protected MockDataNodeId createDataNode(ArrayList<Port> ports, String datacenter) throws IOException {
     File f = null;
     int port = getPlainTextPort(ports);
     try {
@@ -152,10 +159,10 @@ public class MockClusterMap implements ClusterMap {
   }
 
   @Override
-  public PartitionId getPartitionIdFromStream(DataInputStream stream)
-      throws IOException {
-    short version = stream.readShort();
-    long id = stream.readLong();
+  public PartitionId getPartitionIdFromStream(InputStream stream) throws IOException {
+    DataInputStream dataInputStream = new DataInputStream(stream);
+    short version = dataInputStream.readShort();
+    long id = dataInputStream.readLong();
     return partitions.get(id);
   }
 
@@ -171,8 +178,18 @@ public class MockClusterMap implements ClusterMap {
   }
 
   @Override
+  public List<PartitionId> getAllPartitionIds() {
+    return new ArrayList<>(partitions.values());
+  }
+
+  @Override
   public boolean hasDatacenter(String datacenterName) {
     return dataCentersInClusterMap.contains(datacenterName);
+  }
+
+  @Override
+  public byte getLocalDatacenterId() {
+    return UNKNOWN_DATACENTER_ID;
   }
 
   @Override
@@ -189,7 +206,7 @@ public class MockClusterMap implements ClusterMap {
   public List<ReplicaId> getReplicaIds(DataNodeId dataNodeId) {
     ArrayList<ReplicaId> replicaIdsToReturn = new ArrayList<ReplicaId>();
     for (PartitionId partitionId : partitions.values()) {
-      List<ReplicaId> replicaIds = partitionId.getReplicaIds();
+      List<? extends ReplicaId> replicaIds = partitionId.getReplicaIds();
       for (ReplicaId replicaId : replicaIds) {
         if (replicaId.getDataNodeId().getHostname().compareTo(dataNodeId.getHostname()) == 0
             && replicaId.getDataNodeId().getPort() == dataNodeId.getPort()) {
@@ -212,11 +229,29 @@ public class MockClusterMap implements ClusterMap {
   @Override
   public MetricRegistry getMetricRegistry() {
     // Each server that calls this mocked interface needs its own metric registry.
-    return new MetricRegistry();
+    if (createNewRegistry) {
+      metricRegistry = new MetricRegistry();
+    }
+    return metricRegistry;
   }
 
-  public void cleanup()
-      throws IOException {
+  /**
+   * Create a {@link MetricRegistry} and ensure that this is the one that is returned by {@link #getMetricRegistry()}
+   */
+  public void createAndSetPermanentMetricRegistry() {
+    setPermanentMetricRegistry(new MetricRegistry());
+  }
+
+  /**
+   * Set the registry as {@code toSet} ensure that this is the one that is returned by {@link #getMetricRegistry()}
+   * @param toSet the metric registry to set to.
+   */
+  public void setPermanentMetricRegistry(MetricRegistry toSet) {
+    metricRegistry = toSet;
+    createNewRegistry = false;
+  }
+
+  public void cleanup() throws IOException {
     for (PartitionId partitionId : partitions.values()) {
       MockPartitionId mockPartition = (MockPartitionId) partitionId;
       mockPartition.cleanUp();
@@ -231,8 +266,7 @@ public class MockClusterMap implements ClusterMap {
     }
   }
 
-  private static boolean deleteFileOrDirectory(File f)
-      throws IOException {
+  protected static boolean deleteFileOrDirectory(File f) throws IOException {
     if (f.exists()) {
       if (f.isDirectory()) {
         File[] children = f.listFiles();
@@ -279,4 +313,10 @@ public class MockClusterMap implements ClusterMap {
         break;
     }
   }
+
+  @Override
+  public void close() {
+    // No-op.
+  }
 }
+

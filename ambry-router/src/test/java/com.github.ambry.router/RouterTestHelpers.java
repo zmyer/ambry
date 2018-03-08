@@ -34,13 +34,11 @@ class RouterTestHelpers {
    * @return true if the fields are equivalent in the two {@link BlobProperties}
    */
   static boolean haveEquivalentFields(BlobProperties a, BlobProperties b) {
-    return a.getBlobSize() == b.getBlobSize() &&
-        a.getServiceId().equals(b.getServiceId()) &&
-        a.getOwnerId().equals(b.getOwnerId()) &&
-        a.getContentType().equals(b.getContentType()) &&
-        a.isPrivate() == b.isPrivate() &&
-        a.getTimeToLiveInSeconds() == b.getTimeToLiveInSeconds() &&
-        a.getCreationTimeInMs() == b.getCreationTimeInMs();
+    return a.getServiceId().equals(b.getServiceId()) && a.getOwnerId().equals(b.getOwnerId()) && a.getContentType()
+        .equals(b.getContentType()) && a.isPrivate() == b.isPrivate()
+        && a.getTimeToLiveInSeconds() == b.getTimeToLiveInSeconds()
+        && a.getCreationTimeInMs() == b.getCreationTimeInMs() && a.getAccountId() == b.getAccountId()
+        && a.getContainerId() == b.getContainerId() && a.isEncrypted() == b.isEncrypted();
   }
 
   /**
@@ -54,8 +52,7 @@ class RouterTestHelpers {
    * @throws Exception
    */
   static void testWithErrorCodes(Map<ServerErrorCode, Integer> serverErrorCodeCounts, MockServerLayout serverLayout,
-      RouterErrorCode expectedError, ErrorCodeChecker errorCodeChecker)
-      throws Exception {
+      RouterErrorCode expectedError, ErrorCodeChecker errorCodeChecker) throws Exception {
     List<ServerErrorCode> serverErrorCodes = new ArrayList<>();
     for (Map.Entry<ServerErrorCode, Integer> entry : serverErrorCodeCounts.entrySet()) {
       for (int j = 0; j < entry.getValue(); j++) {
@@ -78,8 +75,7 @@ class RouterTestHelpers {
    * @throws Exception
    */
   static void testWithErrorCodes(ServerErrorCode[] serverErrorCodesInOrder, MockServerLayout serverLayout,
-      RouterErrorCode expectedError, ErrorCodeChecker errorCodeChecker)
-      throws Exception {
+      RouterErrorCode expectedError, ErrorCodeChecker errorCodeChecker) throws Exception {
     setServerErrorCodes(serverErrorCodesInOrder, serverLayout);
     errorCodeChecker.testAndAssert(expectedError);
     resetServerErrorCodes(serverLayout);
@@ -140,7 +136,7 @@ class RouterTestHelpers {
    */
   static void setServerErrorCodes(ServerErrorCode[] serverErrorCodesInOrder, PartitionId partition,
       MockServerLayout serverLayout) {
-    List<ReplicaId> replicas = partition.getReplicaIds();
+    List<? extends ReplicaId> replicas = partition.getReplicaIds();
     if (serverErrorCodesInOrder.length > replicas.size()) {
       throw new IllegalArgumentException("More server error codes provided than replicas in partition");
     }
@@ -198,8 +194,7 @@ class RouterTestHelpers {
      *                      error is expected.
      * @throws Exception
      */
-    void testAndAssert(RouterErrorCode expectedError)
-        throws Exception;
+    void testAndAssert(RouterErrorCode expectedError) throws Exception;
   }
 }
 

@@ -19,12 +19,14 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.junit.Assert;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 
 /**
@@ -64,8 +66,7 @@ public class UtilsTest {
   }
 
   @Test
-  public void testReadStrings()
-      throws IOException {
+  public void testReadStrings() throws IOException {
     // good case
     ByteBuffer buffer = ByteBuffer.allocate(10);
     buffer.putShort((short) 8);
@@ -74,9 +75,14 @@ public class UtilsTest {
     buffer.flip();
     String outputString = Utils.readShortString(new DataInputStream(new ByteBufferInputStream(buffer)));
     Assert.assertEquals(s, outputString);
+    // 0-length
+    buffer.rewind();
+    buffer.putShort(0, (short) 0);
+    outputString = Utils.readShortString(new DataInputStream(new ByteBufferInputStream(buffer)));
+    Assert.assertTrue(outputString.isEmpty());
 
     // failed case
-    buffer.flip();
+    buffer.rewind();
     buffer.putShort((short) 10);
     buffer.put(s.getBytes());
     buffer.flip();
@@ -86,11 +92,13 @@ public class UtilsTest {
     } catch (IllegalArgumentException e) {
       Assert.assertTrue(true);
     }
-    buffer.flip();
-    buffer.putShort((short) -1);
-    buffer.flip();
-    outputString = Utils.readShortString(new DataInputStream(new ByteBufferInputStream(buffer)));
-    Assert.assertNull(outputString);
+    buffer.rewind();
+    buffer.putShort(0, (short) -1);
+    try {
+      outputString = Utils.readShortString(new DataInputStream(new ByteBufferInputStream(buffer)));
+      Assert.fail("Should have encountered exception with negative length.");
+    } catch (IllegalArgumentException e) {
+    }
 
     // good case
     buffer = ByteBuffer.allocate(40004);
@@ -98,30 +106,39 @@ public class UtilsTest {
     s = getRandomString(40000);
     buffer.put(s.getBytes());
     buffer.flip();
-    outputString = Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)));
+    outputString = Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)), StandardCharsets.UTF_8);
     Assert.assertEquals(s, outputString);
+    // 0-length
+    buffer.rewind();
+    buffer.putInt(0, 0);
+    outputString = Utils.readShortString(new DataInputStream(new ByteBufferInputStream(buffer)));
+    Assert.assertTrue(outputString.isEmpty());
 
     // failed case
-    buffer.flip();
+    buffer.rewind();
     buffer.putInt(50000);
     buffer.put(s.getBytes());
     buffer.flip();
     try {
-      outputString = Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)));
-      Assert.assertTrue(false);
+      outputString =
+          Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)), StandardCharsets.UTF_8);
+      fail("Should have failed");
     } catch (IllegalArgumentException e) {
-      Assert.assertTrue(true);
+      // expected.
     }
-    buffer.flip();
-    buffer.putInt(-1);
-    buffer.flip();
-    outputString = Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)));
-    Assert.assertNull(outputString);
+
+    buffer.rewind();
+    buffer.putInt(0, -1);
+    try {
+      Utils.readIntString(new DataInputStream(new ByteBufferInputStream(buffer)), StandardCharsets.UTF_8);
+      Assert.fail("Should have encountered exception with negative length.");
+    } catch (IllegalArgumentException e) {
+      // expected.
+    }
   }
 
   @Test
-  public void testReadBuffers()
-      throws IOException {
+  public void testReadBuffers() throws IOException {
     byte[] buf = new byte[40004];
     new Random().nextBytes(buf);
     ByteBuffer inputBuf = ByteBuffer.wrap(buf);
@@ -129,6 +146,19 @@ public class UtilsTest {
     ByteBuffer outputBuf = Utils.readIntBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
     for (int i = 0; i < 40000; i++) {
       Assert.assertEquals(buf[i + 4], outputBuf.array()[i]);
+    }
+    // 0 size
+    inputBuf.rewind();
+    inputBuf.putInt(0, 0);
+    outputBuf = Utils.readIntBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
+    Assert.assertEquals("Output should be of length 0", 0, outputBuf.array().length);
+    // negative size
+    inputBuf.rewind();
+    inputBuf.putInt(0, -1);
+    try {
+      Utils.readIntBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
+      Assert.fail("Should have encountered exception with negative length.");
+    } catch (IllegalArgumentException e) {
     }
 
     buf = new byte[10];
@@ -138,6 +168,19 @@ public class UtilsTest {
     outputBuf = Utils.readShortBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
     for (int i = 0; i < 8; i++) {
       Assert.assertEquals(buf[i + 2], outputBuf.array()[i]);
+    }
+    // 0 size
+    inputBuf.rewind();
+    inputBuf.putShort(0, (short) 0);
+    outputBuf = Utils.readShortBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
+    Assert.assertEquals("Output should be of length 0", 0, outputBuf.array().length);
+    // negative size
+    inputBuf.rewind();
+    inputBuf.putShort(0, (short) -1);
+    try {
+      Utils.readShortBuffer(new DataInputStream(new ByteBufferInputStream(inputBuf)));
+      Assert.fail("Should have encountered exception with negative length.");
+    } catch (IllegalArgumentException e) {
     }
   }
 
@@ -156,13 +199,22 @@ public class UtilsTest {
   }
 
   @Test
-  public void testReadWriteStringToFile()
-      throws IOException {
+  public void testReadWriteStringToFile() throws IOException {
     File file = File.createTempFile("test", "1");
     file.deleteOnExit();
     Utils.writeStringToFile("Test", file.getPath());
     String outputString = Utils.readStringFromFile(file.getPath());
     Assert.assertEquals("Test", outputString);
+  }
+
+  @Test
+  public void testGetIntStringLength() {
+    for (int i = 0; i < 10; i++) {
+      String value = getRandomString(1000 + TestUtils.RANDOM.nextInt(10000));
+      assertEquals("Size mismatch ", Integer.BYTES + value.length(), Utils.getIntStringLength(value));
+    }
+    assertEquals("Size mismatch for empty string ", Integer.BYTES, Utils.getIntStringLength(""));
+    assertEquals("Size mismatch for null string ", Integer.BYTES, Utils.getIntStringLength(null));
   }
 
   @Test
@@ -296,8 +348,8 @@ public class UtilsTest {
       mockObj = Utils.getObj("com.github.ambry.utils.MockClassForTesting", new Object(), new Object(), new Object());
       Assert.assertNotNull(mockObj);
       Assert.assertTrue(mockObj.threeArgConstructorInvoked);
-      mockObj = Utils
-          .getObj("com.github.ambry.utils.MockClassForTesting", new Object(), new Object(), new Object(), new Object());
+      mockObj = Utils.getObj("com.github.ambry.utils.MockClassForTesting", new Object(), new Object(), new Object(),
+          new Object());
       Assert.assertNotNull(mockObj);
       Assert.assertTrue(mockObj.fourArgConstructorInvoked);
     } catch (Exception e) {
@@ -305,10 +357,11 @@ public class UtilsTest {
     }
   }
 
-  @Test
   /**
    * Tests {@link Utils#getRootCause(Throwable)}.
-   */ public void getRootCauseTest() {
+   */
+  @Test
+  public void getRootCauseTest() {
     int nestingLevel = 5;
     String innerExceptionMsg = "InnerException";
     String outerExceptionMsgBase = "OuterException";
@@ -319,6 +372,76 @@ public class UtilsTest {
     }
     assertEquals("Message should that of the innermost exception", innerExceptionMsg,
         Utils.getRootCause(outerException).getMessage());
+  }
+
+  /**
+   * Test {@link Utils#newScheduler(int, String, boolean)}
+   */
+  @Test
+  public void newSchedulerTest() throws Exception {
+    ScheduledExecutorService scheduler = Utils.newScheduler(2, false);
+    Future<String> future = scheduler.schedule(new Callable<String>() {
+      @Override
+      public String call() {
+        return Thread.currentThread().getName();
+      }
+    }, 50, TimeUnit.MILLISECONDS);
+    String threadName = future.get(10, TimeUnit.SECONDS);
+    assertTrue("Unexpected thread name returned: " + threadName, threadName.startsWith("ambry-scheduler-"));
+    scheduler.shutdown();
+  }
+
+  /**
+   * Test {@link Utils#getTimeInMsToTheNearestSec(long)}
+   */
+  @Test
+  public void getTimeInMsToTheNearestSecTest() {
+    long msValue = Utils.getRandomLong(TestUtils.RANDOM, 1000000);
+    long expectedMsValue = (msValue / Time.MsPerSec) * Time.MsPerSec;
+    assertEquals("Time in Ms to the nearest Sec mismatch ", expectedMsValue, Utils.getTimeInMsToTheNearestSec(msValue));
+    msValue = Utils.Infinite_Time;
+    assertEquals("Time in Ms to the nearest Sec mismatch ", msValue, Utils.getTimeInMsToTheNearestSec(msValue));
+  }
+
+  /**
+   * Tests {@link Utils#addSecondsToEpochTime(long, long)}
+   */
+  @Test
+  public void addSecondsToEpochTimeTest() {
+    for (int i = 0; i < 5; i++) {
+      long epochTimeInMs = SystemTime.getInstance().milliseconds() + TestUtils.RANDOM.nextInt(10000);
+      long deltaInSecs = TestUtils.RANDOM.nextInt(10000);
+      assertEquals("epoch epochTimeInMs mismatch ", epochTimeInMs + (deltaInSecs * Time.MsPerSec),
+          Utils.addSecondsToEpochTime(epochTimeInMs, deltaInSecs));
+      assertEquals("epoch epochTimeInMs mismatch ", Utils.Infinite_Time,
+          Utils.addSecondsToEpochTime(Utils.Infinite_Time, deltaInSecs));
+      assertEquals("epoch epochTimeInMs mismatch ", Utils.Infinite_Time,
+          Utils.addSecondsToEpochTime(epochTimeInMs, Utils.Infinite_Time));
+    }
+  }
+
+  /**
+   * Tests for {@link Utils#isPossibleClientTermination(Throwable)} and
+   * {@link Utils#convertToClientTerminationException(Throwable)}.
+   */
+  @Test
+  public void clientTerminationWrapAndRecognizeTest() {
+    Exception exception = new IOException("Connection reset by peer");
+    assertTrue("Should be declared as a client termination", Utils.isPossibleClientTermination(exception));
+
+    exception = new IOException("Broken pipe");
+    assertTrue("Should be declared as a client termination", Utils.isPossibleClientTermination(exception));
+
+    exception = new IOException("Connection not reset by peer");
+    assertFalse("Should not be declared as a client termination", Utils.isPossibleClientTermination(exception));
+    exception = Utils.convertToClientTerminationException(exception);
+    assertTrue("Should be declared as a client termination", Utils.isPossibleClientTermination(exception));
+
+    exception = new Exception("Connection reset by peer");
+    // debatable but this is the current implementation.
+    assertFalse("Should not be declared as a client termination", Utils.isPossibleClientTermination(exception));
+    exception = Utils.convertToClientTerminationException(exception);
+    assertTrue("Should be declared as a client termination", Utils.isPossibleClientTermination(exception));
   }
 
   private static final String CHARACTERS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";

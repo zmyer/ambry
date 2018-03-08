@@ -24,6 +24,7 @@ import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.clustermap.ReplicaId;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,8 +41,10 @@ public class ReplicationMetrics {
   public final Meter plainTextIntraColoReplicationBytesRate;
   public final Map<String, Meter> sslInterColoReplicationBytesRate = new HashMap<String, Meter>();
   public final Meter sslIntraColoReplicationBytesRate;
-  public final Map<String, Counter> interColoMetadataExchangeCount = new HashMap<String, Counter>();
+  public final Map<String, Counter> interColoMetadataExchangeCount = new HashMap<>();
+  public final Map<String, Counter> interColoReplicationGetRequestCount = new HashMap<>();
   public final Counter intraColoMetadataExchangeCount;
+  public final Counter intraColoReplicationGetRequestCount;
   public final Map<String, Counter> interColoBlobsReplicatedCount = new HashMap<String, Counter>();
   public final Counter intraColoBlobsReplicatedCount;
   public final Counter unknownRemoteReplicaRequestCount;
@@ -108,6 +111,7 @@ public class ReplicationMetrics {
   public final Histogram plainTextIntraColoTotalReplicationTime;
   public final Map<String, Histogram> sslInterColoTotalReplicationTime = new HashMap<String, Histogram>();
   public final Histogram sslIntraColoTotalReplicationTime;
+  public final Counter blobDeletedOnGetCount;
 
   public List<Gauge<Long>> replicaLagInBytes;
   private MetricRegistry registry;
@@ -116,7 +120,7 @@ public class ReplicationMetrics {
   private Map<String, Counter> localStoreErrorMap;
   private Map<PartitionId, Counter> partitionIdToInvalidMessageStreamErrorCounter;
 
-  public ReplicationMetrics(MetricRegistry registry, List<ReplicaId> replicaIds) {
+  public ReplicationMetrics(MetricRegistry registry, List<? extends ReplicaId> replicaIds) {
     metadataRequestErrorMap = new HashMap<String, Counter>();
     getRequestErrorMap = new HashMap<String, Counter>();
     localStoreErrorMap = new HashMap<String, Counter>();
@@ -129,6 +133,8 @@ public class ReplicationMetrics {
         registry.meter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationBytesRate"));
     intraColoMetadataExchangeCount =
         registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoMetadataExchangeCount"));
+    intraColoReplicationGetRequestCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationGetRequestCount"));
     intraColoBlobsReplicatedCount =
         registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoBlobsReplicatedCount"));
     unknownRemoteReplicaRequestCount =
@@ -200,6 +206,7 @@ public class ReplicationMetrics {
         registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoTotalReplicationTime"));
     sslIntraColoTotalReplicationTime =
         registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoTotalReplicationTime"));
+    blobDeletedOnGetCount = registry.counter(MetricRegistry.name(ReplicaThread.class, "BlobDeletedOnGetCount"));
     this.registry = registry;
     this.replicaLagInBytes = new ArrayList<Gauge<Long>>();
     populateInvalidMessageMetricForReplicas(replicaIds);
@@ -223,6 +230,9 @@ public class ReplicationMetrics {
       Counter interColoMetadataExchangeCountPerDC =
           registry.counter(MetricRegistry.name(ReplicaThread.class, "Inter-" + datacenter + "-MetadataExchangeCount"));
       interColoMetadataExchangeCount.put(datacenter, interColoMetadataExchangeCountPerDC);
+      Counter interColoReplicationGetRequestCountPerDC = registry.counter(
+          MetricRegistry.name(ReplicaThread.class, "Inter-" + datacenter + "-ReplicationGetRequestCount"));
+      interColoReplicationGetRequestCount.put(datacenter, interColoReplicationGetRequestCountPerDC);
       Counter interColoBlobsReplicatedCountPerDC =
           registry.counter(MetricRegistry.name(ReplicaThread.class, "Inter-" + datacenter + "-ReplicationBlobsCount"));
       interColoBlobsReplicatedCount.put(datacenter, interColoBlobsReplicatedCountPerDC);
@@ -318,7 +328,7 @@ public class ReplicationMetrics {
    *                           datacenter
    * @param localDatacenter The datacenter on which the {@link ReplicationManager} is running
    */
-  void trackLiveThreadsCount(final Map<String, ArrayList<ReplicaThread>> replicaThreadPools, String localDatacenter) {
+  void trackLiveThreadsCount(final Map<String, List<ReplicaThread>> replicaThreadPools, String localDatacenter) {
     for (final String datacenter : replicaThreadPools.keySet()) {
       Gauge<Integer> liveThreadsPerDatacenter = new Gauge<Integer>() {
         @Override
@@ -354,14 +364,35 @@ public class ReplicationMetrics {
     Gauge<Long> replicaLag = new Gauge<Long>() {
       @Override
       public Long getValue() {
-        return remoteReplicaInfo.getReplicaLagInBytes();
+        return remoteReplicaInfo.getRemoteLagFromLocalInBytes();
       }
     };
     registry.register(MetricRegistry.name(ReplicationMetrics.class, metricName), replicaLag);
     replicaLagInBytes.add(replicaLag);
   }
 
-  public void populateInvalidMessageMetricForReplicas(List<ReplicaId> replicaIds) {
+  /**
+   * Tracks the number of partitions for which replication is disabled.
+   * @param replicaThreadPools A map of datacenter names to {@link ReplicaThread}s handling replication from that
+   *                           datacenter
+   */
+  public void trackReplicationDisabledPartitions(final Map<String, List<ReplicaThread>> replicaThreadPools) {
+    for (Map.Entry<String, List<ReplicaThread>> entry : replicaThreadPools.entrySet()) {
+      String datacenter = entry.getKey();
+      List<ReplicaThread> pool = entry.getValue();
+      Gauge<Integer> disabledCount = () -> {
+        Set<PartitionId> replicationDisabledPartitions = new HashSet<>();
+        for (ReplicaThread replicaThread : pool) {
+          replicationDisabledPartitions.addAll(replicaThread.getReplicationDisabledPartitions());
+        }
+        return replicationDisabledPartitions.size();
+      };
+      registry.register(MetricRegistry.name(ReplicaThread.class, "ReplicationDisabledPartitions-" + datacenter),
+          disabledCount);
+    }
+  }
+
+  public void populateInvalidMessageMetricForReplicas(List<? extends ReplicaId> replicaIds) {
     for (ReplicaId replicaId : replicaIds) {
       PartitionId partitionId = replicaId.getPartitionId();
       if (!partitionIdToInvalidMessageStreamErrorCounter.containsKey(partitionId)) {
@@ -380,42 +411,45 @@ public class ReplicationMetrics {
   }
 
   public void createRemoteReplicaErrorMetrics(RemoteReplicaInfo remoteReplicaInfo) {
-    String metadataRequestErrorMetricName = remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" +
-        remoteReplicaInfo.getReplicaId().getDataNodeId().getPort() + "-" +
-        remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-metadataRequestError";
+    String metadataRequestErrorMetricName =
+        remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" + remoteReplicaInfo.getReplicaId()
+            .getDataNodeId()
+            .getPort() + "-" + remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-metadataRequestError";
     Counter metadataRequestError =
         registry.counter(MetricRegistry.name(ReplicaThread.class, metadataRequestErrorMetricName));
     metadataRequestErrorMap.put(metadataRequestErrorMetricName, metadataRequestError);
-    String getRequestErrorMetricName = remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" +
-        remoteReplicaInfo.getReplicaId().getDataNodeId().getPort() + "-" +
-        remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-getRequestError";
+    String getRequestErrorMetricName =
+        remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" + remoteReplicaInfo.getReplicaId()
+            .getDataNodeId()
+            .getPort() + "-" + remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-getRequestError";
     Counter getRequestError = registry.counter(MetricRegistry.name(ReplicaThread.class, getRequestErrorMetricName));
     getRequestErrorMap.put(getRequestErrorMetricName, getRequestError);
-    String localStoreErrorMetricName = remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" +
-        remoteReplicaInfo.getReplicaId().getDataNodeId().getPort() + "-" +
-        remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-localStoreError";
+    String localStoreErrorMetricName =
+        remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname() + "-" + remoteReplicaInfo.getReplicaId()
+            .getDataNodeId()
+            .getPort() + "-" + remoteReplicaInfo.getReplicaId().getPartitionId().toString() + "-localStoreError";
     Counter localStoreError = registry.counter(MetricRegistry.name(ReplicaThread.class, localStoreErrorMetricName));
     localStoreErrorMap.put(localStoreErrorMetricName, localStoreError);
   }
 
   public void updateMetadataRequestError(ReplicaId remoteReplica) {
-    String metadataRequestErrorMetricName = remoteReplica.getDataNodeId().getHostname() + "-" +
-        remoteReplica.getDataNodeId().getPort() + "-" +
-        remoteReplica.getPartitionId().toString() + "-metadataRequestError";
+    String metadataRequestErrorMetricName =
+        remoteReplica.getDataNodeId().getHostname() + "-" + remoteReplica.getDataNodeId().getPort() + "-"
+            + remoteReplica.getPartitionId().toString() + "-metadataRequestError";
     metadataRequestErrorMap.get(metadataRequestErrorMetricName).inc();
   }
 
   public void updateGetRequestError(ReplicaId remoteReplica) {
-    String getRequestErrorMetricName = remoteReplica.getDataNodeId().getHostname() + "-" +
-        remoteReplica.getDataNodeId().getPort() + "-" +
-        remoteReplica.getPartitionId().toString() + "-getRequestError";
+    String getRequestErrorMetricName =
+        remoteReplica.getDataNodeId().getHostname() + "-" + remoteReplica.getDataNodeId().getPort() + "-"
+            + remoteReplica.getPartitionId().toString() + "-getRequestError";
     getRequestErrorMap.get(getRequestErrorMetricName).inc();
   }
 
   public void updateLocalStoreError(ReplicaId remoteReplica) {
-    String localStoreErrorMetricName = remoteReplica.getDataNodeId().getHostname() + "-" +
-        remoteReplica.getDataNodeId().getPort() + "-" +
-        remoteReplica.getPartitionId().toString() + "-localStoreError";
+    String localStoreErrorMetricName =
+        remoteReplica.getDataNodeId().getHostname() + "-" + remoteReplica.getDataNodeId().getPort() + "-"
+            + remoteReplica.getPartitionId().toString() + "-localStoreError";
     localStoreErrorMap.get(localStoreErrorMetricName).inc();
   }
 
@@ -520,6 +554,7 @@ public class ReplicationMetrics {
 
   public void updateGetRequestTime(long getRequestTime, boolean remoteColo, boolean sslEnabled, String datacenter) {
     if (remoteColo) {
+      interColoReplicationGetRequestCount.get(datacenter).inc();
       interColoGetRequestTime.get(datacenter).update(getRequestTime);
       if (sslEnabled) {
         sslInterColoGetRequestTime.get(datacenter).update(getRequestTime);
@@ -527,6 +562,7 @@ public class ReplicationMetrics {
         plainTextInterColoGetRequestTime.get(datacenter).update(getRequestTime);
       }
     } else {
+      intraColoReplicationGetRequestCount.inc();
       intraColoGetRequestTime.update(getRequestTime);
       if (sslEnabled) {
         sslIntraColoGetRequestTime.update(getRequestTime);

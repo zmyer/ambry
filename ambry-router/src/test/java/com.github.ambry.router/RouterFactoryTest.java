@@ -16,6 +16,7 @@ package com.github.ambry.router;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.config.VerifiableProperties;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -48,6 +49,10 @@ public class RouterFactoryTest {
     Properties properties = new Properties();
     properties.setProperty("router.hostname", "localhost");
     properties.setProperty("router.datacenter.name", "DC1");
+    properties.setProperty("clustermap.cluster.name", "test");
+    properties.setProperty("clustermap.datacenter.name", "DC1");
+    properties.setProperty("clustermap.host.name", "localhost");
+    properties.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
     return new VerifiableProperties(properties);
   }
 
@@ -56,17 +61,16 @@ public class RouterFactoryTest {
    * @throws IOException
    */
   @Test
-  public void testRouterFactory()
-      throws Exception {
+  public void testRouterFactory() throws Exception {
     VerifiableProperties verifiableProperties = getVerifiableProperties();
     List<FactoryAndRouter> factoryAndRouters = new ArrayList<FactoryAndRouter>();
     factoryAndRouters.add(new FactoryAndRouter("com.github.ambry.router.NonBlockingRouterFactory",
         "com.github.ambry.router.NonBlockingRouter"));
 
     for (FactoryAndRouter factoryAndRouter : factoryAndRouters) {
-      RouterFactory routerFactory = Utils
-          .getObj(factoryAndRouter.factoryStr, verifiableProperties, new MockClusterMap(),
-              new LoggingNotificationSystem());
+      RouterFactory routerFactory =
+          Utils.getObj(factoryAndRouter.factoryStr, verifiableProperties, new MockClusterMap(),
+              new LoggingNotificationSystem(), null);
       Router router = routerFactory.getRouter();
       Assert.assertEquals("Did not receive expected Router instance", factoryAndRouter.routerStr,
           router.getClass().getCanonicalName());

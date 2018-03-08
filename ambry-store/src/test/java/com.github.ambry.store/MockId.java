@@ -13,8 +13,8 @@
  */
 package com.github.ambry.store;
 
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -23,28 +23,39 @@ import java.nio.ByteBuffer;
 public class MockId extends StoreKey {
 
   private String id;
+  private final short accountId;
+  private final short containerId;
   private static final int Id_Size_In_Bytes = 2;
 
   public MockId(String id) {
-    this.id = id;
+    this(id, Utils.getRandomShort(TestUtils.RANDOM), Utils.getRandomShort(TestUtils.RANDOM));
   }
 
-  public MockId(DataInputStream stream)
-      throws IOException {
+  public MockId(String id, short accountId, short containerId) {
+    this.id = id;
+    this.accountId = accountId;
+    this.containerId = containerId;
+  }
+
+  public MockId(DataInputStream stream) throws IOException {
     id = Utils.readShortString(stream);
+    accountId = stream.readShort();
+    containerId = stream.readShort();
   }
 
   @Override
   public byte[] toBytes() {
-    ByteBuffer idBuf = ByteBuffer.allocate(Id_Size_In_Bytes + id.length());
+    ByteBuffer idBuf = ByteBuffer.allocate(sizeInBytes());
     idBuf.putShort((short) id.length());
     idBuf.put(id.getBytes());
+    idBuf.putShort(accountId);
+    idBuf.putShort(containerId);
     return idBuf.array();
   }
 
   @Override
   public String getID() {
-    return toString();
+    return id;
   }
 
   @Override
@@ -54,7 +65,17 @@ public class MockId extends StoreKey {
 
   @Override
   public short sizeInBytes() {
-    return (short) (Id_Size_In_Bytes + id.length());
+    return (short) (Id_Size_In_Bytes + id.length() + Short.BYTES + Short.BYTES);
+  }
+
+  @Override
+  public short getAccountId() {
+    return accountId;
+  }
+
+  @Override
+  public short getContainerId() {
+    return containerId;
   }
 
   @Override
@@ -92,5 +113,10 @@ public class MockId extends StoreKey {
       return false;
     }
     return true;
+  }
+
+  @Override
+  public String toString() {
+    return getID();
   }
 }

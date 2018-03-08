@@ -17,15 +17,19 @@ import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.ByteBufferAsyncWritableChannel;
 import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.commons.LoggingNotificationSystem;
+import com.github.ambry.config.CryptoServiceConfig;
+import com.github.ambry.config.KMSConfig;
 import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.utils.MockTime;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.Random;
@@ -37,8 +41,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 
+@RunWith(Parameterized.class)
 public class GetManagerTest {
   private final MockServerLayout mockServerLayout;
   private final MockTime mockTime = new MockTime();
@@ -47,25 +54,40 @@ public class GetManagerTest {
   // this is a reference to the state used by the mockSelector. just allows tests to manipulate the state.
   private final AtomicReference<MockSelectorState> mockSelectorState = new AtomicReference<MockSelectorState>();
   private NonBlockingRouter router;
+  private final boolean testEncryption;
+  private KeyManagementService kms = null;
+  private CryptoService cryptoService = null;
+  private CryptoJobHandler cryptoJobHandler = null;
   private RouterConfig routerConfig;
   private int chunkSize;
   private int requestParallelism;
   private int successTarget;
   // Request params;
+  private long blobSize;
   private BlobProperties putBlobProperties;
   private byte[] putUserMetadata;
   private byte[] putContent;
   private ReadableStreamChannel putChannel;
-  private GetBlobOptions options = new GetBlobOptions();
+  private GetBlobOptions options = new GetBlobOptionsBuilder().build();
   private static final int MAX_PORTS_PLAIN_TEXT = 3;
   private static final int MAX_PORTS_SSL = 3;
   private static final int CHECKOUT_TIMEOUT_MS = 1000;
 
   /**
-   * Pre-initialization common to all tests.
+   * Running for both regular and encrypted blobs
+   * @return an array with both {@code false} and {@code true}.
    */
-  public GetManagerTest()
-      throws Exception {
+  @Parameterized.Parameters
+  public static List<Object[]> data() {
+    return Arrays.asList(new Object[][]{{false}, {true}});
+  }
+
+  /**
+   * Pre-initialization common to all tests.
+   * @param testEncryption {@code true} if blobs need to be tested w/ encryption. {@code false} otherwise
+   */
+  public GetManagerTest(boolean testEncryption) throws Exception {
+    this.testEncryption = testEncryption;
     // random chunkSize in the range [1, 1 MB]
     chunkSize = random.nextInt(1024 * 1024) + 1;
     requestParallelism = 3;
@@ -73,6 +95,13 @@ public class GetManagerTest {
     mockSelectorState.set(MockSelectorState.Good);
     mockClusterMap = new MockClusterMap();
     mockServerLayout = new MockServerLayout(mockClusterMap);
+    if (testEncryption) {
+      VerifiableProperties vProps = new VerifiableProperties(new Properties());
+      kms = new SingleKeyManagementService(new KMSConfig(vProps),
+          TestUtils.getRandomKey(SingleKeyManagementServiceTest.DEFAULT_KEY_SIZE_CHARS));
+      cryptoService = new GCMCryptoService(new CryptoServiceConfig(vProps));
+      cryptoJobHandler = new CryptoJobHandler(CryptoJobHandlerTest.DEFAULT_THREAD_COUNT);
+    }
   }
 
   /**
@@ -84,6 +113,9 @@ public class GetManagerTest {
   public void postCheck() {
     Assert.assertFalse("Router should be closed at the end of each test", router.isOpen());
     Assert.assertEquals("Router operations count must be zero", 0, router.getOperationsCount());
+    if (cryptoJobHandler != null) {
+      cryptoJobHandler.close();
+    }
   }
 
   /**
@@ -91,9 +123,8 @@ public class GetManagerTest {
    * @throws Exception
    */
   @Test
-  public void testSimpleBlobGetSuccess()
-      throws Exception {
-    testGetSuccess(chunkSize, new GetBlobOptions());
+  public void testSimpleBlobGetSuccess() throws Exception {
+    testGetSuccess(chunkSize, new GetBlobOptionsBuilder().build());
   }
 
   /**
@@ -101,9 +132,8 @@ public class GetManagerTest {
    * @throws Exception
    */
   @Test
-  public void testCompositeBlobGetSuccess()
-      throws Exception {
-    testGetSuccess(chunkSize * 6 + 11, new GetBlobOptions());
+  public void testCompositeBlobGetSuccess() throws Exception {
+    testGetSuccess(chunkSize * 6 + 11, new GetBlobOptionsBuilder().build());
   }
 
   /**
@@ -111,10 +141,10 @@ public class GetManagerTest {
    * @throws Exception
    */
   @Test
-  public void testRangeRequest()
-      throws Exception {
-    testGetSuccess(chunkSize * 6 + 11, new GetBlobOptions(GetBlobOptions.OperationType.Data,
-        ByteRange.fromOffsetRange(chunkSize * 2 + 3, chunkSize * 5 + 4)));
+  public void testRangeRequest() throws Exception {
+    testGetSuccess(chunkSize * 6 + 11, new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.Data)
+        .range(ByteRange.fromOffsetRange(chunkSize * 2 + 3, chunkSize * 5 + 4))
+        .build());
   }
 
   /**
@@ -122,14 +152,13 @@ public class GetManagerTest {
    * @param blobSize the size of the blob to put/get.
    * @param options the {@link GetBlobOptions} for the get request.
    */
-  private void testGetSuccess(int blobSize, GetBlobOptions options)
-      throws Exception {
+  private void testGetSuccess(int blobSize, GetBlobOptions options) throws Exception {
     router = getNonBlockingRouter();
     setOperationParams(blobSize, options);
     String blobId = router.putBlob(putBlobProperties, putUserMetadata, putChannel).get();
     getBlobAndCompareContent(blobId);
     // Test GetBlobInfoOperation, regardless of options passed in.
-    this.options = new GetBlobOptions(GetBlobOptions.OperationType.BlobInfo, null);
+    this.options = new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.BlobInfo).build();
     getBlobAndCompareContent(blobId);
     router.close();
   }
@@ -139,8 +168,7 @@ public class GetManagerTest {
    * @throws Exception
    */
   @Test
-  public void testCallbackRuntimeException()
-      throws Exception {
+  public void testCallbackRuntimeException() throws Exception {
     final CountDownLatch getBlobCallbackCalled = new CountDownLatch(1);
     testBadCallback(new Callback<GetBlobResult>() {
       @Override
@@ -156,8 +184,7 @@ public class GetManagerTest {
    * operation should get completed.
    */
   @Test
-  public void testAsyncWriteException()
-      throws Exception {
+  public void testAsyncWriteException() throws Exception {
     final CountDownLatch getBlobCallbackCalled = new CountDownLatch(1);
     testBadCallback(new Callback<GetBlobResult>() {
       @Override
@@ -177,8 +204,7 @@ public class GetManagerTest {
           }
 
           @Override
-          public void close()
-              throws IOException {
+          public void close() throws IOException {
             open = false;
           }
         };
@@ -196,16 +222,16 @@ public class GetManagerTest {
    * @throws Exception
    */
   private void testBadCallback(Callback<GetBlobResult> getBlobCallback, CountDownLatch getBlobCallbackCalled,
-      Boolean checkBadCallbackBlob)
-      throws Exception {
+      Boolean checkBadCallbackBlob) throws Exception {
     router = getNonBlockingRouter();
-    setOperationParams(chunkSize * 6 + 11, new GetBlobOptions());
+    setOperationParams(chunkSize * 6 + 11, new GetBlobOptionsBuilder().build());
     final CountDownLatch getBlobInfoCallbackCalled = new CountDownLatch(1);
     String blobId = router.putBlob(putBlobProperties, putUserMetadata, putChannel).get();
     List<Future<GetBlobResult>> getBlobInfoFutures = new ArrayList<>();
     List<Future<GetBlobResult>> getBlobDataFutures = new ArrayList<>();
-    GetBlobOptions infoOptions = new GetBlobOptions(GetBlobOptions.OperationType.BlobInfo, null);
-    GetBlobOptions dataOptions = new GetBlobOptions(GetBlobOptions.OperationType.Data, null);
+    GetBlobOptions infoOptions =
+        new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.BlobInfo).build();
+    GetBlobOptions dataOptions = new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.Data).build();
     for (int i = 0; i < 5; i++) {
       if (i == 1) {
         getBlobInfoFutures.add(router.getBlob(blobId, infoOptions, new Callback<GetBlobResult>() {
@@ -237,7 +263,7 @@ public class GetManagerTest {
     Assert.assertTrue("Router should not be closed", router.isOpen());
 
     // Test that GetManager is still operational
-    setOperationParams(chunkSize, new GetBlobOptions());
+    setOperationParams(chunkSize, new GetBlobOptionsBuilder().build());
     blobId = router.putBlob(putBlobProperties, putUserMetadata, putChannel).get();
     getBlobAndCompareContent(blobId);
     this.options = infoOptions;
@@ -251,15 +277,15 @@ public class GetManagerTest {
    * @throws Exception
    */
   @Test
-  public void testFailureOnAllPollThatSends()
-      throws Exception {
+  public void testFailureOnAllPollThatSends() throws Exception {
     router = getNonBlockingRouter();
-    setOperationParams(chunkSize, new GetBlobOptions());
+    setOperationParams(chunkSize, new GetBlobOptionsBuilder().build());
     String blobId = router.putBlob(putBlobProperties, putUserMetadata, putChannel).get();
     mockSelectorState.set(MockSelectorState.ThrowExceptionOnSend);
     Future future;
     try {
-      future = router.getBlob(blobId, new GetBlobOptions(GetBlobOptions.OperationType.BlobInfo, null));
+      future = router.getBlob(blobId,
+          new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.BlobInfo).build());
       while (!future.isDone()) {
         mockTime.sleep(routerConfig.routerRequestTimeoutMs + 1);
         Thread.yield();
@@ -287,12 +313,29 @@ public class GetManagerTest {
   }
 
   /**
+   * Tests Bad blobId for different get operations
+   * @throws Exception
+   */
+  @Test
+  public void testBadBlobId() throws Exception {
+    router = getNonBlockingRouter();
+    setOperationParams(chunkSize, new GetBlobOptionsBuilder().build());
+    String[] badBlobIds = {"", "abc", "123", "invalid_id", "[],/-"};
+    for (String blobId : badBlobIds) {
+      for (GetBlobOptions.OperationType opType : GetBlobOptions.OperationType.values()) {
+        getBlobAndAssertFailure(blobId, new GetBlobOptionsBuilder().operationType(opType).build(),
+            RouterErrorCode.InvalidBlobId);
+      }
+    }
+    router.close();
+  }
+
+  /**
    * Do a getBlob on the given blob id and ensure that all the data is fetched and is correct.
    * @param blobId the id of the blob (simple or composite) that needs to be fetched and compared.
    * @throws Exception
    */
-  private void getBlobAndCompareContent(String blobId)
-      throws Exception {
+  private void getBlobAndCompareContent(String blobId) throws Exception {
     GetBlobResult result = router.getBlob(blobId, options).get();
     switch (options.getOperationType()) {
       case All:
@@ -310,6 +353,25 @@ public class GetManagerTest {
   }
 
   /**
+   * Do a getBlob on the given blob id and ensure that exception is thrown with the expected error code
+   * @param blobId the id of the blob (simple or composite) that needs to be fetched and compared.
+   * @param options {@link GetBlobOptions} to be used in the get call
+   * @param expectedErrorCode expected {@link RouterErrorCode}
+   * @throws Exception
+   */
+  private void getBlobAndAssertFailure(String blobId, GetBlobOptions options, RouterErrorCode expectedErrorCode)
+      throws Exception {
+    try {
+      Future future = router.getBlob(blobId, options);
+      future.get(routerConfig.routerRequestTimeoutMs + 1, TimeUnit.MILLISECONDS);
+      Assert.fail("operation should have thrown");
+    } catch (ExecutionException e) {
+      RouterException routerException = (RouterException) e.getCause();
+      Assert.assertEquals(expectedErrorCode, routerException.getErrorCode());
+    }
+  }
+
+  /**
    * Compare and assert that the properties and user metadata in the given {@link BlobInfo} is exactly the same as
    * the original put properties and metadata.
    * @param blobInfo the {@link ReadableStreamChannel} that is the candidate for comparison.
@@ -317,6 +379,8 @@ public class GetManagerTest {
   private void compareBlobInfo(BlobInfo blobInfo) {
     Assert.assertTrue("Blob properties should match",
         RouterTestHelpers.haveEquivalentFields(putBlobProperties, blobInfo.getBlobProperties()));
+    Assert.assertEquals("Blob size in received blobProperties should be the same as actual", blobSize,
+        blobInfo.getBlobProperties().getBlobSize());
     Assert.assertArrayEquals("User metadata should match", putUserMetadata, blobInfo.getUserMetadata());
   }
 
@@ -325,15 +389,12 @@ public class GetManagerTest {
    * the original put content.
    * @param readableStreamChannel the {@link ReadableStreamChannel} that is the candidate for comparison.
    */
-  private void compareContent(ReadableStreamChannel readableStreamChannel)
-      throws Exception {
+  private void compareContent(ReadableStreamChannel readableStreamChannel) throws Exception {
     ByteBuffer putContentBuf = ByteBuffer.wrap(putContent);
     // If a range is set, compare the result against the specified byte range.
     if (options.getRange() != null) {
       ByteRange range = options.getRange().toResolvedByteRange(putContent.length);
-      int startOffset = (int) range.getStartOffset();
-      int endOffset = (int) range.getEndOffset();
-      putContentBuf = ByteBuffer.wrap(putContent, startOffset, endOffset - startOffset + 1);
+      putContentBuf = ByteBuffer.wrap(putContent, (int) range.getStartOffset(), (int) range.getRangeSize());
     }
     ByteBufferAsyncWritableChannel getChannel = new ByteBufferAsyncWritableChannel();
     Future<Long> readIntoFuture = readableStreamChannel.readInto(getChannel, null);
@@ -358,8 +419,7 @@ public class GetManagerTest {
   /**
    * @return Return a {@link NonBlockingRouter} created with default {@link VerifiableProperties}
    */
-  private NonBlockingRouter getNonBlockingRouter()
-      throws IOException {
+  private NonBlockingRouter getNonBlockingRouter() throws IOException {
     Properties properties = new Properties();
     properties.setProperty("router.hostname", "localhost");
     properties.setProperty("router.datacenter.name", "DC1");
@@ -370,8 +430,8 @@ public class GetManagerTest {
     routerConfig = new RouterConfig(vProps);
     router = new NonBlockingRouter(routerConfig, new NonBlockingRouterMetrics(mockClusterMap),
         new MockNetworkClientFactory(vProps, mockSelectorState, MAX_PORTS_PLAIN_TEXT, MAX_PORTS_SSL,
-            CHECKOUT_TIMEOUT_MS, mockServerLayout, mockTime), new LoggingNotificationSystem(), mockClusterMap,
-        mockTime);
+            CHECKOUT_TIMEOUT_MS, mockServerLayout, mockTime), new LoggingNotificationSystem(), mockClusterMap, kms,
+        cryptoService, cryptoJobHandler, mockTime);
     return router;
   }
 
@@ -381,8 +441,9 @@ public class GetManagerTest {
    * @param options the options for the get request
    */
   private void setOperationParams(int blobSize, GetBlobOptions options) {
-    putBlobProperties =
-        new BlobProperties(blobSize, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time);
+    this.blobSize = blobSize;
+    putBlobProperties = new BlobProperties(-1, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time,
+        Utils.getRandomShort(TestUtils.RANDOM), Utils.getRandomShort(TestUtils.RANDOM), testEncryption);
     putUserMetadata = new byte[10];
     random.nextBytes(putUserMetadata);
     putContent = new byte[blobSize];

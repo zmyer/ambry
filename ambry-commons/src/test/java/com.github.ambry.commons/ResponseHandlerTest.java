@@ -24,8 +24,8 @@ import com.github.ambry.network.ConnectionPoolTimeoutException;
 import com.github.ambry.network.NetworkClientErrorCode;
 import com.github.ambry.router.RouterErrorCode;
 import com.github.ambry.router.RouterException;
-import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.SocketException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,6 +35,8 @@ import java.util.Map;
 import java.util.Set;
 import org.junit.Assert;
 import org.junit.Test;
+
+import static com.github.ambry.clustermap.ClusterMapUtils.*;
 
 
 /**
@@ -47,13 +49,12 @@ public class ResponseHandlerTest {
     Set<ReplicaEventType> lastReplicaEvents;
 
     public DummyMap() {
-      lastReplicaEvents = new HashSet<ReplicaEventType>();
+      lastReplicaEvents = new HashSet<>();
       lastReplicaID = null;
     }
 
     @Override
-    public PartitionId getPartitionIdFromStream(DataInputStream stream)
-        throws IOException {
+    public PartitionId getPartitionIdFromStream(InputStream stream) throws IOException {
       return null;
     }
 
@@ -63,8 +64,18 @@ public class ResponseHandlerTest {
     }
 
     @Override
+    public List<PartitionId> getAllPartitionIds() {
+      return null;
+    }
+
+    @Override
     public boolean hasDatacenter(String datacenterName) {
       return false;
+    }
+
+    @Override
+    public byte getLocalDatacenterId() {
+      return UNKNOWN_DATACENTER_ID;
     }
 
     @Override
@@ -93,6 +104,10 @@ public class ResponseHandlerTest {
       lastReplicaEvents.add(event);
     }
 
+    @Override
+    public void close() {
+    }
+
     public void reset() {
       lastReplicaID = null;
       lastReplicaEvents.clear();
@@ -116,15 +131,14 @@ public class ResponseHandlerTest {
 
     expectedEventTypes.put(new SocketException(), new ReplicaEventType[]{ReplicaEventType.Node_Timeout});
     expectedEventTypes.put(new IOException(), new ReplicaEventType[]{ReplicaEventType.Node_Timeout});
-    expectedEventTypes
-        .put(new ConnectionPoolTimeoutException(""), new ReplicaEventType[]{ReplicaEventType.Node_Timeout});
+    expectedEventTypes.put(new ConnectionPoolTimeoutException(""),
+        new ReplicaEventType[]{ReplicaEventType.Node_Timeout});
     expectedEventTypes.put(ServerErrorCode.IO_Error,
         new ReplicaEventType[]{ReplicaEventType.Node_Response, ReplicaEventType.Disk_Error});
     expectedEventTypes.put(ServerErrorCode.Disk_Unavailable,
         new ReplicaEventType[]{ReplicaEventType.Node_Response, ReplicaEventType.Disk_Error});
     expectedEventTypes.put(ServerErrorCode.Partition_ReadOnly,
-        new ReplicaEventType[]{ReplicaEventType.Node_Response, ReplicaEventType.Disk_Ok,
-            ReplicaEventType.Partition_ReadOnly});
+        new ReplicaEventType[]{ReplicaEventType.Node_Response, ReplicaEventType.Disk_Ok, ReplicaEventType.Partition_ReadOnly});
     expectedEventTypes.put(ServerErrorCode.Unknown_Error,
         new ReplicaEventType[]{ReplicaEventType.Node_Response, ReplicaEventType.Disk_Ok});
     expectedEventTypes.put(ServerErrorCode.No_Error,

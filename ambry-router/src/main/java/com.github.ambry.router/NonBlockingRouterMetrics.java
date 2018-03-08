@@ -20,8 +20,10 @@ import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.DataNodeId;
+import com.github.ambry.utils.SystemTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 
@@ -39,8 +41,14 @@ public class NonBlockingRouterMetrics {
   public final Meter getBlobOperationRate;
   public final Meter getBlobWithRangeOperationRate;
   public final Meter deleteBlobOperationRate;
+  public final Meter putEncryptedBlobOperationRate;
+  public final Meter getEncryptedBlobInfoOperationRate;
+  public final Meter getEncryptedBlobOperationRate;
+  public final Meter getEncryptedBlobWithRangeOperationRate;
   public final Meter operationQueuingRate;
   public final Meter operationDequeuingRate;
+  public final Meter getBlobNotOriginateLocalOperationRate;
+  public final Meter deleteBlobNotOriginateLocalOperationRate;
 
   // Latency.
   public final Histogram putBlobOperationLatencyMs;
@@ -48,6 +56,11 @@ public class NonBlockingRouterMetrics {
   public final Histogram getBlobInfoOperationLatencyMs;
   public final Histogram getBlobOperationLatencyMs;
   public final Histogram getBlobOperationTotalTimeMs;
+  public final Histogram putEncryptedBlobOperationLatencyMs;
+  public final Histogram putEncryptedChunkOperationLatencyMs;
+  public final Histogram getEncryptedBlobInfoOperationLatencyMs;
+  public final Histogram getEncryptedBlobOperationLatencyMs;
+  public final Histogram getEncryptedBlobOperationTotalTimeMs;
   public final Histogram deleteBlobOperationLatencyMs;
   public final Histogram routerRequestLatencyMs;
 
@@ -56,6 +69,10 @@ public class NonBlockingRouterMetrics {
   public final Counter getBlobInfoErrorCount;
   public final Counter getBlobErrorCount;
   public final Counter getBlobWithRangeErrorCount;
+  public final Counter putEncryptedBlobErrorCount;
+  public final Counter getEncryptedBlobInfoErrorCount;
+  public final Counter getEncryptedBlobErrorCount;
+  public final Counter getEncryptedBlobWithRangeErrorCount;
   public final Counter deleteBlobErrorCount;
   public final Counter operationAbortCount;
   public final Counter routerRequestErrorCount;
@@ -93,6 +110,10 @@ public class NonBlockingRouterMetrics {
   public final Histogram deleteManagerHandleResponseTimeMs;
   // time spent in getting a chunk filled once it is available.
   public final Histogram chunkFillTimeMs;
+  // time spent in encrypting a chunk once filling is complete
+  public final Histogram encryptTimeMs;
+  // time spent in decrypting content for a single getChunk or UserMetadata in case of GetBlobInfo
+  public final Histogram decryptTimeMs;
   // time spent waiting for a chunk to become available for filling once data is available.
   public final Histogram waitTimeForFreeChunkAvailabilityMs;
   // time spent by a chunk waiting for data to become available in the channel.
@@ -100,6 +121,7 @@ public class NonBlockingRouterMetrics {
 
   // Misc metrics.
   public final Meter operationErrorRate;
+  public final Meter encryptedOperationErrorRate;
   public final Counter slippedPutAttemptCount;
   public final Counter slippedPutSuccessCount;
   public final Counter ignoredResponseCount;
@@ -107,7 +129,6 @@ public class NonBlockingRouterMetrics {
   public final Counter crossColoSuccessCount;
   public Gauge<Long> chunkFillerThreadRunning;
   public Gauge<Long> requestResponseHandlerThreadRunning;
-  public Gauge<Integer> activeOperations;
 
   // metrics for tracking blob sizes and chunking.
   public final Histogram putBlobSizeBytes;
@@ -120,6 +141,23 @@ public class NonBlockingRouterMetrics {
   public final Counter simpleBlobGetCount;
   public final Counter compositeBlobPutCount;
   public final Counter compositeBlobGetCount;
+
+  // AdaptiveOperationTracker metrics
+  public final Histogram getBlobLocalColoLatencyMs;
+  public final Histogram getBlobCrossColoLatencyMs;
+  public final Counter getBlobPastDueCount;
+
+  public final Histogram getBlobInfoLocalColoLatencyMs;
+  public final Histogram getBlobInfoCrossColoLatencyMs;
+  public final Counter getBlobInfoPastDueCount;
+
+  // Workload characteristics
+  public final AgeAtAccessMetrics ageAtGet;
+  public final AgeAtAccessMetrics ageAtDelete;
+
+  // Crypto job metrics
+  public final CryptoJobMetrics encryptJobMetrics;
+  public final CryptoJobMetrics decryptJobMetrics;
 
   // Map that stores dataNode-level metrics.
   private final Map<DataNodeId, NodeLevelMetrics> dataNodeToMetrics;
@@ -134,11 +172,23 @@ public class NonBlockingRouterMetrics {
     getBlobOperationRate = metricRegistry.meter(MetricRegistry.name(GetBlobOperation.class, "GetBlobOperationRate"));
     getBlobWithRangeOperationRate =
         metricRegistry.meter(MetricRegistry.name(GetBlobOperation.class, "GetBlobWithRangeOperationRate"));
+    putEncryptedBlobOperationRate =
+        metricRegistry.meter(MetricRegistry.name(PutOperation.class, "PutEncryptedBlobOperationRate"));
+    getEncryptedBlobInfoOperationRate =
+        metricRegistry.meter(MetricRegistry.name(GetBlobInfoOperation.class, "GetEncryptedBlobInfoOperationRate"));
+    getEncryptedBlobOperationRate =
+        metricRegistry.meter(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobOperationRate"));
+    getEncryptedBlobWithRangeOperationRate =
+        metricRegistry.meter(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobWithRangeOperationRate"));
     deleteBlobOperationRate =
         metricRegistry.meter(MetricRegistry.name(DeleteOperation.class, "DeleteBlobOperationRate"));
     operationQueuingRate = metricRegistry.meter(MetricRegistry.name(NonBlockingRouter.class, "OperationQueuingRate"));
     operationDequeuingRate =
         metricRegistry.meter(MetricRegistry.name(NonBlockingRouter.class, "OperationDequeuingRate"));
+    getBlobNotOriginateLocalOperationRate =
+        metricRegistry.meter(MetricRegistry.name(GetBlobOperation.class, "GetBlobNotOriginateLocalOperationRate"));
+    deleteBlobNotOriginateLocalOperationRate =
+        metricRegistry.meter(MetricRegistry.name(DeleteOperation.class, "DeleteBlobNotOriginateLocalOperationRate"));
 
     // Latency.
     putBlobOperationLatencyMs =
@@ -151,6 +201,16 @@ public class NonBlockingRouterMetrics {
         metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "GetBlobOperationLatencyMs"));
     getBlobOperationTotalTimeMs =
         metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "GetBlobOperationTotalTimeMs"));
+    putEncryptedBlobOperationLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(PutOperation.class, "PutEncryptedBlobOperationLatencyMs"));
+    putEncryptedChunkOperationLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(PutOperation.class, "PutEncryptedChunkOperationLatencyMs"));
+    getEncryptedBlobInfoOperationLatencyMs = metricRegistry.histogram(
+        MetricRegistry.name(GetBlobInfoOperation.class, "GetEncryptedBlobInfoOperationLatencyMs"));
+    getEncryptedBlobOperationLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobOperationLatencyMs"));
+    getEncryptedBlobOperationTotalTimeMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobOperationTotalTimeMs"));
     deleteBlobOperationLatencyMs =
         metricRegistry.histogram(MetricRegistry.name(DeleteOperation.class, "DeleteBlobOperationLatencyMs"));
     routerRequestLatencyMs =
@@ -163,6 +223,14 @@ public class NonBlockingRouterMetrics {
     getBlobErrorCount = metricRegistry.counter(MetricRegistry.name(GetBlobOperation.class, "GetBlobErrorCount"));
     getBlobWithRangeErrorCount =
         metricRegistry.counter(MetricRegistry.name(GetBlobOperation.class, "GetBlobWithRangeErrorCount"));
+    putEncryptedBlobErrorCount =
+        metricRegistry.counter(MetricRegistry.name(PutOperation.class, "PutEncryptedBlobErrorCount"));
+    getEncryptedBlobInfoErrorCount =
+        metricRegistry.counter(MetricRegistry.name(GetBlobInfoOperation.class, "GetEncryptedBlobInfoErrorCount"));
+    getEncryptedBlobErrorCount =
+        metricRegistry.counter(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobErrorCount"));
+    getEncryptedBlobWithRangeErrorCount =
+        metricRegistry.counter(MetricRegistry.name(GetBlobOperation.class, "GetEncryptedBlobWithRangeErrorCount"));
     deleteBlobErrorCount = metricRegistry.counter(MetricRegistry.name(DeleteOperation.class, "DeleteBlobErrorCount"));
     operationAbortCount = metricRegistry.counter(MetricRegistry.name(NonBlockingRouter.class, "OperationAbortCount"));
     routerRequestErrorCount =
@@ -205,10 +273,10 @@ public class NonBlockingRouterMetrics {
         metricRegistry.counter(MetricRegistry.name(NonBlockingRouter.class, "ResponseDeserializationErrorCount"));
     operationManagerPollErrorCount =
         metricRegistry.counter(MetricRegistry.name(NonBlockingRouter.class, "OperationManagerPollErrorCount"));
-    operationManagerHandleResponseErrorCount = metricRegistry
-        .counter(MetricRegistry.name(NonBlockingRouter.class, "OperationManagerHandleResponseErrorCount"));
-    requestResponseHandlerUnexpectedErrorCount = metricRegistry
-        .counter(MetricRegistry.name(NonBlockingRouter.class, "RequestResponseHandlerUnexpectedErrorCount"));
+    operationManagerHandleResponseErrorCount = metricRegistry.counter(
+        MetricRegistry.name(NonBlockingRouter.class, "OperationManagerHandleResponseErrorCount"));
+    requestResponseHandlerUnexpectedErrorCount = metricRegistry.counter(
+        MetricRegistry.name(NonBlockingRouter.class, "RequestResponseHandlerUnexpectedErrorCount"));
     chunkFillerUnexpectedErrorCount =
         metricRegistry.counter(MetricRegistry.name(NonBlockingRouter.class, "ChunkFillerUnexpectedErrorCount"));
     operationFailureWithUnsetExceptionCount =
@@ -226,6 +294,8 @@ public class NonBlockingRouterMetrics {
     deleteManagerHandleResponseTimeMs =
         metricRegistry.histogram(MetricRegistry.name(DeleteManager.class, "DeleteManagerHandleResponseTimeMs"));
     chunkFillTimeMs = metricRegistry.histogram(MetricRegistry.name(PutManager.class, "ChunkFillTimeMs"));
+    encryptTimeMs = metricRegistry.histogram(MetricRegistry.name(PutManager.class, "EncryptTimeMs"));
+    decryptTimeMs = metricRegistry.histogram(MetricRegistry.name(PutManager.class, "DecryptTimeMs"));
     waitTimeForFreeChunkAvailabilityMs =
         metricRegistry.histogram(MetricRegistry.name(PutManager.class, "WaitTimeForFreeChunkAvailabilityMs"));
     waitTimeForChannelDataAvailabilityMs =
@@ -233,6 +303,8 @@ public class NonBlockingRouterMetrics {
 
     // Misc metrics.
     operationErrorRate = metricRegistry.meter(MetricRegistry.name(NonBlockingRouter.class, "OperationErrorRate"));
+    encryptedOperationErrorRate =
+        metricRegistry.meter(MetricRegistry.name(NonBlockingRouter.class, "EncryptedOperationErrorRate"));
     ignoredResponseCount = metricRegistry.counter(MetricRegistry.name(NonBlockingRouter.class, "IgnoredRequestCount"));
     slippedPutAttemptCount = metricRegistry.counter(MetricRegistry.name(PutOperation.class, "SlippedPutAttemptCount"));
     slippedPutSuccessCount = metricRegistry.counter(MetricRegistry.name(PutOperation.class, "SlippedPutSuccessCount"));
@@ -258,10 +330,31 @@ public class NonBlockingRouterMetrics {
     // Track metrics at the DataNode level.
     dataNodeToMetrics = new HashMap<>();
     for (DataNodeId dataNodeId : clusterMap.getDataNodeIds()) {
-      String dataNodeName = dataNodeId.getDatacenterName() + "." + dataNodeId.getHostname() + "." + Integer
-          .toString(dataNodeId.getPort());
+      String dataNodeName = dataNodeId.getDatacenterName() + "." + dataNodeId.getHostname() + "." + Integer.toString(
+          dataNodeId.getPort());
       dataNodeToMetrics.put(dataNodeId, new NodeLevelMetrics(metricRegistry, dataNodeName));
     }
+
+    // AdaptiveOperationTracker trackers
+    getBlobLocalColoLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "LocalColoLatencyMs"));
+    getBlobCrossColoLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobOperation.class, "CrossColoLatencyMs"));
+    getBlobPastDueCount = metricRegistry.counter(MetricRegistry.name(GetBlobOperation.class, "PastDueCount"));
+
+    getBlobInfoLocalColoLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobInfoOperation.class, "LocalColoLatencyMs"));
+    getBlobInfoCrossColoLatencyMs =
+        metricRegistry.histogram(MetricRegistry.name(GetBlobInfoOperation.class, "CrossColoLatencyMs"));
+    getBlobInfoPastDueCount = metricRegistry.counter(MetricRegistry.name(GetBlobInfoOperation.class, "PastDueCount"));
+
+    // Workload
+    ageAtGet = new AgeAtAccessMetrics(metricRegistry, "OnGet");
+    ageAtDelete = new AgeAtAccessMetrics(metricRegistry, "OnDelete");
+
+    // Encrypt/Decrypt job metrics
+    encryptJobMetrics = new CryptoJobMetrics(PutOperation.class, "Encrypt", metricRegistry);
+    decryptJobMetrics = new CryptoJobMetrics(GetOperation.class, "Decrypt", metricRegistry);
   }
 
   /**
@@ -278,9 +371,9 @@ public class NonBlockingRouterMetrics {
         return requestResponseHandlerThread.isAlive() ? 1L : 0L;
       }
     };
-    metricRegistry
-        .register(MetricRegistry.name(NonBlockingRouter.class, requestResponseHandlerThread.getName() + "Running"),
-            requestResponseHandlerThreadRunning);
+    metricRegistry.register(
+        MetricRegistry.name(NonBlockingRouter.class, requestResponseHandlerThread.getName() + "Running"),
+        requestResponseHandlerThreadRunning);
   }
 
   /**
@@ -304,14 +397,21 @@ public class NonBlockingRouterMetrics {
    * {@link com.github.ambry.router.NonBlockingRouter.OperationController} of a {@link NonBlockingRouter}.
    * @param currentOperationsCount The counter of {@link com.github.ambry.router.NonBlockingRouter.OperationController}.
    */
-  public void initializeNumActiveOperationsMetrics(final AtomicInteger currentOperationsCount) {
-    activeOperations = new Gauge<Integer>() {
+  public void initializeNumActiveOperationsMetrics(final AtomicInteger currentOperationsCount,
+      final AtomicInteger currentBackgroundOperationsCount) {
+    metricRegistry.register(MetricRegistry.name(NonBlockingRouter.class, "NumActiveOperations"), new Gauge<Integer>() {
       @Override
       public Integer getValue() {
         return currentOperationsCount.get();
       }
-    };
-    metricRegistry.register(MetricRegistry.name(NonBlockingRouter.class, "NumActiveOperations"), activeOperations);
+    });
+    metricRegistry.register(MetricRegistry.name(NonBlockingRouter.class, "NumActiveBackgroundOperations"),
+        new Gauge<Integer>() {
+          @Override
+          public Integer getValue() {
+            return currentBackgroundOperationsCount.get();
+          }
+        });
   }
 
   /**
@@ -376,53 +476,70 @@ public class NonBlockingRouterMetrics {
   /**
    * Update appropriate metrics on a putBlob operation related error.
    * @param e the {@link Exception} associated with the error.
+   * @param encryptionEnabled {@code true} if encrpytion was enabled for this operation. {@code false} otherwise
    */
-  void onPutBlobError(Exception e) {
+  void onPutBlobError(Exception e, boolean encryptionEnabled) {
     onError(e);
     if (RouterUtils.isSystemHealthError(e)) {
-      putBlobErrorCount.inc();
-      operationErrorRate.mark();
+      if (encryptionEnabled) {
+        putEncryptedBlobErrorCount.inc();
+        encryptedOperationErrorRate.mark();
+      } else {
+        putBlobErrorCount.inc();
+        operationErrorRate.mark();
+      }
     }
   }
 
   /**
    * Update appropriate metrics on a getBlob operation related error.
    * @param e the {@link Exception} associated with the error.
-   * @param options the {@link GetBlobOptions} associated with the request.
+   * @param options the {@link GetBlobOptionsInternal} associated with the request.
+   * @param encrypted {@code true} if blob is encrypted, {@code false} otherwise
    */
-  void onGetBlobError(Exception e, GetBlobOptions options) {
-    if (options.getOperationType() == GetBlobOptions.OperationType.BlobInfo) {
-      onGetBlobInfoError(e);
+  void onGetBlobError(Exception e, GetBlobOptionsInternal options, boolean encrypted) {
+    if (options.getBlobOptions.getOperationType() == GetBlobOptions.OperationType.BlobInfo) {
+      onGetBlobInfoError(e, encrypted);
     } else {
-      onGetBlobDataError(e, options);
+      onGetBlobDataError(e, options, encrypted);
     }
   }
 
   /**
    * Update appropriate metrics on a getBlobInfo operation related error.
    * @param e the {@link Exception} associated with the error.
+   * @param encrypted {@code true} if blob is encrypted, {@code false} otherwise
    */
-  private void onGetBlobInfoError(Exception e) {
+  private void onGetBlobInfoError(Exception e, boolean encrypted) {
     onError(e);
     if (RouterUtils.isSystemHealthError(e)) {
-      getBlobInfoErrorCount.inc();
-      operationErrorRate.mark();
+      if (encrypted) {
+        getEncryptedBlobInfoErrorCount.inc();
+        encryptedOperationErrorRate.mark();
+      } else {
+        getBlobInfoErrorCount.inc();
+        operationErrorRate.mark();
+      }
     }
   }
 
   /**
    * Update appropriate metrics on a getBlob (Data or All) operation related error.
    * @param e the {@link Exception} associated with the error.
-   * @param options the {@link GetBlobOptions} associated with the request.
+   * @param options the {@link GetBlobOptionsInternal} associated with the request.
+   * @param encrypted {@code true} if blob is encrypted, {@code false} otherwise
    */
-  private void onGetBlobDataError(Exception e, GetBlobOptions options) {
+  private void onGetBlobDataError(Exception e, GetBlobOptionsInternal options, boolean encrypted) {
     onError(e);
+    Counter blobErrorCount = encrypted ? getEncryptedBlobErrorCount : getBlobErrorCount;
+    Counter blobWithRangeErrorCount = encrypted ? getEncryptedBlobWithRangeErrorCount : getBlobWithRangeErrorCount;
+    Meter operationErrorRateMeter = encrypted ? encryptedOperationErrorRate : operationErrorRate;
     if (RouterUtils.isSystemHealthError(e)) {
-      getBlobErrorCount.inc();
-      if (options != null && options.getRange() != null) {
-        getBlobWithRangeErrorCount.inc();
+      blobErrorCount.inc();
+      if (options != null && options.getBlobOptions.getRange() != null) {
+        blobWithRangeErrorCount.inc();
       }
-      operationErrorRate.mark();
+      operationErrorRateMeter.mark();
     }
   }
 
@@ -490,8 +607,8 @@ public class NonBlockingRouterMetrics {
       // Request latency.
       putRequestLatencyMs =
           registry.histogram(MetricRegistry.name(PutOperation.class, dataNodeName, "PutRequestLatencyMs"));
-      getBlobInfoRequestLatencyMs = registry
-          .histogram(MetricRegistry.name(GetBlobInfoOperation.class, dataNodeName, "GetBlobInfoRequestLatencyMs"));
+      getBlobInfoRequestLatencyMs = registry.histogram(
+          MetricRegistry.name(GetBlobInfoOperation.class, dataNodeName, "GetBlobInfoRequestLatencyMs"));
       getRequestLatencyMs =
           registry.histogram(MetricRegistry.name(GetBlobOperation.class, dataNodeName, "GetRequestLatencyMs"));
       deleteRequestLatencyMs =
@@ -500,12 +617,228 @@ public class NonBlockingRouterMetrics {
       // Request error count.
       putRequestErrorCount =
           registry.counter(MetricRegistry.name(PutOperation.class, dataNodeName, "PutRequestErrorCount"));
-      getBlobInfoRequestErrorCount = registry
-          .counter(MetricRegistry.name(GetBlobInfoOperation.class, dataNodeName, "GetBlobInfoRequestErrorCount"));
+      getBlobInfoRequestErrorCount = registry.counter(
+          MetricRegistry.name(GetBlobInfoOperation.class, dataNodeName, "GetBlobInfoRequestErrorCount"));
       getRequestErrorCount =
           registry.counter(MetricRegistry.name(GetBlobOperation.class, dataNodeName, "GetRequestErrorCount"));
       deleteRequestErrorCount =
           registry.counter(MetricRegistry.name(DeleteOperation.class, dataNodeName, "DeleteRequestErrorCount"));
     }
   }
+
+  /**
+   * Tracks the age of a blob at the time of access.
+   */
+  public static class AgeAtAccessMetrics {
+    private final Histogram ageInMs;
+    private final Counter lessThanMinuteOld;
+    private final Counter betweenMinuteAndHourOld;
+    private final Counter betweenHourAndDayOld;
+    private final Counter betweenDayAndWeekOld;
+    private final Counter betweenWeekAndMonthOld;
+    private final Counter betweenMonthAndThreeMonthsOld;
+    private final Counter betweenThreeMonthsAndSixMonthsOld;
+    private final Counter betweenSixMonthsAndYearOld;
+    private final Counter moreThanYearOld;
+
+    /**
+     * @param registry the {@link MetricRegistry} to use.
+     * @param accessType the type of access (get, delete).
+     */
+    private AgeAtAccessMetrics(MetricRegistry registry, String accessType) {
+      ageInMs = registry.histogram(MetricRegistry.name(NonBlockingRouter.class, accessType, "AgeInMs"));
+      lessThanMinuteOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "LessThanMinuteOld"));
+      betweenMinuteAndHourOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenMinuteAndHourOld"));
+      betweenHourAndDayOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenHourAndDayOld"));
+      betweenDayAndWeekOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenDayAndWeekOld"));
+      betweenWeekAndMonthOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenWeekAndMonthOld"));
+      betweenMonthAndThreeMonthsOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenMonthAndThreeMonthsOld"));
+      betweenThreeMonthsAndSixMonthsOld = registry.counter(
+          MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenThreeMonthsAndSixMonthsOld"));
+      betweenSixMonthsAndYearOld =
+          registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "BetweenSixMonthsAndYearOld"));
+      moreThanYearOld = registry.counter(MetricRegistry.name(NonBlockingRouter.class, accessType, "MoreThanYearOld"));
+    }
+
+    /**
+     * Tracks the age of the time of access.
+     * @param creationTimeMs the time of creation of the blob.
+     */
+    void trackAgeAtAccess(long creationTimeMs) {
+      long ageInMs = SystemTime.getInstance().milliseconds() - creationTimeMs;
+      this.ageInMs.update(ageInMs);
+      if (ageInMs < TimeUnit.MINUTES.toMillis(1)) {
+        lessThanMinuteOld.inc();
+      } else if (ageInMs < TimeUnit.HOURS.toMillis(1)) {
+        betweenMinuteAndHourOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(1)) {
+        betweenHourAndDayOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(7)) {
+        betweenDayAndWeekOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(30)) {
+        betweenWeekAndMonthOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(30 * 3)) {
+        betweenMonthAndThreeMonthsOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(30 * 6)) {
+        betweenThreeMonthsAndSixMonthsOld.inc();
+      } else if (ageInMs < TimeUnit.DAYS.toMillis(30 * 12)) {
+        betweenSixMonthsAndYearOld.inc();
+      } else {
+        moreThanYearOld.inc();
+      }
+    }
+  }
 }
+
+/**
+ * A metrics object that is provided as input to {@link CryptoJob}.
+ * </p>
+ * It is expected that each type of crypto job will have it's own instance of CryptoJobMetrics and the same instance is
+ * used to track all jobs of that type.
+ */
+class CryptoJobMetrics {
+  private static final String JOB_QUEUING_TIME_SUFFIX = "JobQueuingTimeInMs";
+  private static final String JOB_PROCESSING_TIME_SUFFIX = "JobProcessingTimeInMs";
+  private static final String JOB_CALLBACK_PROCESSING_TIME_SUFFIX = "JobCallbackProcessingTimeInMs";
+  private static final String JOB_RESULT_PROCESSING_WAIT_TIME_SUFFIX = "JobResultProcessingWaitTimeInMs";
+  private static final String JOB_RESULT_PROCESSING_TIME_SUFFIX = "JobResultProcessingTimeInMs";
+  private static final String ROUND_TRIP_TIME_SUFFIX = "RoundTripTimeInMs";
+
+  private static final String OPERATION_RATE_SUFFIX = "Rate";
+  private static final String OPERATION_ERROR_SUFFIX = "Error";
+
+  final Histogram jobQueuingTimeInMs;
+  final Histogram jobProcessingTimeInMs;
+  final Histogram jobCallbackProcessingTimeMs;
+  final Histogram jobResultProcessingWaitTimeMs;
+  final Histogram jobResultProcessingTimeMs;
+  final Histogram roundTripTimeInMs;
+
+  final Meter operationRate;
+  final Meter operationErrorRate;
+
+  /**
+   * Instantiates {@link CryptoJobMetrics} for {@code requestType} and attaches all the metrics related to the
+   * cryptoJob to the given {@code ownerClass}. The metrics are also registered in the provided {@code metricRegistry}.
+   * @param ownerClass the {@link Class} that is supposed to own the metrics created by this tracker.
+   * @param requestType the type of request for which a tracker is being created.
+   * @param metricRegistry the {@link MetricRegistry} to use to register the created metrics.
+   */
+  CryptoJobMetrics(Class ownerClass, String requestType, MetricRegistry metricRegistry) {
+    jobQueuingTimeInMs =
+        metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + JOB_QUEUING_TIME_SUFFIX));
+    jobProcessingTimeInMs =
+        metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + JOB_PROCESSING_TIME_SUFFIX));
+    jobCallbackProcessingTimeMs =
+        metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + JOB_CALLBACK_PROCESSING_TIME_SUFFIX));
+    jobResultProcessingWaitTimeMs =
+        metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + JOB_RESULT_PROCESSING_WAIT_TIME_SUFFIX));
+    jobResultProcessingTimeMs =
+        metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + JOB_RESULT_PROCESSING_TIME_SUFFIX));
+    roundTripTimeInMs = metricRegistry.histogram(MetricRegistry.name(ownerClass, requestType + ROUND_TRIP_TIME_SUFFIX));
+
+    operationRate = metricRegistry.meter(MetricRegistry.name(ownerClass, requestType + OPERATION_RATE_SUFFIX));
+    operationErrorRate = metricRegistry.meter(
+        MetricRegistry.name(ownerClass, requestType + OPERATION_ERROR_SUFFIX + OPERATION_RATE_SUFFIX));
+  }
+}
+
+/**
+ * Construct to support end-to-end metrics tracking for crypto jobs. Usually accompanies a single
+ * {@link CryptoJob} i.e. there is a one-to-one mapping b/w a {@link CryptoJob} and a CryptoJobMetricsTracker
+ * instance.
+ * <p/>
+ * A brief description of how the tracker works :-
+ * - When an object of type {@link CryptoJob} is instantiated, it is also expected to be associated with a
+ *    unique instance of CryptoJobMetricsTracker (tracker). The Tracker will be instantiated either with
+ *    EncryptJobMetrics or DecryptJobMetrics
+ * - As the cryptoJob passed through various phases, metrics associated with these are updated via methods exposed
+ *    by this tracker.
+ */
+class CryptoJobMetricsTracker {
+  private static final int UNINITIATED = -1;
+  private final CryptoJobMetrics cryptoJobMetrics;
+  private long jobSubmissionTimeMs = UNINITIATED;
+  private long jobProcessingStartTimeMs = UNINITIATED;
+  private long jobCallbackProcessingStartTimeMs = UNINITIATED;
+  private long jobCallbackProcessingCompleteTimeMs = UNINITIATED;
+  private long jobResultProcessingStartTimeMs = UNINITIATED;
+
+  CryptoJobMetricsTracker(CryptoJobMetrics cryptoJobMetrics) {
+    this.cryptoJobMetrics = cryptoJobMetrics;
+  }
+
+  /**
+   * Initiates the timer for the crypto job on submission
+   */
+  void onJobSubmission() {
+    cryptoJobMetrics.operationRate.mark();
+    jobSubmissionTimeMs = System.currentTimeMillis();
+  }
+
+  /**
+   * Notifies that the job processing has started for the corresponding CryptoJob
+   */
+  void onJobProcessingStart() {
+    jobProcessingStartTimeMs = System.currentTimeMillis();
+    cryptoJobMetrics.jobQueuingTimeInMs.update(jobProcessingStartTimeMs - jobSubmissionTimeMs);
+  }
+
+  /**
+   * Notifies that the job processing has completed for the corresponding CryptoJob
+   */
+  void onJobProcessingComplete() {
+    cryptoJobMetrics.jobProcessingTimeInMs.update(System.currentTimeMillis() - jobProcessingStartTimeMs);
+  }
+
+  /**
+   * Signifies that the job callback processing has started
+   */
+  void onJobCallbackProcessingStart() {
+    jobCallbackProcessingStartTimeMs = System.currentTimeMillis();
+  }
+
+  /**
+   * Signifies that the job callback processing has completed
+   */
+  void onJobCallbackProcessingComplete() {
+    jobCallbackProcessingCompleteTimeMs = System.currentTimeMillis();
+    cryptoJobMetrics.jobCallbackProcessingTimeMs.update(
+        jobCallbackProcessingCompleteTimeMs - jobCallbackProcessingStartTimeMs);
+  }
+
+  /**
+   * Signifies that the job result processing has started
+   */
+  void onJobResultProcessingStart() {
+    jobResultProcessingStartTimeMs = System.currentTimeMillis();
+    if (jobCallbackProcessingCompleteTimeMs != UNINITIATED) {
+      cryptoJobMetrics.jobResultProcessingWaitTimeMs.update(
+          jobResultProcessingStartTimeMs - jobCallbackProcessingCompleteTimeMs);
+    }
+  }
+
+  /**
+   * Signifies that the job callback processing has completed
+   */
+  void onJobResultProcessingComplete() {
+    long jobResultProcessingCompleteTimeMs = System.currentTimeMillis();
+    cryptoJobMetrics.jobResultProcessingTimeMs.update(
+        jobResultProcessingCompleteTimeMs - jobResultProcessingStartTimeMs);
+    cryptoJobMetrics.roundTripTimeInMs.update(jobResultProcessingCompleteTimeMs - jobSubmissionTimeMs);
+  }
+
+  /**
+   * Notifies an error for the corresponding CryptoJob
+   */
+  void incrementOperationError() {
+    cryptoJobMetrics.operationErrorRate.mark();
+  }
+}
+

@@ -14,17 +14,13 @@
 package com.github.ambry.network;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.commons.SSLFactory;
+import com.github.ambry.commons.TestSSLUtils;
 import com.github.ambry.config.NetworkConfig;
 import com.github.ambry.config.SSLConfig;
 import com.github.ambry.config.VerifiableProperties;
-import java.io.File;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocketFactory;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
 import java.io.DataInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.ServerSocket;
@@ -32,6 +28,12 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Properties;
 import java.util.Random;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
 
 
 public class SocketServerTest {
@@ -45,18 +47,18 @@ public class SocketServerTest {
    * Run only once for all tests
    */
   @BeforeClass
-  public static void initializeTests()
-      throws Exception {
+  public static void initializeTests() throws Exception {
     File trustStoreFile = File.createTempFile("truststore", ".jks");
-    serverSSLConfig = TestSSLUtils.createSSLConfig("DC1,DC2,DC3", SSLFactory.Mode.SERVER, trustStoreFile, "server");
-    clientSSLConfig = TestSSLUtils.createSSLConfig("DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client");
+    serverSSLConfig =
+        new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.SERVER, trustStoreFile, "server"));
+    clientSSLConfig =
+        new SSLConfig(TestSSLUtils.createSslProps("DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "client"));
     clientSSLFactory = new SSLFactory(clientSSLConfig);
     SSLContext sslContext = clientSSLFactory.getSSLContext();
     clientSSLSocketFactory = sslContext.getSocketFactory();
   }
 
-  public SocketServerTest()
-      throws Exception {
+  public SocketServerTest() throws Exception {
     Properties props = new Properties();
     VerifiableProperties propverify = new VerifiableProperties(props);
     NetworkConfig config = new NetworkConfig(propverify);
@@ -73,19 +75,16 @@ public class SocketServerTest {
   }
 
   @Test
-  public void simpleRequest()
-      throws IOException, InterruptedException {
+  public void simpleRequest() throws IOException, InterruptedException {
     simpleRequest(new Port(server.getPort(), PortType.PLAINTEXT));
   }
 
   @Test
-  public void simpleSSLRequest()
-      throws IOException, InterruptedException {
+  public void simpleSSLRequest() throws IOException, InterruptedException {
     simpleRequest(new Port(server.getSSLPort(), PortType.SSL));
   }
 
-  private void simpleRequest(Port targetPort)
-      throws IOException, InterruptedException {
+  private void simpleRequest(Port targetPort) throws IOException, InterruptedException {
     byte[] bytesToSend = new byte[1028];
     new Random().nextBytes(bytesToSend);
     ByteBuffer byteBufferToSend = ByteBuffer.wrap(bytesToSend);
@@ -129,8 +128,7 @@ public class SocketServerTest {
   /**
    * Choose a number of random available ports
    */
-  ArrayList<Integer> choosePorts(int count)
-      throws IOException {
+  ArrayList<Integer> choosePorts(int count) throws IOException {
     ArrayList<Integer> sockets = new ArrayList<Integer>();
     for (int i = 0; i < count; i++) {
       ServerSocket socket = new ServerSocket(0);
@@ -143,8 +141,7 @@ public class SocketServerTest {
   /**
    * Choose an available port
    */
-  public int choosePort()
-      throws IOException {
+  public int choosePort() throws IOException {
     return choosePorts(1).get(0);
   }
 }
