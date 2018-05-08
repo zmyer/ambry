@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 
+// TODO: 2018/3/22 by zmyer
 public abstract class BloomFilter implements IFilter {
   public final IBitSet bitset;
   public final int hashCount;

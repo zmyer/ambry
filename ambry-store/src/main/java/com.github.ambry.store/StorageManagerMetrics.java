@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Metrics for all of the stores on a node.
  */
+// TODO: 2018/3/22 by zmyer
 public class StorageManagerMetrics {
   private final MetricRegistry registry;
   public final Histogram storageManagerStartTimeMs;
@@ -55,6 +56,7 @@ public class StorageManagerMetrics {
    * Create a {@link StorageManagerMetrics} object for handling metrics related to the stores on a node.
    * @param registry the {@link MetricRegistry} to use.
    */
+  // TODO: 2018/3/22 by zmyer
   public StorageManagerMetrics(MetricRegistry registry) {
     this.registry = registry;
     storageManagerStartTimeMs =

@@ -19,39 +19,42 @@ import com.github.ambry.utils.Time;
 /**
  * Contains the destination information and bytes to send
  */
+// TODO: 2018/3/20 by zmyer
 public class NetworkSend {
-  // The Id of the connection to which the bytes need to be sent
-  private final String connectionId;
-  // The bytes to be sent over the connection
-  private final Send payload;
-  // The start time of this send
-  private final long sendStartTimeInMs;
-  private final NetworkSendMetrics metrics;
-  private final Time time;
+    // The Id of the connection to which the bytes need to be sent
+    private final String connectionId;
+    // The bytes to be sent over the connection
+    private final Send payload;
+    // The start time of this send
+    private final long sendStartTimeInMs;
+    private final NetworkSendMetrics metrics;
+    private final Time time;
 
-  public NetworkSend(String connectionId, Send payload, NetworkSendMetrics metrics, Time time) {
-    this.connectionId = connectionId;
-    this.payload = payload;
-    this.time = time;
-    this.sendStartTimeInMs = time.milliseconds();
-    this.metrics = metrics;
-  }
-
-  public long getSendStartTimeInMs() {
-    return sendStartTimeInMs;
-  }
-
-  public String getConnectionId() {
-    return connectionId;
-  }
-
-  public Send getPayload() {
-    return payload;
-  }
-
-  public void onSendComplete() {
-    if (metrics != null) {
-      metrics.updateSendTime(time.milliseconds() - sendStartTimeInMs);
+    // TODO: 2018/4/20 by zmyer
+    public NetworkSend(String connectionId, Send payload, NetworkSendMetrics metrics, Time time) {
+        this.connectionId = connectionId;
+        this.payload = payload;
+        this.time = time;
+        this.sendStartTimeInMs = time.milliseconds();
+        this.metrics = metrics;
     }
-  }
+
+    public long getSendStartTimeInMs() {
+        return sendStartTimeInMs;
+    }
+
+    public String getConnectionId() {
+        return connectionId;
+    }
+
+    public Send getPayload() {
+        return payload;
+    }
+
+    // TODO: 2018/3/27 by zmyer
+    public void onSendComplete() {
+        if (metrics != null) {
+            metrics.updateSendTime(time.milliseconds() - sendStartTimeInMs);
+        }
+    }
 }

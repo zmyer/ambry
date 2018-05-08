@@ -21,6 +21,11 @@ import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.ConnectionPoolConfig;
 import com.github.ambry.config.SSLConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
 import java.io.IOException;
 import java.net.SocketException;
 import java.util.Map;
@@ -30,242 +35,288 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocketFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-
+// TODO: 2018/3/19 by zmyer
 class BlockingChannelInfo {
-  private final ArrayBlockingQueue<BlockingChannel> blockingChannelAvailableConnections;
-  private final ArrayBlockingQueue<BlockingChannel> blockingChannelActiveConnections;
-  private final AtomicInteger numberOfConnections;
-  private final ConnectionPoolConfig config;
-  private final ReadWriteLock rwlock;
-  private final Object lock;
-  private final String host;
-  private final Port port;
-  private final Logger logger = LoggerFactory.getLogger(getClass());
-  protected Gauge<Integer> availableConnections;
-  private Gauge<Integer> activeConnections;
-  private Gauge<Integer> totalNumberOfConnections;
-  private int maxConnectionsPerHostPerPort;
-  private final SSLSocketFactory sslSocketFactory;
-  private final SSLConfig sslConfig;
-  private final MetricRegistry registry;
+    //已准备就绪的连接队列
+    private final ArrayBlockingQueue<BlockingChannel> blockingChannelAvailableConnections;
+    //活跃的连接队列
+    private final ArrayBlockingQueue<BlockingChannel> blockingChannelActiveConnections;
+    //连接数目
+    private final AtomicInteger numberOfConnections;
+    //连接池配置
+    private final ConnectionPoolConfig config;
+    //读写锁
+    private final ReadWriteLock rwlock;
+    //锁对象
+    private final Object lock;
+    //主机名
+    private final String host;
+    //端口
+    private final Port port;
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+    protected Gauge<Integer> availableConnections;
+    private Gauge<Integer> activeConnections;
+    private Gauge<Integer> totalNumberOfConnections;
+    //每个端口最大的连接数
+    private int maxConnectionsPerHostPerPort;
+    //socket工厂
+    private final SSLSocketFactory sslSocketFactory;
+    //SSL配置
+    private final SSLConfig sslConfig;
+    private final MetricRegistry registry;
 
-  public BlockingChannelInfo(ConnectionPoolConfig config, String host, Port port, MetricRegistry registry,
-      SSLSocketFactory sslSocketFactory, SSLConfig sslConfig) {
-    this.config = config;
-    this.port = port;
-    this.registry = registry;
-    if (port.getPortType() == PortType.SSL) {
-      maxConnectionsPerHostPerPort = config.connectionPoolMaxConnectionsPerPortSSL;
-    } else {
-      maxConnectionsPerHostPerPort = config.connectionPoolMaxConnectionsPerPortPlainText;
-    }
-    this.blockingChannelAvailableConnections = new ArrayBlockingQueue<BlockingChannel>(maxConnectionsPerHostPerPort);
-    this.blockingChannelActiveConnections = new ArrayBlockingQueue<BlockingChannel>(maxConnectionsPerHostPerPort);
-    this.numberOfConnections = new AtomicInteger(0);
-    this.rwlock = new ReentrantReadWriteLock();
-    this.lock = new Object();
-    this.host = host;
-    this.sslSocketFactory = sslSocketFactory;
-    this.sslConfig = sslConfig;
-
-    availableConnections = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        return blockingChannelAvailableConnections.size();
-      }
-    };
-    registry.register(
-        MetricRegistry.name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-availableConnections"),
-        availableConnections);
-
-    activeConnections = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        return blockingChannelActiveConnections.size();
-      }
-    };
-    registry.register(
-        MetricRegistry.name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-activeConnections"),
-        activeConnections);
-
-    totalNumberOfConnections = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        return numberOfConnections.intValue();
-      }
-    };
-    registry.register(
-        MetricRegistry.name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-totalNumberOfConnections"),
-        totalNumberOfConnections);
-
-    logger.info("Starting blocking channel info for host {} and port {}", host, port.getPort());
-  }
-
-  public void releaseBlockingChannel(BlockingChannel blockingChannel) {
-    rwlock.readLock().lock();
-    try {
-      if (blockingChannelActiveConnections.remove(blockingChannel)) {
-        blockingChannelAvailableConnections.add(blockingChannel);
-        logger.trace(
-            "Adding connection to {}:{} back to pool. Current available connections {} Current active connections {}",
-            blockingChannel.getRemoteHost(), blockingChannel.getRemotePort(),
-            blockingChannelAvailableConnections.size(), blockingChannelActiveConnections.size());
-      } else {
-        logger.error("Tried to add invalid connection. Channel does not belong in the active queue. Host {} port {}"
-                + " channel host {} channel port {}", host, port.getPort(), blockingChannel.getRemoteHost(),
-            blockingChannel.getRemotePort());
-      }
-    } finally {
-      rwlock.readLock().unlock();
-    }
-  }
-
-  public BlockingChannel getBlockingChannel(long timeoutInMs)
-      throws InterruptedException, ConnectionPoolTimeoutException {
-    rwlock.readLock().lock();
-    try {
-      // check if the max connections for this queue has reached or if there are any connections available
-      // in the available queue. The check in available queue is approximate and it could not have any
-      // connections when polled. In this case we just depend on an existing connection being placed back in
-      // the available pool
-      if (numberOfConnections.get() == maxConnectionsPerHostPerPort || blockingChannelAvailableConnections.size() > 0) {
-        BlockingChannel channel = blockingChannelAvailableConnections.poll(timeoutInMs, TimeUnit.MILLISECONDS);
-        if (channel != null) {
-          blockingChannelActiveConnections.add(channel);
-          logger.trace("Returning connection to " + channel.getRemoteHost() + ":" + channel.getRemotePort());
-          return channel;
-        } else if (numberOfConnections.get() == maxConnectionsPerHostPerPort) {
-          logger.error("Timed out trying to get a connection for host {} and port {}", host, port.getPort());
-          throw new ConnectionPoolTimeoutException(
-              "Could not get a connection to host " + host + " and port " + port.getPort());
+    // TODO: 2018/3/27 by zmyer
+    public BlockingChannelInfo(ConnectionPoolConfig config, String host, Port port, MetricRegistry registry,
+            SSLSocketFactory sslSocketFactory, SSLConfig sslConfig) {
+        this.config = config;
+        this.port = port;
+        this.registry = registry;
+        if (port.getPortType() == PortType.SSL) {
+            maxConnectionsPerHostPerPort = config.connectionPoolMaxConnectionsPerPortSSL;
+        } else {
+            maxConnectionsPerHostPerPort = config.connectionPoolMaxConnectionsPerPortPlainText;
         }
-      }
-      synchronized (lock) {
-        // if the number of connections created for this host and port is less than the max allowed
-        // connections, we create a new one and add it to the available queue
-        if (numberOfConnections.get() < maxConnectionsPerHostPerPort) {
-          logger.trace("Planning to create a new connection for host {} and port {} ", host, port.getPort());
-          BlockingChannel channel = getBlockingChannelBasedOnPortType(host, port.getPort());
-          channel.connect();
-          numberOfConnections.incrementAndGet();
-          logger.trace("Created a new connection for host {} and port {}. Number of connections {}", host, port,
-              numberOfConnections.get());
-          blockingChannelActiveConnections.add(channel);
-          return channel;
+        this.blockingChannelAvailableConnections = new ArrayBlockingQueue<BlockingChannel>(
+                maxConnectionsPerHostPerPort);
+        this.blockingChannelActiveConnections = new ArrayBlockingQueue<BlockingChannel>(maxConnectionsPerHostPerPort);
+        this.numberOfConnections = new AtomicInteger(0);
+        this.rwlock = new ReentrantReadWriteLock();
+        this.lock = new Object();
+        this.host = host;
+        this.sslSocketFactory = sslSocketFactory;
+        this.sslConfig = sslConfig;
+
+        availableConnections = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                return blockingChannelAvailableConnections.size();
+            }
+        };
+        registry.register(
+                MetricRegistry.name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-availableConnections"),
+                availableConnections);
+
+        activeConnections = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                return blockingChannelActiveConnections.size();
+            }
+        };
+        registry.register(
+                MetricRegistry.name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-activeConnections"),
+                activeConnections);
+
+        totalNumberOfConnections = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                return numberOfConnections.intValue();
+            }
+        };
+        registry.register(
+                MetricRegistry
+                        .name(BlockingChannelInfo.class, host + "-" + port.getPort() + "-totalNumberOfConnections"),
+                totalNumberOfConnections);
+
+        logger.info("Starting blocking channel info for host {} and port {}", host, port.getPort());
+    }
+
+    // TODO: 2018/3/27 by zmyer
+    public void releaseBlockingChannel(BlockingChannel blockingChannel) {
+        rwlock.readLock().lock();
+        try {
+            //将channel从活跃队列插入到准备队列中
+            if (blockingChannelActiveConnections.remove(blockingChannel)) {
+                blockingChannelAvailableConnections.add(blockingChannel);
+                logger.trace(
+                        "Adding connection to {}:{} back to pool. Current available connections {} Current active connections {}",
+                        blockingChannel.getRemoteHost(), blockingChannel.getRemotePort(),
+                        blockingChannelAvailableConnections.size(), blockingChannelActiveConnections.size());
+            } else {
+                logger.error(
+                        "Tried to add invalid connection. Channel does not belong in the active queue. Host {} port {}"
+                                + " channel host {} channel port {}", host, port.getPort(),
+                        blockingChannel.getRemoteHost(),
+                        blockingChannel.getRemotePort());
+            }
+        } finally {
+            rwlock.readLock().unlock();
         }
-      }
-      BlockingChannel channel = blockingChannelAvailableConnections.poll(timeoutInMs, TimeUnit.MILLISECONDS);
-      if (channel == null) {
-        logger.error("Timed out trying to get a connection for host {} and port {}", host, port);
-        throw new ConnectionPoolTimeoutException(
-            "Could not get a connection to host " + host + " and port " + port.getPort());
-      }
-      blockingChannelActiveConnections.add(channel);
-      return channel;
-    } catch (SocketException e) {
-      logger.error("Socket exception when trying to connect to remote host {} and port {}", host, port.getPort());
-      throw new ConnectionPoolTimeoutException(
-          "Socket exception when trying to connect to remote host " + host + " port " + port.getPort(), e);
-    } catch (IOException e) {
-      logger.error("IOException when trying to connect to the remote host {} and port {}", host, port.getPort());
-      throw new ConnectionPoolTimeoutException(
-          "IOException when trying to connect to remote host " + host + " port " + port.getPort(), e);
-    } finally {
-      rwlock.readLock().unlock();
     }
-  }
 
-  /**
-   * Returns BlockingChannel or SSLBlockingChannel depending on whether the port type is PlainText or SSL
-   * @param host upon which connection has to be established
-   * @param port upon which connection has to be established
-   * @return BlockingChannel
-   */
-  private BlockingChannel getBlockingChannelBasedOnPortType(String host, int port) {
-    BlockingChannel channel = null;
-    if (this.port.getPortType() == PortType.PLAINTEXT) {
-      channel = new BlockingChannel(host, port, config.connectionPoolReadBufferSizeBytes,
-          config.connectionPoolWriteBufferSizeBytes, config.connectionPoolReadTimeoutMs,
-          config.connectionPoolConnectTimeoutMs);
-    } else if (this.port.getPortType() == PortType.SSL) {
-      channel = new SSLBlockingChannel(host, port, registry, config.connectionPoolReadBufferSizeBytes,
-          config.connectionPoolWriteBufferSizeBytes, config.connectionPoolReadTimeoutMs,
-          config.connectionPoolConnectTimeoutMs, sslSocketFactory, sslConfig);
+    // TODO: 2018/3/23 by zmyer
+    public BlockingChannel getBlockingChannel(long timeoutInMs)
+            throws InterruptedException, ConnectionPoolTimeoutException {
+        rwlock.readLock().lock();
+        try {
+            // check if the max connections for this queue has reached or if there are any connections available
+            // in the available queue. The check in available queue is approximate and it could not have any
+            // connections when polled. In this case we just depend on an existing connection being placed back in
+            // the available pool
+            //如果连接数达到最大值或者准备队列中存在连接对象，则直接返回
+            if (numberOfConnections.get() == maxConnectionsPerHostPerPort ||
+                    blockingChannelAvailableConnections.size() > 0) {
+                //等待可用连接对象
+                BlockingChannel channel = blockingChannelAvailableConnections.poll(timeoutInMs, TimeUnit.MILLISECONDS);
+                if (channel != null) {
+                    //将准备队列中的channel插入到活跃队列中
+                    blockingChannelActiveConnections.add(channel);
+                    logger.trace("Returning connection to " + channel.getRemoteHost() + ":" + channel.getRemotePort());
+                    //返回channel
+                    return channel;
+                } else if (numberOfConnections.get() == maxConnectionsPerHostPerPort) {
+                    logger.error("Timed out trying to get a connection for host {} and port {}", host, port.getPort());
+                    throw new ConnectionPoolTimeoutException(
+                            "Could not get a connection to host " + host + " and port " + port.getPort());
+                }
+            }
+            synchronized (lock) {
+                // if the number of connections created for this host and port is less than the max allowed
+                // connections, we create a new one and add it to the available queue
+                //如果连接数未达到最大限制
+                if (numberOfConnections.get() < maxConnectionsPerHostPerPort) {
+                    logger.trace("Planning to create a new connection for host {} and port {} ", host, port.getPort());
+                    //创建新的channel对象
+                    BlockingChannel channel = getBlockingChannelBasedOnPortType(host, port.getPort());
+                    //开始连接
+                    channel.connect();
+                    //递增channel数目
+                    numberOfConnections.incrementAndGet();
+                    logger.trace("Created a new connection for host {} and port {}. Number of connections {}", host,
+                            port,
+                            numberOfConnections.get());
+                    //将channel插入到活跃列表中
+                    blockingChannelActiveConnections.add(channel);
+                    //返回结果
+                    return channel;
+                }
+            }
+
+            //等待准备队列中的channel对象
+            BlockingChannel channel = blockingChannelAvailableConnections.poll(timeoutInMs, TimeUnit.MILLISECONDS);
+            if (channel == null) {
+                logger.error("Timed out trying to get a connection for host {} and port {}", host, port);
+                throw new ConnectionPoolTimeoutException(
+                        "Could not get a connection to host " + host + " and port " + port.getPort());
+            }
+            //将channel对象插入到活跃列表中
+            blockingChannelActiveConnections.add(channel);
+            //返回结果
+            return channel;
+        } catch (SocketException e) {
+            logger.error("Socket exception when trying to connect to remote host {} and port {}", host, port.getPort());
+            throw new ConnectionPoolTimeoutException(
+                    "Socket exception when trying to connect to remote host " + host + " port " + port.getPort(), e);
+        } catch (IOException e) {
+            logger.error("IOException when trying to connect to the remote host {} and port {}", host, port.getPort());
+            throw new ConnectionPoolTimeoutException(
+                    "IOException when trying to connect to remote host " + host + " port " + port.getPort(), e);
+        } finally {
+            rwlock.readLock().unlock();
+        }
     }
-    return channel;
-  }
 
-  public void destroyBlockingChannel(BlockingChannel blockingChannel) {
-    rwlock.readLock().lock();
-    try {
-      boolean changed = blockingChannelActiveConnections.remove(blockingChannel);
-      if (!changed) {
-        logger.error("Invalid connection being destroyed. "
-                + "Channel does not belong to this queue. queue host {} port {} channel host {} port {}", host,
-            port.getPort(), blockingChannel.getRemoteHost(), blockingChannel.getRemotePort());
-        throw new IllegalArgumentException("Invalid connection. Channel does not belong to this queue");
-      }
-      blockingChannel.disconnect();
-      // we ensure we maintain the current count of connections to the host to avoid synchronization across threads
-      // to create the connection
-      BlockingChannel channel =
-          getBlockingChannelBasedOnPortType(blockingChannel.getRemoteHost(), blockingChannel.getRemotePort());
-      channel.connect();
-      logger.trace("Destroying connection and adding new connection for host {} port {}", host, port.getPort());
-      blockingChannelAvailableConnections.add(channel);
-    } catch (Exception e) {
-      logger.error("Connection failure to remote host {} and port {} when destroying and recreating the connection",
-          host, port.getPort());
-      synchronized (lock) {
-        // decrement the number of connections to the host and port. we were not able to maintain the count
-        numberOfConnections.decrementAndGet();
-        // at this point we are good to clean up the available connections since re-creation failed
-        do {
-          BlockingChannel channel = blockingChannelAvailableConnections.poll();
-          if (channel == null) {
-            break;
-          }
-          channel.disconnect();
-          numberOfConnections.decrementAndGet();
-        } while (true);
-      }
-    } finally {
-      rwlock.readLock().unlock();
+    /**
+     * Returns BlockingChannel or SSLBlockingChannel depending on whether the port type is PlainText or SSL
+     * @param host upon which connection has to be established
+     * @param port upon which connection has to be established
+     * @return BlockingChannel
+     */
+    // TODO: 2018/3/27 by zmyer
+    private BlockingChannel getBlockingChannelBasedOnPortType(String host, int port) {
+        BlockingChannel channel = null;
+        if (this.port.getPortType() == PortType.PLAINTEXT) {
+            //创建新的channel对象
+            channel = new BlockingChannel(host, port, config.connectionPoolReadBufferSizeBytes,
+                    config.connectionPoolWriteBufferSizeBytes, config.connectionPoolReadTimeoutMs,
+                    config.connectionPoolConnectTimeoutMs);
+        } else if (this.port.getPortType() == PortType.SSL) {
+            //创建SSL channel对象
+            channel = new SSLBlockingChannel(host, port, registry, config.connectionPoolReadBufferSizeBytes,
+                    config.connectionPoolWriteBufferSizeBytes, config.connectionPoolReadTimeoutMs,
+                    config.connectionPoolConnectTimeoutMs, sslSocketFactory, sslConfig);
+        }
+        return channel;
     }
-  }
 
-  /**
-   * Returns the number of connections with this BlockingChannelInfo
-   * @return
-   */
-  public int getNumberOfConnections() {
-    return this.numberOfConnections.intValue();
-  }
-
-  public void cleanup() {
-    rwlock.writeLock().lock();
-    logger.info("Cleaning all active and available connections for host {} and port {}", host, port.getPort());
-    try {
-      for (BlockingChannel channel : blockingChannelActiveConnections) {
-        channel.disconnect();
-      }
-      blockingChannelActiveConnections.clear();
-      for (BlockingChannel channel : blockingChannelAvailableConnections) {
-        channel.disconnect();
-      }
-      blockingChannelAvailableConnections.clear();
-      numberOfConnections.set(0);
-      logger.info("Cleaning completed for all active and available connections for host {} and port {}", host,
-          port.getPort());
-    } finally {
-      rwlock.writeLock().unlock();
+    // TODO: 2018/3/27 by zmyer
+    public void destroyBlockingChannel(BlockingChannel blockingChannel) {
+        rwlock.readLock().lock();
+        try {
+            //从活跃列表中删除指定的channel对象
+            boolean changed = blockingChannelActiveConnections.remove(blockingChannel);
+            if (!changed) {
+                logger.error("Invalid connection being destroyed. "
+                                + "Channel does not belong to this queue. queue host {} port {} channel host {} port {}", host,
+                        port.getPort(), blockingChannel.getRemoteHost(), blockingChannel.getRemotePort());
+                throw new IllegalArgumentException("Invalid connection. Channel does not belong to this queue");
+            }
+            //断开连接
+            blockingChannel.disconnect();
+            // we ensure we maintain the current count of connections to the host to avoid synchronization across threads
+            // to create the connection
+            //重新创建新的channel
+            BlockingChannel channel =
+                    getBlockingChannelBasedOnPortType(blockingChannel.getRemoteHost(), blockingChannel.getRemotePort());
+            //重新开始连接
+            channel.connect();
+            logger.trace("Destroying connection and adding new connection for host {} port {}", host, port.getPort());
+            //将新建的channel对象插入到准备列表中
+            blockingChannelAvailableConnections.add(channel);
+        } catch (Exception e) {
+            logger.error(
+                    "Connection failure to remote host {} and port {} when destroying and recreating the connection",
+                    host, port.getPort());
+            synchronized (lock) {
+                // decrement the number of connections to the host and port. we were not able to maintain the count
+                numberOfConnections.decrementAndGet();
+                // at this point we are good to clean up the available connections since re-creation failed
+                do {
+                    //清空所有的连接？
+                    BlockingChannel channel = blockingChannelAvailableConnections.poll();
+                    if (channel == null) {
+                        break;
+                    }
+                    //断开连接
+                    channel.disconnect();
+                    numberOfConnections.decrementAndGet();
+                } while (true);
+            }
+        } finally {
+            rwlock.readLock().unlock();
+        }
     }
-  }
+
+    /**
+     * Returns the number of connections with this BlockingChannelInfo
+     * @return
+     */
+    public int getNumberOfConnections() {
+        return this.numberOfConnections.intValue();
+    }
+
+    // TODO: 2018/3/27 by zmyer
+    public void cleanup() {
+        rwlock.writeLock().lock();
+        logger.info("Cleaning all active and available connections for host {} and port {}", host, port.getPort());
+        try {
+            for (BlockingChannel channel : blockingChannelActiveConnections) {
+                //断开连接
+                channel.disconnect();
+            }
+            blockingChannelActiveConnections.clear();
+            for (BlockingChannel channel : blockingChannelAvailableConnections) {
+                //断开连接
+                channel.disconnect();
+            }
+            blockingChannelAvailableConnections.clear();
+            numberOfConnections.set(0);
+            logger.info("Cleaning completed for all active and available connections for host {} and port {}", host,
+                    port.getPort());
+        } finally {
+            rwlock.writeLock().unlock();
+        }
+    }
 }
 
 /**
@@ -274,180 +325,210 @@ class BlockingChannelInfo {
  * checkout a new connection, checkin an existing connection that has been
  * checked out and destroy a connection in the case of an error
  */
+// TODO: 2018/3/19 by zmyer
 public final class BlockingChannelConnectionPool implements ConnectionPool {
+    //连接集合
+    private final Map<String, BlockingChannelInfo> connections;
+    //连接配置对象
+    private final ConnectionPoolConfig config;
+    //日志对象
+    private final Logger logger = LoggerFactory.getLogger(getClass());
+    //metric注册对象
+    private final MetricRegistry registry;
+    //checkout计时器
+    private final Timer connectionCheckOutTime;
+    //checkin计时器
+    private final Timer connectionCheckInTime;
+    //销毁计时器
+    private final Timer connectionDestroyTime;
+    //等待输出的请求数目
+    private final AtomicInteger requestsWaitingToCheckoutConnectionCount;
+    //SSLSocket工厂对象
+    private SSLSocketFactory sslSocketFactory;
+    //SSL配置信息
+    private final SSLConfig sslConfig;
+    // Represents the total number to nodes connectedTo, i.e. if the blockingchannel has atleast 1 connection
+    private Gauge<Integer> totalNumberOfNodesConnectedTo;
+    // Represents the total number of connections, in other words, aggregate of the connections from all nodes
+    public Gauge<Integer> totalNumberOfConnections;
+    // Represents the number of requests waiting to checkout a connection
+    public Gauge<Integer> requestsWaitingToCheckoutConnection;
+    // Represents the number of sslSocketFactory Initializations by client
+    public Counter sslSocketFactoryClientInitializationCount;
+    // Represents the number of sslSocketFactory Initialization Error by client
+    public Counter sslSocketFactoryClientInitializationErrorCount;
 
-  private final Map<String, BlockingChannelInfo> connections;
-  private final ConnectionPoolConfig config;
-  private final Logger logger = LoggerFactory.getLogger(getClass());
-  private final MetricRegistry registry;
-  private final Timer connectionCheckOutTime;
-  private final Timer connectionCheckInTime;
-  private final Timer connectionDestroyTime;
-  private final AtomicInteger requestsWaitingToCheckoutConnectionCount;
-  private SSLSocketFactory sslSocketFactory;
-  private final SSLConfig sslConfig;
-  // Represents the total number to nodes connectedTo, i.e. if the blockingchannel has atleast 1 connection
-  private Gauge<Integer> totalNumberOfNodesConnectedTo;
-  // Represents the total number of connections, in other words, aggregate of the connections from all nodes
-  public Gauge<Integer> totalNumberOfConnections;
-  // Represents the number of requests waiting to checkout a connection
-  public Gauge<Integer> requestsWaitingToCheckoutConnection;
-  // Represents the number of sslSocketFactory Initializations by client
-  public Counter sslSocketFactoryClientInitializationCount;
-  // Represents the number of sslSocketFactory Initialization Error by client
-  public Counter sslSocketFactoryClientInitializationErrorCount;
+    // TODO: 2018/3/23 by zmyer
+    public BlockingChannelConnectionPool(ConnectionPoolConfig config, SSLConfig sslConfig,
+            ClusterMapConfig clusterMapConfig, MetricRegistry registry) throws Exception {
+        connections = new ConcurrentHashMap<String, BlockingChannelInfo>();
+        this.config = config;
+        this.registry = registry;
+        this.sslConfig = sslConfig;
+        connectionCheckOutTime =
+                registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionCheckOutTime"));
+        connectionCheckInTime =
+                registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionCheckInTime"));
+        connectionDestroyTime =
+                registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionDestroyTime"));
 
-  public BlockingChannelConnectionPool(ConnectionPoolConfig config, SSLConfig sslConfig,
-      ClusterMapConfig clusterMapConfig, MetricRegistry registry) throws Exception {
-    connections = new ConcurrentHashMap<String, BlockingChannelInfo>();
-    this.config = config;
-    this.registry = registry;
-    this.sslConfig = sslConfig;
-    connectionCheckOutTime =
-        registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionCheckOutTime"));
-    connectionCheckInTime =
-        registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionCheckInTime"));
-    connectionDestroyTime =
-        registry.timer(MetricRegistry.name(BlockingChannelConnectionPool.class, "connectionDestroyTime"));
+        totalNumberOfNodesConnectedTo = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                int noOfNodesConnectedTo = 0;
+                for (BlockingChannelInfo blockingChannelInfo : connections.values()) {
+                    if (blockingChannelInfo.getNumberOfConnections() > 0) {
+                        noOfNodesConnectedTo++;
+                    }
+                }
+                return noOfNodesConnectedTo;
+            }
+        };
+        registry.register(MetricRegistry.name(BlockingChannelConnectionPool.class, "totalNumberOfNodesConnectedTo"),
+                totalNumberOfNodesConnectedTo);
 
-    totalNumberOfNodesConnectedTo = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        int noOfNodesConnectedTo = 0;
-        for (BlockingChannelInfo blockingChannelInfo : connections.values()) {
-          if (blockingChannelInfo.getNumberOfConnections() > 0) {
-            noOfNodesConnectedTo++;
-          }
+        totalNumberOfConnections = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                int noOfConnections = 0;
+                for (BlockingChannelInfo blockingChannelInfo : connections.values()) {
+                    noOfConnections += blockingChannelInfo.getNumberOfConnections();
+                }
+                return noOfConnections;
+            }
+        };
+        registry.register(MetricRegistry.name(BlockingChannelConnectionPool.class, "totalNumberOfConnections"),
+                totalNumberOfConnections);
+        requestsWaitingToCheckoutConnectionCount = new AtomicInteger(0);
+        requestsWaitingToCheckoutConnection = new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+                return requestsWaitingToCheckoutConnectionCount.get();
+            }
+        };
+        registry.register(
+                MetricRegistry.name(BlockingChannelConnectionPool.class, "requestsWaitingToCheckoutConnection"),
+                requestsWaitingToCheckoutConnection);
+        sslSocketFactoryClientInitializationCount = registry.counter(
+                MetricRegistry.name(BlockingChannelConnectionPool.class, "SslSocketFactoryClientInitializationCount"));
+        sslSocketFactoryClientInitializationErrorCount = registry.counter(
+                MetricRegistry
+                        .name(BlockingChannelConnectionPool.class, "SslSocketFactoryClientInitializationErrorCount"));
+
+        if (clusterMapConfig.clusterMapSslEnabledDatacenters.length() > 0) {
+            initializeSSLSocketFactory();
+        } else {
+            this.sslSocketFactory = null;
         }
-        return noOfNodesConnectedTo;
-      }
-    };
-    registry.register(MetricRegistry.name(BlockingChannelConnectionPool.class, "totalNumberOfNodesConnectedTo"),
-        totalNumberOfNodesConnectedTo);
+    }
 
-    totalNumberOfConnections = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        int noOfConnections = 0;
-        for (BlockingChannelInfo blockingChannelInfo : connections.values()) {
-          noOfConnections += blockingChannelInfo.getNumberOfConnections();
+    // TODO: 2018/3/23 by zmyer
+    @Override
+    public void start() {
+        logger.info("BlockingChannelConnectionPool started");
+    }
+
+    // TODO: 2018/3/23 by zmyer
+    @Override
+    public void shutdown() {
+        logger.info("Shutting down the BlockingChannelConnectionPool");
+        for (Map.Entry<String, BlockingChannelInfo> channels : connections.entrySet()) {
+            channels.getValue().cleanup();
         }
-        return noOfConnections;
-      }
-    };
-    registry.register(MetricRegistry.name(BlockingChannelConnectionPool.class, "totalNumberOfConnections"),
-        totalNumberOfConnections);
-    requestsWaitingToCheckoutConnectionCount = new AtomicInteger(0);
-    requestsWaitingToCheckoutConnection = new Gauge<Integer>() {
-      @Override
-      public Integer getValue() {
-        return requestsWaitingToCheckoutConnectionCount.get();
-      }
-    };
-    registry.register(MetricRegistry.name(BlockingChannelConnectionPool.class, "requestsWaitingToCheckoutConnection"),
-        requestsWaitingToCheckoutConnection);
-    sslSocketFactoryClientInitializationCount = registry.counter(
-        MetricRegistry.name(BlockingChannelConnectionPool.class, "SslSocketFactoryClientInitializationCount"));
-    sslSocketFactoryClientInitializationErrorCount = registry.counter(
-        MetricRegistry.name(BlockingChannelConnectionPool.class, "SslSocketFactoryClientInitializationErrorCount"));
-
-    if (clusterMapConfig.clusterMapSslEnabledDatacenters.length() > 0) {
-      initializeSSLSocketFactory();
-    } else {
-      this.sslSocketFactory = null;
     }
-  }
 
-  @Override
-  public void start() {
-    logger.info("BlockingChannelConnectionPool started");
-  }
-
-  @Override
-  public void shutdown() {
-    logger.info("Shutting down the BlockingChannelConnectionPool");
-    for (Map.Entry<String, BlockingChannelInfo> channels : connections.entrySet()) {
-      channels.getValue().cleanup();
-    }
-  }
-
-  private void initializeSSLSocketFactory() throws Exception {
-    try {
-      SSLFactory sslFactory = new SSLFactory(sslConfig);
-      SSLContext sslContext = sslFactory.getSSLContext();
-      this.sslSocketFactory = sslContext.getSocketFactory();
-      this.sslSocketFactoryClientInitializationCount.inc();
-    } catch (Exception e) {
-      this.sslSocketFactoryClientInitializationErrorCount.inc();
-      logger.error("SSLSocketFactory Client Initialization Error ", e);
-      throw e;
-    }
-  }
-
-  @Override
-  public ConnectedChannel checkOutConnection(String host, Port port, long timeoutInMs)
-      throws IOException, InterruptedException, ConnectionPoolTimeoutException {
-    final Timer.Context context = connectionCheckOutTime.time();
-    try {
-      requestsWaitingToCheckoutConnectionCount.incrementAndGet();
-      BlockingChannelInfo blockingChannelInfo = connections.get(host + port.getPort());
-      if (blockingChannelInfo == null) {
-        synchronized (this) {
-          blockingChannelInfo = connections.get(host + port.getPort());
-          if (blockingChannelInfo == null) {
-            logger.trace("Creating new blocking channel info for host {} and port {}", host, port.getPort());
-            blockingChannelInfo = new BlockingChannelInfo(config, host, port, registry, sslSocketFactory, sslConfig);
-            connections.put(host + port.getPort(), blockingChannelInfo);
-          } else {
-            logger.trace("Using already existing BlockingChannelInfo for " + host + ":" + port.getPort()
-                + " in synchronized block");
-          }
+    // TODO: 2018/3/23 by zmyer
+    private void initializeSSLSocketFactory() throws Exception {
+        try {
+            SSLFactory sslFactory = new SSLFactory(sslConfig);
+            SSLContext sslContext = sslFactory.getSSLContext();
+            this.sslSocketFactory = sslContext.getSocketFactory();
+            this.sslSocketFactoryClientInitializationCount.inc();
+        } catch (Exception e) {
+            this.sslSocketFactoryClientInitializationErrorCount.inc();
+            logger.error("SSLSocketFactory Client Initialization Error ", e);
+            throw e;
         }
-      } else {
-        logger.trace("Using already existing BlockingChannelInfo for " + host + ":" + port.getPort());
-      }
-      return blockingChannelInfo.getBlockingChannel(timeoutInMs);
-    } finally {
-      requestsWaitingToCheckoutConnectionCount.decrementAndGet();
-      context.stop();
     }
-  }
 
-  @Override
-  public void checkInConnection(ConnectedChannel connectedChannel) {
-    final Timer.Context context = connectionCheckInTime.time();
-    try {
-      BlockingChannelInfo blockingChannelInfo =
-          connections.get(connectedChannel.getRemoteHost() + connectedChannel.getRemotePort());
-      if (blockingChannelInfo == null) {
-        logger.error("Unexpected state in connection pool. Host {} and port {} not found to checkin connection",
-            connectedChannel.getRemoteHost(), connectedChannel.getRemotePort());
-        throw new IllegalArgumentException("Connection does not belong to the pool");
-      }
-      blockingChannelInfo.releaseBlockingChannel((BlockingChannel) connectedChannel);
-      logger.trace("Checking in connection for host {} and port {}", connectedChannel.getRemoteHost(),
-          connectedChannel.getRemotePort());
-    } finally {
-      context.stop();
+    // TODO: 2018/3/23 by zmyer
+    @Override
+    public ConnectedChannel checkOutConnection(String host, Port port, long timeoutInMs)
+            throws IOException, InterruptedException, ConnectionPoolTimeoutException {
+        final Timer.Context context = connectionCheckOutTime.time();
+        try {
+            requestsWaitingToCheckoutConnectionCount.incrementAndGet();
+            //根据提供的连接信息，查找具体的通道信息
+            BlockingChannelInfo blockingChannelInfo = connections.get(host + port.getPort());
+            if (blockingChannelInfo == null) {
+                synchronized (this) {
+                    //获取连接信息
+                    blockingChannelInfo = connections.get(host + port.getPort());
+                    if (blockingChannelInfo == null) {
+                        logger.trace("Creating new blocking channel info for host {} and port {}", host,
+                                port.getPort());
+                        //如果当前的连接不存在，则直接创建
+                        blockingChannelInfo = new BlockingChannelInfo(config, host, port, registry, sslSocketFactory,
+                                sslConfig);
+                        //新创建的连接插入到集合中
+                        connections.put(host + port.getPort(), blockingChannelInfo);
+                    } else {
+                        logger.trace("Using already existing BlockingChannelInfo for " + host + ":" + port.getPort()
+                                + " in synchronized block");
+                    }
+                }
+            } else {
+                logger.trace("Using already existing BlockingChannelInfo for " + host + ":" + port.getPort());
+            }
+            //返回对应的通道对象
+            return blockingChannelInfo.getBlockingChannel(timeoutInMs);
+        } finally {
+            requestsWaitingToCheckoutConnectionCount.decrementAndGet();
+            context.stop();
+        }
     }
-  }
 
-  @Override
-  public void destroyConnection(ConnectedChannel connectedChannel) {
-    final Timer.Context context = connectionDestroyTime.time();
-    try {
-      BlockingChannelInfo blockingChannelInfo =
-          connections.get(connectedChannel.getRemoteHost() + connectedChannel.getRemotePort());
-      if (blockingChannelInfo == null) {
-        logger.error("Unexpected state in connection pool. Host {} and port {} not found to checkin connection",
-            connectedChannel.getRemoteHost(), connectedChannel.getRemotePort());
-        throw new IllegalArgumentException("Connection does not belong to the pool");
-      }
-      blockingChannelInfo.destroyBlockingChannel((BlockingChannel) connectedChannel);
-      logger.trace("Destroying connection for host {} and port {}", connectedChannel.getRemoteHost(),
-          connectedChannel.getRemotePort());
-    } finally {
-      context.stop();
+    // TODO: 2018/3/27 by zmyer
+    @Override
+    public void checkInConnection(ConnectedChannel connectedChannel) {
+        final Timer.Context context = connectionCheckInTime.time();
+        try {
+            //读取channel信息
+            BlockingChannelInfo blockingChannelInfo =
+                    connections.get(connectedChannel.getRemoteHost() + connectedChannel.getRemotePort());
+            if (blockingChannelInfo == null) {
+                logger.error("Unexpected state in connection pool. Host {} and port {} not found to checkin connection",
+                        connectedChannel.getRemoteHost(), connectedChannel.getRemotePort());
+                throw new IllegalArgumentException("Connection does not belong to the pool");
+            }
+            //释放掉指定的channel
+            blockingChannelInfo.releaseBlockingChannel((BlockingChannel) connectedChannel);
+            logger.trace("Checking in connection for host {} and port {}", connectedChannel.getRemoteHost(),
+                    connectedChannel.getRemotePort());
+        } finally {
+            context.stop();
+        }
     }
-  }
+
+    // TODO: 2018/3/27 by zmyer
+    @Override
+    public void destroyConnection(ConnectedChannel connectedChannel) {
+        final Timer.Context context = connectionDestroyTime.time();
+        try {
+            //获取channel信息
+            BlockingChannelInfo blockingChannelInfo =
+                    connections.get(connectedChannel.getRemoteHost() + connectedChannel.getRemotePort());
+            if (blockingChannelInfo == null) {
+                logger.error("Unexpected state in connection pool. Host {} and port {} not found to checkin connection",
+                        connectedChannel.getRemoteHost(), connectedChannel.getRemotePort());
+                throw new IllegalArgumentException("Connection does not belong to the pool");
+            }
+            //销毁指定的channel对象
+            blockingChannelInfo.destroyBlockingChannel((BlockingChannel) connectedChannel);
+            logger.trace("Destroying connection for host {} and port {}", connectedChannel.getRemoteHost(),
+                    connectedChannel.getRemotePort());
+        } finally {
+            context.stop();
+        }
+    }
 }

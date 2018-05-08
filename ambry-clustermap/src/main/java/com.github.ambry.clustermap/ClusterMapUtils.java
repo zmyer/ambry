@@ -28,6 +28,7 @@ import org.json.JSONObject;
 /**
  * A class with clustermap related utility methods for use by other classes.
  */
+// TODO: 2018/3/20 by zmyer
 public class ClusterMapUtils {
   // datacenterId == UNKNOWN_DATACENTER_ID indicate datacenterId is not available at the time when this blobId is formed.
   public static final byte UNKNOWN_DATACENTER_ID = -1;
@@ -56,6 +57,7 @@ public class ClusterMapUtils {
   /**
    * Stores all zk related info for a DC.
    */
+  // TODO: 2018/3/20 by zmyer
   public static class DcZkInfo {
     private final String dcName;
     private final byte dcId;
@@ -92,6 +94,7 @@ public class ClusterMapUtils {
    * @param port the port of the instance. Can be null.
    * @return the constructed instance name.
    */
+  // TODO: 2018/3/21 by zmyer
   public static String getInstanceName(String host, Integer port) {
     return port == null ? host : host + "_" + port;
   }
@@ -102,16 +105,21 @@ public class ClusterMapUtils {
    * @return a map of dcName -> DcInfo.
    * @throws JSONException if there is an error parsing the JSON.
    */
+  // TODO: 2018/3/21 by zmyer
   public static Map<String, DcZkInfo> parseDcJsonAndPopulateDcInfo(String dcInfoJsonString) throws JSONException {
     Map<String, DcZkInfo> dataCenterToZkAddress = new HashMap<>();
     JSONObject root = new JSONObject(dcInfoJsonString);
     JSONArray all = root.getJSONArray(ZKINFO_STR);
     for (int i = 0; i < all.length(); i++) {
       JSONObject entry = all.getJSONObject(i);
+      //读取数据中心id
       byte id = Byte.parseByte(entry.getString(DATACENTER_ID_STR));
+      //构造数据中心信息
       DcZkInfo dcZkInfo = new DcZkInfo(entry.getString(DATACENTER_STR), id, entry.getString(ZKCONNECTSTR_STR));
+      //将结果插入到集合中
       dataCenterToZkAddress.put(dcZkInfo.dcName, dcZkInfo);
     }
+    //返回结果
     return dataCenterToZkAddress;
   }
 
@@ -120,6 +128,7 @@ public class ClusterMapUtils {
    * @param instanceConfig the {@link InstanceConfig} associated with the interested instance.
    * @return the list of sealed replicas.
    */
+  // TODO: 2018/3/22 by zmyer
   static List<String> getSealedReplicas(InstanceConfig instanceConfig) {
     return instanceConfig.getRecord().getListField(ClusterMapUtils.SEALED_STR);
   }
@@ -158,6 +167,7 @@ public class ClusterMapUtils {
    * @param unqualifiedHostname hostname to be fully qualified
    * @return canonical hostname that can be compared with DataNode.getHostname()
    */
+  // TODO: 2018/3/21 by zmyer
   static String getFullyQualifiedDomainName(String unqualifiedHostname) {
     if (unqualifiedHostname == null) {
       throw new IllegalStateException("Hostname cannot be null.");
@@ -204,6 +214,7 @@ public class ClusterMapUtils {
    * Validate the disk capacity.
    * @param diskCapacityInBytes the disk capacity to validate.
    */
+  // TODO: 2018/3/21 by zmyer
   static void validateDiskCapacity(long diskCapacityInBytes) {
     if (diskCapacityInBytes < MIN_DISK_CAPACITY_IN_BYTES) {
       throw new IllegalStateException(

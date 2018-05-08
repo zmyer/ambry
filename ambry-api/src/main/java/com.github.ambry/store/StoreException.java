@@ -13,26 +13,27 @@
  */
 package com.github.ambry.store;
 
+// TODO: 2018/4/27 by zmyer
 public class StoreException extends Exception {
-  private static final long serialVersionUID = 1;
-  private final StoreErrorCodes error;
+    private static final long serialVersionUID = 1;
+    private final StoreErrorCodes error;
 
-  public StoreException(String message, StoreErrorCodes error) {
-    super(message);
-    this.error = error;
-  }
+    public StoreException(String message, StoreErrorCodes error) {
+        super(message);
+        this.error = error;
+    }
 
-  public StoreException(String message, Throwable e, StoreErrorCodes error) {
-    super(message, e);
-    this.error = error;
-  }
+    public StoreException(String message, Throwable e, StoreErrorCodes error) {
+        super(message, e);
+        this.error = error;
+    }
 
-  public StoreException(Throwable e, StoreErrorCodes error) {
-    super(e);
-    this.error = error;
-  }
+    public StoreException(Throwable e, StoreErrorCodes error) {
+        super(e);
+        this.error = error;
+    }
 
-  public StoreErrorCodes getErrorCode() {
-    return this.error;
-  }
+    public StoreErrorCodes getErrorCode() {
+        return this.error;
+    }
 }

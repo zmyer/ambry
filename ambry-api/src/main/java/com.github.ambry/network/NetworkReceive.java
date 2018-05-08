@@ -19,36 +19,37 @@ import com.github.ambry.utils.Time;
 /**
  * Contains the information about the initial send and the response bytes from the destination
  */
+// TODO: 2018/3/20 by zmyer
 public class NetworkReceive {
-  /**
-   * The connection Id which is used for this request
-   */
-  private final String connectionId;
-  /**
-   * The bytes received from the destination
-   */
-  private final BoundedByteBufferReceive receivedBytes;
+    /**
+     * The connection Id which is used for this request
+     */
+    private final String connectionId;
+    /**
+     * The bytes received from the destination
+     */
+    private final BoundedByteBufferReceive receivedBytes;
 
-  /**
-   * The start time of when the receive started
-   */
-  private final long receiveStartTimeInMs;
+    /**
+     * The start time of when the receive started
+     */
+    private final long receiveStartTimeInMs;
 
-  public NetworkReceive(String connectionId, BoundedByteBufferReceive receivedBytes, Time time) {
-    this.connectionId = connectionId;
-    this.receivedBytes = receivedBytes;
-    this.receiveStartTimeInMs = time.milliseconds();
-  }
+    public NetworkReceive(String connectionId, BoundedByteBufferReceive receivedBytes, Time time) {
+        this.connectionId = connectionId;
+        this.receivedBytes = receivedBytes;
+        this.receiveStartTimeInMs = time.milliseconds();
+    }
 
-  public String getConnectionId() {
-    return connectionId;
-  }
+    public String getConnectionId() {
+        return connectionId;
+    }
 
-  public BoundedByteBufferReceive getReceivedBytes() {
-    return receivedBytes;
-  }
+    public BoundedByteBufferReceive getReceivedBytes() {
+        return receivedBytes;
+    }
 
-  public long getReceiveStartTimeInMs() {
-    return receiveStartTimeInMs;
-  }
+    public long getReceiveStartTimeInMs() {
+        return receiveStartTimeInMs;
+    }
 }

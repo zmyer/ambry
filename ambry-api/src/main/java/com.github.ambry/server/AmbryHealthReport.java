@@ -20,29 +20,30 @@ import java.util.Map;
 /**
  * Health report for reporting various stats within a node.
  */
+// TODO: 2018/3/19 by zmyer
 public interface AmbryHealthReport {
-  /**
-   * Get the field name (accessor) to fetch quota stats in the health report.
-   * @return the key in the health report that holds the stats
-   */
-  String getQuotaStatsFieldName();
+    /**
+     * Get the field name (accessor) to fetch quota stats in the health report.
+     * @return the key in the health report that holds the stats
+     */
+    String getQuotaStatsFieldName();
 
-  /**
-   * Get the name of the health report. One Health Report can have many fields and {@link #getQuotaStatsFieldName()} is
-   * one such field. The report's structure is {@link Map<String,String>}.
-   * @return the name of the health report
-   */
-  String getReportName();
+    /**
+     * Get the name of the health report. One Health Report can have many fields and {@link #getQuotaStatsFieldName()} is
+     * one such field. The report's structure is {@link Map<String,String>}.
+     * @return the name of the health report
+     */
+    String getReportName();
 
-  /**
-   * Get the most recent health report in the form of a {@link Map}.
-   * @return a {@link Map} of String to String containing the content of the health report
-   */
-  public Map<String, String> getRecentHealthReport();
+    /**
+     * Get the most recent health report in the form of a {@link Map}.
+     * @return a {@link Map} of String to String containing the content of the health report
+     */
+    public Map<String, String> getRecentHealthReport();
 
-  /**
-   * Get the cluster wide aggregate period for the health report in minutes.
-   * @return the cluster wide aggregate period in minutes
-   */
-  long getAggregateIntervalInMinutes();
+    /**
+     * Get the cluster wide aggregate period for the health report in minutes.
+     * @return the cluster wide aggregate period in minutes
+     */
+    long getAggregateIntervalInMinutes();
 }

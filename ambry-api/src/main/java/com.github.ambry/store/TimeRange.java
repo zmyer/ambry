@@ -16,6 +16,7 @@ package com.github.ambry.store;
 /**
  * A TimeRange is the range between two times in milliseconds
  */
+// TODO: 2018/3/22 by zmyer
 public class TimeRange {
 
   private final long startTimeInMs;

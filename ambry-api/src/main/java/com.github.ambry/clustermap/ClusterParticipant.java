@@ -22,6 +22,7 @@ import java.util.List;
 /**
  * A ClusterParticipant is a component that makes up the Ambry cluster.
  */
+// TODO: 2018/3/19 by zmyer
 public interface ClusterParticipant extends AutoCloseable {
 
   /**
@@ -38,6 +39,7 @@ public interface ClusterParticipant extends AutoCloseable {
    * @param replicaId the {@link ReplicaId}
    * @param isSealed if true, the replica will be marked as sealed; otherwise it will be marked as read-write.
    */
+  // TODO: 2018/3/22 by zmyer
   boolean setReplicaSealedState(ReplicaId replicaId, boolean isSealed);
 
   /**

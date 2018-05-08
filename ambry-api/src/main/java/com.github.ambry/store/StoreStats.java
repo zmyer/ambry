@@ -21,6 +21,7 @@ import com.github.ambry.utils.Pair;
 /**
  * Exposes important stats related to a {@link Store}.
  */
+// TODO: 2018/3/22 by zmyer
 public interface StoreStats {
   /**
    * Gets the size of valid data at a particular point in time. The caller specifies a reference time and acceptable

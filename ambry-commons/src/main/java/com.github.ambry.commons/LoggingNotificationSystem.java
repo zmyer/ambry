@@ -17,40 +17,43 @@ import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.notification.BlobReplicaSourceType;
 import com.github.ambry.notification.NotificationBlobType;
 import com.github.ambry.notification.NotificationSystem;
-import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 
 /**
  * Logs all events at DEBUG level.
  */
+// TODO: 2018/3/29 by zmyer
 public class LoggingNotificationSystem implements NotificationSystem {
-  private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  @Override
-  public void close() throws IOException {
-    // No op
-  }
+    @Override
+    public void close() throws IOException {
+        // No op
+    }
 
-  @Override
-  public void onBlobCreated(String blobId, BlobProperties blobProperties, NotificationBlobType notificationBlobType) {
-    logger.debug("onBlobCreated " + blobId + ", " + blobProperties + ", " + notificationBlobType);
-  }
+    @Override
+    public void onBlobCreated(String blobId, BlobProperties blobProperties, NotificationBlobType notificationBlobType) {
+        logger.debug("onBlobCreated " + blobId + ", " + blobProperties + ", " + notificationBlobType);
+    }
 
-  @Override
-  public void onBlobDeleted(String blobId, String serviceId) {
-    logger.debug("onBlobDeleted " + blobId, ", " + serviceId);
-  }
+    @Override
+    public void onBlobDeleted(String blobId, String serviceId) {
+        logger.debug("onBlobDeleted " + blobId, ", " + serviceId);
+    }
 
-  @Override
-  public void onBlobReplicaCreated(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType) {
-    logger.debug("onBlobReplicaCreated " + sourceHost + ", " + port + ", " + blobId + ", " + sourceType);
-  }
+    @Override
+    public void onBlobReplicaCreated(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType) {
+        logger.debug("onBlobReplicaCreated " + sourceHost + ", " + port + ", " + blobId + ", " + sourceType);
+    }
 
-  @Override
-  public void onBlobReplicaDeleted(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType) {
-    logger.debug("onBlobReplicaCreated " + sourceHost + ", " + port + ", " + blobId + ", " + sourceType);
-  }
+    // TODO: 2018/4/27 by zmyer
+    @Override
+    public void onBlobReplicaDeleted(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType) {
+        logger.debug("onBlobReplicaCreated " + sourceHost + ", " + port + ", " + blobId + ", " + sourceType);
+    }
 }
 

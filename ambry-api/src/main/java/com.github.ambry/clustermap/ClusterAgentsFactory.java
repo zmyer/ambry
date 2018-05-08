@@ -21,6 +21,7 @@ import java.io.IOException;
  * A factory interface to get cluster agents such as {@link ClusterMap} and {@link ClusterParticipant}. Each type of
  * agents should be constructed at most once, and only on demand.
  */
+// TODO: 2018/3/19 by zmyer
 public interface ClusterAgentsFactory {
   /**
    * Construct and return the reference or return the reference to the previously constructed

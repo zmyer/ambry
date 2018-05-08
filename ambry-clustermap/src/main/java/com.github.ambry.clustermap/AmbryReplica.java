@@ -23,6 +23,7 @@ import static com.github.ambry.clustermap.ClusterMapUtils.*;
 /**
  * {@link ReplicaId} implementation to use within dynamic cluster managers.
  */
+// TODO: 2018/3/20 by zmyer
 class AmbryReplica implements ReplicaId {
   private final AmbryPartition partition;
   private final AmbryDisk disk;
@@ -74,6 +75,7 @@ class AmbryReplica implements ReplicaId {
     return disk.getMountPath() + File.separator + partition.toPathString();
   }
 
+  // TODO: 2018/3/28 by zmyer
   @Override
   public List<AmbryReplica> getPeerReplicaIds() {
     List<AmbryReplica> replicasOfPartition = new ArrayList<>(partition.getReplicaIds());

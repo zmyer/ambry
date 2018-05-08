@@ -23,71 +23,86 @@ import org.slf4j.LoggerFactory;
 /**
  * Request handler class
  */
+// TODO: 2018/3/20 by zmyer
 public class RequestHandler implements Runnable {
-  private final int id;
-  private final RequestResponseChannel requestChannel;
-  private final AmbryRequests requests;
-  private Logger logger = LoggerFactory.getLogger(getClass());
+    private final int id;
+    private final RequestResponseChannel requestChannel;
+    private final AmbryRequests requests;
+    private Logger logger = LoggerFactory.getLogger(getClass());
 
-  public RequestHandler(int id, RequestResponseChannel requestChannel, AmbryRequests requests) {
-    this.id = id;
-    this.requestChannel = requestChannel;
-    this.requests = requests;
-  }
-
-  public void run() {
-    while (true) {
-      try {
-        Request req = requestChannel.receiveRequest();
-        if (req.equals(EmptyRequest.getInstance())) {
-          logger.debug("Request handler {} received shut down command", id);
-          return;
-        }
-        requests.handleRequests(req);
-        logger.trace("Request handler {} handling request {}", id, req);
-      } catch (Throwable e) {
-        // TODO add metric to track background threads
-        logger.error("Exception when handling request", e);
-        // this is bad and we need to shutdown the app
-        Runtime.getRuntime().halt(1);
-      }
+    public RequestHandler(int id, RequestResponseChannel requestChannel, AmbryRequests requests) {
+        this.id = id;
+        this.requestChannel = requestChannel;
+        this.requests = requests;
     }
-  }
 
-  public void shutdown() throws InterruptedException {
-    requestChannel.sendRequest(EmptyRequest.getInstance());
-  }
+    // TODO: 2018/3/20 by zmyer
+    public void run() {
+        while (true) {
+            try {
+                Request req = requestChannel.receiveRequest();
+                if (req.equals(EmptyRequest.getInstance())) {
+                    logger.debug("Request handler {} received shut down command", id);
+                    return;
+                }
+                //开始处理请求对象
+                requests.handleRequests(req);
+                logger.trace("Request handler {} handling request {}", id, req);
+            } catch (Throwable e) {
+                // TODO add metric to track background threads
+                logger.error("Exception when handling request", e);
+                // this is bad and we need to shutdown the app
+                Runtime.getRuntime().halt(1);
+            }
+        }
+    }
+
+    public void shutdown() throws InterruptedException {
+        requestChannel.sendRequest(EmptyRequest.getInstance());
+    }
 }
 
 // Request handler pool. A pool of threads that handle requests
+// TODO: 2018/3/20 by zmyer
 class RequestHandlerPool {
+    //线程集合
+    private Thread[] threads = null;
+    //请求处理集合
+    private RequestHandler[] handlers = null;
+    //日志对象
+    private Logger logger = LoggerFactory.getLogger(getClass());
 
-  private Thread[] threads = null;
-  private RequestHandler[] handlers = null;
-  private Logger logger = LoggerFactory.getLogger(getClass());
-
-  public RequestHandlerPool(int numThreads, RequestResponseChannel requestResponseChannel, AmbryRequests requests) {
-    threads = new Thread[numThreads];
-    handlers = new RequestHandler[numThreads];
-    for (int i = 0; i < numThreads; i++) {
-      handlers[i] = new RequestHandler(i, requestResponseChannel, requests);
-      threads[i] = Utils.daemonThread("request-handler-" + i, handlers[i]);
-      threads[i].start();
+    // TODO: 2018/3/20 by zmyer
+    public RequestHandlerPool(int numThreads, RequestResponseChannel requestResponseChannel, AmbryRequests requests) {
+        //创建线程集合
+        threads = new Thread[numThreads];
+        //创建请求处理集合
+        handlers = new RequestHandler[numThreads];
+        for (int i = 0; i < numThreads; i++) {
+            //创建请求处理器
+            handlers[i] = new RequestHandler(i, requestResponseChannel, requests);
+            //创建处理线程
+            threads[i] = Utils.daemonThread("request-handler-" + i, handlers[i]);
+            //启动线程
+            threads[i].start();
+        }
     }
-  }
 
-  public void shutdown() {
-    try {
-      logger.info("shutting down");
-      for (RequestHandler handler : handlers) {
-        handler.shutdown();
-      }
-      for (Thread thread : threads) {
-        thread.join();
-      }
-      logger.info("shut down completely");
-    } catch (Exception e) {
-      logger.error("error when shutting down request handler pool {}", e);
+    // TODO: 2018/4/20 by zmyer
+    public void shutdown() {
+        try {
+            logger.info("shutting down");
+            for (RequestHandler handler : handlers) {
+                //关闭请求处理器
+                handler.shutdown();
+            }
+            for (Thread thread : threads) {
+                //关闭线程
+                thread.join();
+            }
+            logger.info("shut down completely");
+        } catch (Exception e) {
+            logger.error("error when shutting down request handler pool {}", e);
+        }
     }
-  }
 }

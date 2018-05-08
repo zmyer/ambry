@@ -14,6 +14,7 @@
 
 package com.github.ambry.config;
 
+// TODO: 2018/3/19 by zmyer
 public class DiskManagerConfig {
 
   /**
@@ -32,6 +33,7 @@ public class DiskManagerConfig {
   @Default("false")
   public final boolean diskManagerEnableSegmentPooling;
 
+  // TODO: 2018/3/19 by zmyer
   public DiskManagerConfig(VerifiableProperties verifiableProperties) {
     diskManagerReserveFileDirName =
         verifiableProperties.getString("disk.manager.reserve.file.dir.name", "reserve-pool");

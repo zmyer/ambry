@@ -50,27 +50,47 @@ import static com.github.ambry.clustermap.ClusterMapUtils.*;
  *
  * @see <a href="http://helix.apache.org">http://helix.apache.org</a>
  */
+// TODO: 2018/3/20 by zmyer
 class HelixClusterManager implements ClusterMap {
+  //日志对象
   private final Logger logger = LoggerFactory.getLogger(getClass());
+  //集群名称
   private final String clusterName;
+  //metrics注册对象
   private final MetricRegistry metricRegistry;
+  //集群配置
   private final ClusterMapConfig clusterMapConfig;
+  //数据中心集合
   private final ConcurrentHashMap<String, DcInfo> dcToDcZkInfo = new ConcurrentHashMap<>();
+  //分区集合
   private final ConcurrentHashMap<String, AmbryPartition> partitionNameToAmbryPartition = new ConcurrentHashMap<>();
+  //数据节点集合
   private final ConcurrentHashMap<String, AmbryDataNode> instanceNameToAmbryDataNode = new ConcurrentHashMap<>();
+  //分区副本集合
   private final ConcurrentHashMap<AmbryPartition, Set<AmbryReplica>> ambryPartitionToAmbryReplicas =
       new ConcurrentHashMap<>();
+  //节点副本集合
   private final ConcurrentHashMap<AmbryDataNode, Set<AmbryReplica>> ambryDataNodeToAmbryReplicas =
       new ConcurrentHashMap<>();
+  //磁盘集合
   private final ConcurrentHashMap<AmbryDataNode, Set<AmbryDisk>> ambryDataNodeToAmbryDisks = new ConcurrentHashMap<>();
+  //分区集合
   private final ConcurrentHashMap<ByteBuffer, AmbryPartition> partitionMap = new ConcurrentHashMap<>();
+  //集群总容量
   private long clusterWideRawCapacityBytes;
+  //集群已分配的容量大小
   private long clusterWideAllocatedRawCapacityBytes;
+  //集群可用容量大小
   private long clusterWideAllocatedUsableCapacityBytes;
+  //集群回调函数,主要用于查询
   private final HelixClusterManagerCallback helixClusterManagerCallback;
+  //本地数据中心id
   private final byte localDatacenterId;
+  //初始化异常对象
   private final AtomicReference<Exception> initializationException = new AtomicReference<>();
+  //
   private final AtomicLong sealedStateChangeCounter = new AtomicLong(0);
+  //集群统计对象
   final HelixClusterManagerMetrics helixClusterManagerMetrics;
 
   /**
@@ -80,6 +100,7 @@ class HelixClusterManager implements ClusterMap {
    * @throws IOException if there is an error in parsing the clusterMapConfig or in connecting with the associated
    *                     remote Zookeeper services.
    */
+  // TODO: 2018/3/21 by zmyer
   HelixClusterManager(ClusterMapConfig clusterMapConfig, String instanceName, HelixFactory helixFactory,
       MetricRegistry metricRegistry) throws IOException {
     this.clusterMapConfig = clusterMapConfig;
@@ -88,24 +109,34 @@ class HelixClusterManager implements ClusterMap {
     helixClusterManagerCallback = new HelixClusterManagerCallback();
     helixClusterManagerMetrics = new HelixClusterManagerMetrics(metricRegistry, helixClusterManagerCallback);
     try {
+      //解析数据中心集合
       final Map<String, DcZkInfo> dataCenterToZkAddress =
           parseDcJsonAndPopulateDcInfo(clusterMapConfig.clusterMapDcsZkConnectStrings);
+      //构造初始化屏障对象
       final CountDownLatch initializationAttemptComplete = new CountDownLatch(dataCenterToZkAddress.size());
       for (Map.Entry<String, DcZkInfo> entry : dataCenterToZkAddress.entrySet()) {
+        //dc名
         String dcName = entry.getKey();
+        //zk连接信息
         String zkConnectStr = entry.getValue().getZkConnectStr();
+        //创建集群变更处理对象
         ClusterChangeHandler clusterChangeHandler = new ClusterChangeHandler(dcName);
         // Initialize from every datacenter in a separate thread to speed things up.
+        //创建初始化线程
         Utils.newThread(new Runnable() {
           @Override
           public void run() {
             try {
+              //创建helix管理器
               HelixManager manager =
                   helixFactory.getZKHelixManager(clusterName, instanceName, InstanceType.SPECTATOR, zkConnectStr);
               logger.info("Connecting to Helix manager at {}", zkConnectStr);
+              //开始连接管理器
               manager.connect();
               logger.info("Established connection to Helix manager at {}", zkConnectStr);
+              //创建dc信息
               DcInfo dcInfo = new DcInfo(dcName, entry.getValue(), manager, clusterChangeHandler);
+              //将dc插入到集合中
               dcToDcZkInfo.put(dcName, dcInfo);
 
               // The initial instance config change notification is required to populate the static cluster
@@ -114,19 +145,23 @@ class HelixClusterManager implements ClusterMap {
               // notification for a change from within the same thread that adds the listener, in the context of the add
               // call. Therefore, when the call to add a listener returns, the initial notification will have been
               // received and handled.
+              //helix管理器注册实例配置变更监听器
               manager.addInstanceConfigChangeListener(clusterChangeHandler);
               logger.info("Registered instance config change listeners for Helix manager at {}", zkConnectStr);
               // Now register listeners to get notified on live instance change in every datacenter.
+              //helix管理器注册实例变更监听器
               manager.addLiveInstanceChangeListener(clusterChangeHandler);
               logger.info("Registered live instance change listeners for Helix manager at {}", zkConnectStr);
             } catch (Exception e) {
               initializationException.compareAndSet(null, e);
             } finally {
+              //初始化完毕
               initializationAttemptComplete.countDown();
             }
           }
         }, false).start();
       }
+      //等待初始化结束
       initializationAttemptComplete.await();
     } catch (Exception e) {
       initializationException.compareAndSet(null, e);
@@ -145,12 +180,14 @@ class HelixClusterManager implements ClusterMap {
       throw new IOException("Encountered exception while parsing json, connecting to Helix or initializing",
           initializationException.get());
     }
+    //获取本地数据中心id
     localDatacenterId = dcToDcZkInfo.get(clusterMapConfig.clusterMapDatacenterName).dcZkInfo.getDcId();
   }
 
   /**
    * Initialize capacity statistics.
    */
+  // TODO: 2018/3/21 by zmyer
   private void initializeCapacityStats() {
     for (Set<AmbryDisk> disks : ambryDataNodeToAmbryDisks.values()) {
       for (AmbryDisk disk : disks) {
@@ -164,6 +201,7 @@ class HelixClusterManager implements ClusterMap {
     }
   }
 
+  // TODO: 2018/3/20 by zmyer
   @Override
   public boolean hasDatacenter(String datacenterName) {
     return dcToDcZkInfo.containsKey(datacenterName);
@@ -174,20 +212,25 @@ class HelixClusterManager implements ClusterMap {
     return localDatacenterId;
   }
 
+  // TODO: 2018/3/20 by zmyer
   @Override
   public AmbryDataNode getDataNodeId(String hostname, int port) {
     return instanceNameToAmbryDataNode.get(getInstanceName(hostname, port));
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public List<AmbryReplica> getReplicaIds(DataNodeId dataNodeId) {
+    //如果数据节点类型不对，则直接报错
     if (!(dataNodeId instanceof AmbryDataNode)) {
       throw new IllegalArgumentException("Incompatible type passed in");
     }
     AmbryDataNode datanode = (AmbryDataNode) dataNodeId;
+    //从节点副本集合中查找指定节点下的副本信息
     return new ArrayList<>(ambryDataNodeToAmbryReplicas.get(datanode));
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public List<AmbryDataNode> getDataNodeIds() {
     return new ArrayList<>(instanceNameToAmbryDataNode.values());
@@ -198,20 +241,25 @@ class HelixClusterManager implements ClusterMap {
     return metricRegistry;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public void onReplicaEvent(ReplicaId replicaId, ReplicaEventType event) {
     AmbryReplica replica = (AmbryReplica) replicaId;
     switch (event) {
       case Node_Response:
+        //处理节点应答消息
         replica.getDataNodeId().onNodeResponse();
         break;
       case Node_Timeout:
+        //处理节点超时消息
         replica.getDataNodeId().onNodeTimeout();
         break;
       case Disk_Error:
+        //处理磁盘错误
         replica.getDiskId().onDiskError();
         break;
       case Disk_Ok:
+        //
         replica.getDiskId().onDiskOk();
         break;
       case Partition_ReadOnly:
@@ -220,9 +268,12 @@ class HelixClusterManager implements ClusterMap {
     }
   }
 
+  // TODO: 2018/3/20 by zmyer
   @Override
   public PartitionId getPartitionIdFromStream(InputStream stream) throws IOException {
+    //从数据流中读取分区id字节信息
     byte[] partitionBytes = AmbryPartition.readPartitionBytesFromStream(stream);
+    //获取分区id
     AmbryPartition partition = partitionMap.get(ByteBuffer.wrap(partitionBytes));
     if (partition == null) {
       throw new IOException("Partition id from stream is null");
@@ -233,24 +284,30 @@ class HelixClusterManager implements ClusterMap {
   /**
    * @return list of partition ids that are in {@link PartitionState#READ_WRITE}.
    */
+  // TODO: 2018/3/20 by zmyer
   @Override
   public List<AmbryPartition> getWritablePartitionIds() {
     List<AmbryPartition> writablePartitions = new ArrayList<>();
     List<AmbryPartition> healthyWritablePartitions = new ArrayList<>();
+    //依次遍历每个分区信息
     for (AmbryPartition partition : partitionNameToAmbryPartition.values()) {
       if (partition.getPartitionState() == PartitionState.READ_WRITE) {
+        //如果当前的分区可读写，则插入到结果集中
         writablePartitions.add(partition);
         if (areAllReplicasForPartitionUp(partition)) {
+          //如果所有的副本都是在线状态，则将该分区插入到健康列表中
           healthyWritablePartitions.add(partition);
         }
       }
     }
+    //返回结果集
     return healthyWritablePartitions.isEmpty() ? writablePartitions : healthyWritablePartitions;
   }
 
   /**
    * @return list of all partition ids in the cluster
    */
+  // TODO: 2018/3/20 by zmyer
   @Override
   public List<AmbryPartition> getAllPartitionIds() {
     return new ArrayList<>(partitionNameToAmbryPartition.values());
@@ -259,9 +316,11 @@ class HelixClusterManager implements ClusterMap {
   /**
    * Disconnect from the HelixManagers associated with each and every datacenter.
    */
+  // TODO: 2018/3/21 by zmyer
   @Override
   public void close() {
     for (DcInfo dcInfo : dcToDcZkInfo.values()) {
+      //断开helix管理器
       dcInfo.helixManager.disconnect();
     }
     dcToDcZkInfo.clear();
@@ -272,8 +331,10 @@ class HelixClusterManager implements ClusterMap {
    * @param partition the {@link AmbryPartition} to check.
    * @return true if all associated replicas are up; false otherwise.
    */
+  // TODO: 2018/3/20 by zmyer
   private boolean areAllReplicasForPartitionUp(AmbryPartition partition) {
     for (AmbryReplica replica : ambryPartitionToAmbryReplicas.get(partition)) {
+      //依次遍历每个副本信息，检查状态，如果跪掉，则直接返回
       if (replica.isDown()) {
         return false;
       }
@@ -288,8 +349,10 @@ class HelixClusterManager implements ClusterMap {
    * @param partitionString the partition id string associated with the {@link AmbryPartition}.
    * @return the {@link AmbryReplica} associated with the given parameters.
    */
+  // TODO: 2018/3/21 by zmyer
   AmbryReplica getReplicaForPartitionOnNode(String hostname, int port, String partitionString) {
     for (AmbryReplica replica : ambryDataNodeToAmbryReplicas.get(getDataNodeId(hostname, port))) {
+      //根据给定的主机名和端口以及分区信息，查找对应的副本信息
       if (replica.getPartitionId().toString().equals(partitionString)) {
         return replica;
       }
@@ -301,6 +364,7 @@ class HelixClusterManager implements ClusterMap {
    * An instance of this object is used to register as listener for Helix related changes in each datacenter. This
    * class is also responsible for handling events received.
    */
+  // TODO: 2018/3/21 by zmyer
   private class ClusterChangeHandler implements InstanceConfigChangeListener, LiveInstanceChangeListener {
     private final String dcName;
     final Set<String> allInstances = new HashSet<>();
@@ -488,6 +552,7 @@ class HelixClusterManager implements ClusterMap {
   /**
    * Class that stores all the information associated with a datacenter.
    */
+  // TODO: 2018/3/20 by zmyer
   private static class DcInfo {
     final String dcName;
     final DcZkInfo dcZkInfo;
@@ -512,6 +577,7 @@ class HelixClusterManager implements ClusterMap {
   /**
    * A callback class used to query information from the {@link HelixClusterManager}
    */
+  // TODO: 2018/3/21 by zmyer
   class HelixClusterManagerCallback implements ClusterManagerCallback {
     /**
      * Get all replica ids associated with the given {@link AmbryPartition}

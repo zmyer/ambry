@@ -20,6 +20,7 @@ import java.util.List;
 /**
  * The message set that needs to be written to a write interface
  */
+// TODO: 2018/3/22 by zmyer
 public interface MessageWriteSet {
 
   /**

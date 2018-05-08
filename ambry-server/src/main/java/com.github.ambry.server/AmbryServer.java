@@ -64,33 +64,52 @@ import static com.github.ambry.utils.Utils.*;
 /**
  * Ambry server
  */
+// TODO: 2018/3/19 by zmyer
 public class AmbryServer {
-
+  //屏障对象
   private CountDownLatch shutdownLatch = new CountDownLatch(1);
+  //网络服务器
   private NetworkServer networkServer = null;
+  //请求对象集合
   private AmbryRequests requests = null;
+  //请求处理池对象
   private RequestHandlerPool requestHandlerPool = null;
+  //调度器
   private ScheduledExecutorService scheduler = null;
+  //存储管理器
   private StorageManager storageManager = null;
+  //状态管理器
   private StatsManager statsManager = null;
+  //副本管理器
   private ReplicationManager replicationManager = null;
+  //日志对象
   private Logger logger = LoggerFactory.getLogger(getClass());
+  //校验属性
   private final VerifiableProperties properties;
+  //集群agent工厂对象
   private final ClusterAgentsFactory clusterAgentsFactory;
+  //集群对象
   private ClusterMap clusterMap;
+  //集群参入对象
   private ClusterParticipant clusterParticipant;
+  //统计注册对象
   private MetricRegistry registry = null;
   private JmxReporter reporter = null;
+  //连接池对象
   private ConnectionPool connectionPool = null;
+  //公告系统
   private final NotificationSystem notificationSystem;
   private ServerMetrics metrics = null;
+  //计时器
   private Time time;
 
+  // TODO: 2018/3/20 by zmyer
   public AmbryServer(VerifiableProperties properties, ClusterAgentsFactory clusterAgentsFactory, Time time)
       throws IOException {
     this(properties, clusterAgentsFactory, new LoggingNotificationSystem(), time);
   }
 
+  // TODO: 2018/3/20 by zmyer
   public AmbryServer(VerifiableProperties properties, ClusterAgentsFactory clusterAgentsFactory,
       NotificationSystem notificationSystem, Time time) {
     this.properties = properties;
@@ -99,11 +118,14 @@ public class AmbryServer {
     this.time = time;
   }
 
+  // TODO: 2018/3/19 by zmyer
   public void startup() throws InstantiationException {
     try {
       logger.info("starting");
+      //获取集群集合
       clusterMap = clusterAgentsFactory.getClusterMap();
       logger.info("Initialized clusterMap");
+      //获取集群参与者对象
       clusterParticipant = clusterAgentsFactory.getClusterParticipant();
       logger.info("Setting up JMX.");
       long startTime = SystemTime.getInstance().milliseconds();
@@ -113,76 +135,108 @@ public class AmbryServer {
       reporter.start();
 
       logger.info("creating configs");
+      //创建网络配置对象
       NetworkConfig networkConfig = new NetworkConfig(properties);
+      //创建存储配置对象
       StoreConfig storeConfig = new StoreConfig(properties);
+      //创建磁盘管理对象
       DiskManagerConfig diskManagerConfig = new DiskManagerConfig(properties);
+      //创建服务器配置对象
       ServerConfig serverConfig = new ServerConfig(properties);
+      //创建副本配置对象
       ReplicationConfig replicationConfig = new ReplicationConfig(properties);
+      //创建连接池配置对象
       ConnectionPoolConfig connectionPoolConfig = new ConnectionPoolConfig(properties);
+      //创建SSL配置
       SSLConfig sslConfig = new SSLConfig(properties);
+      //创建集群配置对象
       ClusterMapConfig clusterMapConfig = new ClusterMapConfig(properties);
+      //创建状态管理对象
       StatsManagerConfig statsConfig = new StatsManagerConfig(properties);
       // verify the configs
       properties.verify();
 
+      //创建服务调度线程池
       scheduler = Utils.newScheduler(serverConfig.serverSchedulerNumOfthreads, false);
       logger.info("check if node exist in clustermap host {} port {}", networkConfig.hostName, networkConfig.port);
+      //检查当前启动的服务器是否已经存在
       DataNodeId nodeId = clusterMap.getDataNodeId(networkConfig.hostName, networkConfig.port);
       if (nodeId == null) {
         throw new IllegalArgumentException("The node " + networkConfig.hostName + ":" + networkConfig.port
             + "is not present in the clustermap. Failing to start the datanode");
       }
 
+      //创建键值存储工厂对象
       StoreKeyFactory storeKeyFactory = Utils.getObj(storeConfig.storeKeyFactory, clusterMap);
+      //创建FindToken工厂对象
       FindTokenFactory findTokenFactory = Utils.getObj(replicationConfig.replicationTokenFactory, storeKeyFactory);
+      //创建存储管理器
       storageManager =
           new StorageManager(storeConfig, diskManagerConfig, scheduler, registry, clusterMap.getReplicaIds(nodeId),
               storeKeyFactory, new BlobStoreRecovery(), new BlobStoreHardDelete(),
               new WriteStatusDelegate(clusterParticipant), time);
+      //启动存储管理器
       storageManager.start();
 
+      //创建连接池对象
       connectionPool = new BlockingChannelConnectionPool(connectionPoolConfig, sslConfig, clusterMapConfig, registry);
+      //启动连接池
       connectionPool.start();
 
+      //创建副本管理器
       replicationManager =
           new ReplicationManager(replicationConfig, clusterMapConfig, storeConfig, storageManager, storeKeyFactory,
               clusterMap, scheduler, nodeId, connectionPool, registry, notificationSystem);
+      //启动副本管理器
       replicationManager.start();
 
+      //端口集合
       ArrayList<Port> ports = new ArrayList<Port>();
       ports.add(new Port(networkConfig.port, PortType.PLAINTEXT));
       if (nodeId.hasSSLPort()) {
         ports.add(new Port(nodeId.getSSLPort(), PortType.SSL));
       }
 
+      //创建网络服务器
       networkServer = new SocketServer(networkConfig, sslConfig, registry, ports);
+      //请求处理对象
       requests =
           new AmbryRequests(storageManager, networkServer.getRequestResponseChannel(), clusterMap, nodeId, registry,
               findTokenFactory, notificationSystem, replicationManager, storeKeyFactory);
+      //请求处理池对象
       requestHandlerPool = new RequestHandlerPool(serverConfig.serverRequestHandlerNumOfThreads,
           networkServer.getRequestResponseChannel(), requests);
+      //启动网络服务器
       networkServer.start();
 
       logger.info("Creating StatsManager to publish stats");
+      //获取分区id
       List<PartitionId> partitionIds = new ArrayList<>();
       for (ReplicaId replicaId : clusterMap.getReplicaIds(nodeId)) {
         partitionIds.add(replicaId.getPartitionId());
       }
+
+      //创建状态管理器
       statsManager = new StatsManager(storageManager, partitionIds, registry, statsConfig, time);
       if (serverConfig.serverStatsPublishLocalEnabled) {
+        //启动状态管理器
         statsManager.start();
       }
 
+      //ambry健康检查
       List<AmbryHealthReport> ambryHealthReports = new ArrayList<>();
       if (serverConfig.serverStatsPublishHealthReportEnabled) {
         ambryHealthReports.add(
             new QuotaHealthReport(statsManager, serverConfig.serverQuotaStatsAggregateIntervalInMinutes));
       }
 
+      //初始化集群参与者，主要是加入集群
       clusterParticipant.initialize(networkConfig.hostName, networkConfig.port, ambryHealthReports);
 
       logger.info("started");
+      //统计启动花费时间
       long processingTime = SystemTime.getInstance().milliseconds() - startTime;
+      //更新处理时间
       metrics.serverStartTimeInMs.update(processingTime);
       logger.info("Server startup time in Ms " + processingTime);
     } catch (Exception e) {
@@ -195,6 +249,7 @@ public class AmbryServer {
    * This method is expected to be called in the exit path as long as the AmbryServer instance construction was
    * successful. This is expected to be called even if {@link #startup()} did not succeed.
    */
+  // TODO: 2018/3/19 by zmyer
   public void shutdown() {
     long startTime = SystemTime.getInstance().milliseconds();
     try {

@@ -21,6 +21,7 @@ import java.util.List;
  * used by dynamic cluster manager components such as {@link AmbryDataNode}, {@link AmbryDisk},
  * {@link AmbryPartition}, and {@link AmbryReplica}
  */
+// TODO: 2018/3/20 by zmyer
 interface ClusterManagerCallback {
   /**
    * Get all replica ids associated with the given {@link AmbryPartition}

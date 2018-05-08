@@ -20,6 +20,7 @@ import org.apache.helix.participant.statemachine.StateModelFactory;
 /**
  * A factory for creating {@link AmbryStateModel}
  */
+// TODO: 2018/3/22 by zmyer
 class AmbryStateModelFactory extends StateModelFactory<StateModel> {
 
   /**
@@ -29,6 +30,7 @@ class AmbryStateModelFactory extends StateModelFactory<StateModel> {
    *
    * @return an instance of {@link AmbryStateModel}.
    */
+  // TODO: 2018/3/22 by zmyer
   @Override
   public StateModel createNewStateModel(String resourceName, String partitionName) {
     return new AmbryStateModel();

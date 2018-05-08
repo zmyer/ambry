@@ -21,6 +21,7 @@ import java.nio.channels.WritableByteChannel;
  * Any data that needs to be sent over the network can implement
  * this interface
  */
+// TODO: 2018/3/20 by zmyer
 public interface Send {
   /**
    * Writes content into the provided channel

@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
  * performing reads/writes and closing the transmission safely. This class also implements
  * ReadableByteChannel and WritableByteChannel to provide a way to encrypt and decrypt to/from a channel
  */
+// TODO: 2018/3/27 by zmyer
 public class SSLTransmission extends Transmission implements ReadableByteChannel, WritableByteChannel {
 
   private static final Logger logger = LoggerFactory.getLogger(SSLTransmission.class);
@@ -83,6 +84,7 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
   /**
    * Returns the handshake status
    */
+  // TODO: 2018/3/27 by zmyer
   @Override
   public boolean ready() {
     return handshakeComplete;
@@ -147,6 +149,7 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
    * @return boolean true if the buffer has been emptied out, false otherwise
    * @throws IOException
    */
+  // TODO: 2018/3/27 by zmyer
   private boolean flush(ByteBuffer buf) throws IOException {
     int remaining = buf.remaining();
     if (remaining > 0) {
@@ -486,6 +489,7 @@ public class SSLTransmission extends Transmission implements ReadableByteChannel
     return read;
   }
 
+  // TODO: 2018/3/27 by zmyer
   @Override
   public boolean write() throws IOException {
     Send send = networkSend.getPayload();

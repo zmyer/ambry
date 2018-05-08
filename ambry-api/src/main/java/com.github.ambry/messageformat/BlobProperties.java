@@ -21,6 +21,7 @@ import com.github.ambry.utils.Utils;
  * The properties of a blob that the client can set at time of put. The blob size and serviceId are mandatory fields and
  * must be set. The creation time is determined when this object is constructed.
  */
+// TODO: 2018/3/28 by zmyer
 public class BlobProperties {
   private final long blobSize;
   private final String serviceId;

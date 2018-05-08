@@ -16,39 +16,40 @@ package com.github.ambry.clustermap;
 /** ResourceStatePolicy is used to determine if the state of a resource is "up" or "down". For resources like data nodes
  *  and disks, up and down mean available and unavailable, respectively.
  */
+// TODO: 2018/3/20 by zmyer
 public interface ResourceStatePolicy {
-  /**
-   * Checks to see if the state is permanently down.
-   *
-   * @return true if the state is permanently down, false otherwise.
-   */
-  boolean isHardDown();
+    /**
+     * Checks to see if the state is permanently down.
+     *
+     * @return true if the state is permanently down, false otherwise.
+     */
+    boolean isHardDown();
 
-  /**
-   * Checks to see if the state is down (soft or hard).
-   *
-   * @return true if the state is down, false otherwise.
-   */
-  boolean isDown();
+    /**
+     * Checks to see if the state is down (soft or hard).
+     *
+     * @return true if the state is down, false otherwise.
+     */
+    boolean isDown();
 
-  /**
-   * Should be called by the caller every time an error is encountered for the corresponding resource.
-   */
-  void onError();
+    /**
+     * Should be called by the caller every time an error is encountered for the corresponding resource.
+     */
+    void onError();
 
-  /**
-   * May be called by the caller when the resource is responsive.
-   */
-  void onSuccess();
+    /**
+     * May be called by the caller when the resource is responsive.
+     */
+    void onSuccess();
 
-  /**
-   * Should be called if the caller knows outside of the policy that the resource has gone down.
-   */
-  void onHardDown();
+    /**
+     * Should be called if the caller knows outside of the policy that the resource has gone down.
+     */
+    void onHardDown();
 
-  /**
-   * Should be called if the caller knows outside of the policy that the resource is up.
-   */
-  void onHardUp();
+    /**
+     * Should be called if the caller knows outside of the policy that the resource is up.
+     */
+    void onHardUp();
 }
 

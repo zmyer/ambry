@@ -17,27 +17,30 @@ package com.github.ambry.clustermap;
 /**
  * Delegate class allowing BlobStore to set the replica sealed status
  */
+// TODO: 2018/3/22 by zmyer
 public class WriteStatusDelegate {
 
-  private final ClusterParticipant clusterParticipant;
+    private final ClusterParticipant clusterParticipant;
 
-  public WriteStatusDelegate(ClusterParticipant clusterParticipant) {
-    this.clusterParticipant = clusterParticipant;
-  }
+    public WriteStatusDelegate(ClusterParticipant clusterParticipant) {
+        this.clusterParticipant = clusterParticipant;
+    }
 
-  /**
-   * Sets replicaId to read-only status
-   * @param replicaId
-   */
-  public boolean seal(ReplicaId replicaId) {
-    return clusterParticipant.setReplicaSealedState(replicaId, true);
-  }
+    /**
+     * Sets replicaId to read-only status
+     * @param replicaId
+     */
+    // TODO: 2018/3/22 by zmyer
+    public boolean seal(ReplicaId replicaId) {
+        return clusterParticipant.setReplicaSealedState(replicaId, true);
+    }
 
-  /**
-   * Sets replicaId to read-write status
-   * @param replicaId
-   */
-  public boolean unseal(ReplicaId replicaId) {
-    return clusterParticipant.setReplicaSealedState(replicaId, false);
-  }
+    /**
+     * Sets replicaId to read-write status
+     * @param replicaId
+     */
+    // TODO: 2018/3/22 by zmyer
+    public boolean unseal(ReplicaId replicaId) {
+        return clusterParticipant.setReplicaSealedState(replicaId, false);
+    }
 }

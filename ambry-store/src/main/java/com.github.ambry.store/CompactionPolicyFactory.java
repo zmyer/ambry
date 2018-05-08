@@ -16,10 +16,11 @@ package com.github.ambry.store;
 /**
  *  Factory class interface to get compaction policy
  */
+// TODO: 2018/4/23 by zmyer
 interface CompactionPolicyFactory {
 
-  /**
-   * @return the {@link CompactionPolicy} to use
-   */
-  CompactionPolicy getCompactionPolicy();
+    /**
+     * @return the {@link CompactionPolicy} to use
+     */
+    CompactionPolicy getCompactionPolicy();
 }

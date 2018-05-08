@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Helix task to aggregate health reports across all storage nodes and update the helix property store with the result
  */
+// TODO: 2018/3/22 by zmyer
 class HelixHealthReportAggregatorTask extends UserContentStore implements Task {
   public static final String TASK_COMMAND_PREFIX = "aggregate";
   private static final String RAW_VALID_SIZE_FIELD_NAME = "raw_valid_data_size";

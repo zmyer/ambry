@@ -17,6 +17,7 @@ package com.github.ambry.config;
 /**
  * The configs for stats.
  */
+// TODO: 2018/3/19 by zmyer
 public class StatsManagerConfig {
 
   /**
@@ -41,6 +42,7 @@ public class StatsManagerConfig {
   @Default("600")
   public final int initialDelayUpperBoundInSecs;
 
+  // TODO: 2018/3/19 by zmyer
   public StatsManagerConfig(VerifiableProperties verifiableProperties) {
     outputFilePath = verifiableProperties.getString("stats.output.file.path", "/tmp/stats_output.json");
     publishPeriodInSecs = verifiableProperties.getLongInRange("stats.publish.period.in.secs", 7200, 0, Long.MAX_VALUE);

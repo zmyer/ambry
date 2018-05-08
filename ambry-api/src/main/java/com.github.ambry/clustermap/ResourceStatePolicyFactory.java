@@ -15,7 +15,8 @@ package com.github.ambry.clustermap;
 
 /* Factory class interface to get resource state policies */
 
+// TODO: 2018/3/20 by zmyer
 public interface ResourceStatePolicyFactory {
 
-  ResourceStatePolicy getResourceStatePolicy();
+    ResourceStatePolicy getResourceStatePolicy();
 }

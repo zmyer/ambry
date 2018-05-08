@@ -17,6 +17,7 @@ package com.github.ambry.config;
  * The configs for the server
  */
 
+// TODO: 2018/3/19 by zmyer
 public class ServerConfig {
 
   /**
@@ -54,6 +55,7 @@ public class ServerConfig {
   @Default("60")
   public final long serverQuotaStatsAggregateIntervalInMinutes;
 
+  // TODO: 2018/3/19 by zmyer
   public ServerConfig(VerifiableProperties verifiableProperties) {
     serverRequestHandlerNumOfThreads = verifiableProperties.getInt("server.request.handler.num.of.threads", 7);
     serverSchedulerNumOfthreads = verifiableProperties.getInt("server.scheduler.num.of.threads", 10);

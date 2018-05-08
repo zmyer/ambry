@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 /**
  * A read option class that maintains the offset and size
  */
+// TODO: 2018/3/22 by zmyer
 class BlobReadOptions implements Comparable<BlobReadOptions>, Closeable {
   private final LogSegment segment;
   private final Pair<File, FileChannel> segmentView;
@@ -49,6 +50,7 @@ class BlobReadOptions implements Comparable<BlobReadOptions>, Closeable {
   private static final short SIZE_LENGTH = 8;
   private static final short EXPIRES_AT_MS_LENGTH = 8;
 
+  // TODO: 2018/3/22 by zmyer
   BlobReadOptions(Log log, Offset offset, MessageInfo info) {
     segment = log.getSegment(offset.getName());
     if (offset.getOffset() + info.getSize() > segment.getEndOffset()) {
@@ -70,6 +72,7 @@ class BlobReadOptions implements Comparable<BlobReadOptions>, Closeable {
     return offset.getOffset();
   }
 
+  // TODO: 2018/3/22 by zmyer
   MessageInfo getMessageInfo() {
     return info;
   }
@@ -152,6 +155,7 @@ class BlobReadOptions implements Comparable<BlobReadOptions>, Closeable {
  * An implementation of MessageReadSet that maintains a list of
  * offsets from the underlying file channel
  */
+// TODO: 2018/3/22 by zmyer
 class StoreMessageReadSet implements MessageReadSet {
 
   private final List<BlobReadOptions> readOptions;
@@ -189,11 +193,13 @@ class StoreMessageReadSet implements MessageReadSet {
     return readOptions.get(index).getMessageInfo().getSize();
   }
 
+  // TODO: 2018/3/22 by zmyer
   @Override
   public StoreKey getKeyAt(int index) {
     if (index >= readOptions.size()) {
       throw new IndexOutOfBoundsException("index [" + index + "] out of the messageset");
     }
+    //获取具体的消息对应的存储键值
     return readOptions.get(index).getMessageInfo().getStoreKey();
   }
 }

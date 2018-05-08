@@ -31,16 +31,25 @@ import org.slf4j.LoggerFactory;
  *
  * This class is meant to be used within the {@link StaticClusterManager}.
  */
+// TODO: 2018/3/20 by zmyer
 class Datacenter {
+  //所属的硬件层对象
   private final HardwareLayout hardwareLayout;
+  //数据中心名称
   private final String name;
+  //数据中心id
   private final byte id;
+  //数据中心包含的数据节点id列表
   private final ArrayList<DataNode> dataNodes;
+  //数据中心总的容量大小
   private final long rawCapacityInBytes;
+  //是否具有机架号
   private boolean rackAware = false;
 
+  //日志对象
   private Logger logger = LoggerFactory.getLogger(getClass());
 
+  // TODO: 2018/3/21 by zmyer
   Datacenter(HardwareLayout hardwareLayout, JSONObject jsonObject, ClusterMapConfig clusterMapConfig)
       throws JSONException {
     if (logger.isTraceEnabled()) {
@@ -50,11 +59,14 @@ class Datacenter {
     this.name = jsonObject.getString("name");
     id = Byte.parseByte(jsonObject.getString("id"));
 
+    //创建数据节点
     this.dataNodes = new ArrayList<DataNode>(jsonObject.getJSONArray("dataNodes").length());
     for (int i = 0; i < jsonObject.getJSONArray("dataNodes").length(); ++i) {
       this.dataNodes.add(new DataNode(this, jsonObject.getJSONArray("dataNodes").getJSONObject(i), clusterMapConfig));
     }
+    //计算总的容量大小
     this.rawCapacityInBytes = calculateRawCapacityInBytes();
+    //验证
     validate();
   }
 
@@ -70,18 +82,22 @@ class Datacenter {
     return id;
   }
 
+  // TODO: 2018/3/21 by zmyer
   long getRawCapacityInBytes() {
     return rawCapacityInBytes;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateRawCapacityInBytes() {
     long capacityInBytes = 0;
     for (DataNode dataNode : dataNodes) {
+      //计算每个数据节点的容量，并统计总和
       capacityInBytes += dataNode.getRawCapacityInBytes();
     }
     return capacityInBytes;
   }
 
+  // TODO: 2018/3/21 by zmyer
   List<DataNode> getDataNodes() {
     return dataNodes;
   }
@@ -90,16 +106,19 @@ class Datacenter {
    * Returns {@code true} if all nodes in the datacenter have rack IDs
    * @return {@code true} if all nodes in the datacenter have rack IDs, {@code false} otherwise
    */
+  // TODO: 2018/3/21 by zmyer
   boolean isRackAware() {
     return rackAware;
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateHardwareLayout() {
     if (hardwareLayout == null) {
       throw new IllegalStateException("HardwareLayout cannot be null");
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateName() {
     if (name == null) {
       throw new IllegalStateException("Datacenter name cannot be null.");
@@ -115,20 +134,25 @@ class Datacenter {
    *
    * @throws IllegalStateException if some nodes have defined rack IDs and some do not.
    */
+  // TODO: 2018/3/21 by zmyer
   private void validateRackAwareness() {
     if (dataNodes.size() > 0) {
       Iterator<DataNode> dataNodeIter = dataNodes.iterator();
+      //是否有机架号
       boolean hasRackId = (dataNodeIter.next().getRackId() >= 0);
       while (dataNodeIter.hasNext()) {
+        //如果存在部分有机架号的情况，直接异常处理
         if (hasRackId != (dataNodeIter.next().getRackId() >= 0)) {
           throw new IllegalStateException(
               "dataNodes in datacenter: " + name + " must all have defined rack IDs or none at all");
         }
       }
+      //更新是否有机架号标记
       this.rackAware = hasRackId;
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validate() {
     logger.trace("begin validate.");
     validateHardwareLayout();
@@ -137,6 +161,7 @@ class Datacenter {
     logger.trace("complete validate.");
   }
 
+  // TODO: 2018/3/21 by zmyer
   JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject = new JSONObject().put("name", name).put("id", id).put("dataNodes", new JSONArray());
     for (DataNode dataNode : dataNodes) {
@@ -145,11 +170,13 @@ class Datacenter {
     return jsonObject;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public String toString() {
     return "Datacenter[" + getName() + "]";
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public boolean equals(Object o) {
     if (this == o) {
@@ -164,6 +191,7 @@ class Datacenter {
     return name.equals(that.name);
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public int hashCode() {
     return name.hashCode();

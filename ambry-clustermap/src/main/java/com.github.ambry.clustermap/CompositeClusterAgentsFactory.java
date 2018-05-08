@@ -24,11 +24,17 @@ import org.slf4j.LoggerFactory;
  * A factory that creates a {@link CompositeClusterManager} and {@link ClusterParticipant}. Only one instance of each
  * type of objects will ever be created by this factory.
  */
+// TODO: 2018/3/19 by zmyer
 public class CompositeClusterAgentsFactory implements ClusterAgentsFactory {
+  //日志对象
   private static final Logger logger = LoggerFactory.getLogger(CompositeClusterAgentsFactory.class);
+  //静态集群agent工厂对象
   private final StaticClusterAgentsFactory staticClusterAgentsFactory;
+  //helix集群agent工厂对象
   private final HelixClusterAgentsFactory helixClusterAgentsFactory;
+  //复合型集群管理器对象
   private CompositeClusterManager compositeClusterManager;
+  //集群参与者对象
   private ClusterParticipant clusterParticipant;
 
   /**
@@ -39,10 +45,13 @@ public class CompositeClusterAgentsFactory implements ClusterAgentsFactory {
    * @throws JSONException if there is an exception parsing the layout files.
    * @throws IOException if there is an IO error accessing or reading the layout files.
    */
+  // TODO: 2018/3/21 by zmyer
   public CompositeClusterAgentsFactory(ClusterMapConfig clusterMapConfig, String hardwareLayoutFilePath,
       String partitionLayoutFilePath) throws JSONException, IOException {
+    //创建静态集群agent工厂对象
     staticClusterAgentsFactory =
         new StaticClusterAgentsFactory(clusterMapConfig, hardwareLayoutFilePath, partitionLayoutFilePath);
+    //创建helix集群agent工厂对象
     helixClusterAgentsFactory =
         new HelixClusterAgentsFactory(clusterMapConfig, staticClusterAgentsFactory.getMetricRegistry());
   }
@@ -54,6 +63,7 @@ public class CompositeClusterAgentsFactory implements ClusterAgentsFactory {
    * @throws JSONException if there is an exception parsing the layout files.
    * @throws IOException if there is an IO error accessing or reading the layout files.
    */
+  // TODO: 2018/3/21 by zmyer
   CompositeClusterAgentsFactory(ClusterMapConfig clusterMapConfig, PartitionLayout partitionLayout)
       throws JSONException, IOException {
     staticClusterAgentsFactory = new StaticClusterAgentsFactory(clusterMapConfig, partitionLayout);
@@ -67,6 +77,7 @@ public class CompositeClusterAgentsFactory implements ClusterAgentsFactory {
    * @throws Exception if constructing the underlying {@link StaticClusterManager} or the {@link HelixClusterManager}
    * throws an Exception.
    */
+  // TODO: 2018/3/21 by zmyer
   @Override
   public CompositeClusterManager getClusterMap() throws IOException {
     if (compositeClusterManager == null) {
@@ -77,16 +88,21 @@ public class CompositeClusterAgentsFactory implements ClusterAgentsFactory {
       } catch (Exception e) {
         logger.error("Helix cluster manager instantiation failed with exception", e);
       }
+      //创建复合型集群管理器
       compositeClusterManager = new CompositeClusterManager(staticClusterManager, helixClusterManager);
     }
+    //返回结果
     return compositeClusterManager;
   }
 
+  // TODO: 2018/3/19 by zmyer
   @Override
   public ClusterParticipant getClusterParticipant() throws IOException {
     if (clusterParticipant == null) {
+      //创建集群参与者对象
       clusterParticipant = helixClusterAgentsFactory.getClusterParticipant();
     }
+    //返回结果
     return clusterParticipant;
   }
 }

@@ -22,39 +22,41 @@ import java.io.IOException;
  * destroyConnection. The pool is also responsible to close and delete connections on shutdown.
  * This includes connection that are live and idle.
  */
+// TODO: 2018/3/28 by zmyer
 public interface ConnectionPool {
-  /**
-   * Starts the connection pool.
-   */
-  public void start();
+    /**
+     * Starts the connection pool.
+     */
+    public void start();
 
-  /**
-   * Shutsdown the connection pool. This also includes cleaning up all idle and active connections
-   */
-  public void shutdown();
+    /**
+     * Shutsdown the connection pool. This also includes cleaning up all idle and active connections
+     */
+    public void shutdown();
 
-  /**
-   * Returns a connected channel that represents the give host and port. If no connection is available, this
-   * method blocks for the timeout specified
-   * @param host The remote host to which a connection is required
-   * @param port The remote {@Port} to which a connection is required
-   * @param timeout The time up to which to wait to get a connection
-   * @return The connected channel that represents the given host and port.
-   * @throws IOException
-   * @throws InterruptedException
-   */
-  public ConnectedChannel checkOutConnection(String host, Port port, long timeout)
-      throws IOException, InterruptedException, ConnectionPoolTimeoutException;
+    /**
+     * Returns a connected channel that represents the give host and port. If no connection is available, this
+     * method blocks for the timeout specified
+     * @param host The remote host to which a connection is required
+     * @param port The remote {@Port} to which a connection is required
+     * @param timeout The time up to which to wait to get a connection
+     * @return The connected channel that represents the given host and port.
+     * @throws IOException
+     * @throws InterruptedException
+     */
+    // TODO: 2018/4/27 by zmyer
+    public ConnectedChannel checkOutConnection(String host, Port port, long timeout)
+            throws IOException, InterruptedException, ConnectionPoolTimeoutException;
 
-  /**
-   * The connected channel that needs to be put back into the pool after a successful usage
-   * @param connectedChannel The channel to check in
-   */
-  public void checkInConnection(ConnectedChannel connectedChannel);
+    /**
+     * The connected channel that needs to be put back into the pool after a successful usage
+     * @param connectedChannel The channel to check in
+     */
+    public void checkInConnection(ConnectedChannel connectedChannel);
 
-  /**
-   * The connected channel that needs to be destroyed/disconnected after an error
-   * @param connectedChannel The channel to destroy/disconnect
-   */
-  public void destroyConnection(ConnectedChannel connectedChannel);
+    /**
+     * The connected channel that needs to be destroyed/disconnected after an error
+     * @param connectedChannel The channel to destroy/disconnect
+     */
+    public void destroyConnection(ConnectedChannel connectedChannel);
 }

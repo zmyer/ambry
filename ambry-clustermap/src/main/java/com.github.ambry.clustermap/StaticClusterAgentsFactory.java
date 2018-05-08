@@ -29,11 +29,17 @@ import static com.github.ambry.utils.Utils.*;
  * A class used to create the {@link StaticClusterManager} and {@link ClusterParticipant}. Only one instance of each
  * type of objects will ever be created by this factory.
  */
+// TODO: 2018/3/21 by zmyer
 public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
+  //分区布置对象
   private final PartitionLayout partitionLayout;
+  //集群配置信息
   private final ClusterMapConfig clusterMapConfig;
+  //metric注册对象
   private final MetricRegistry metricRegistry;
+  //静态集群管理器
   private StaticClusterManager staticClusterManager;
+  //集群参与者对象
   private ClusterParticipant clusterParticipant;
 
   /**
@@ -44,6 +50,7 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
    * @throws JSONException if a JSON error is encountered while parsing the layout files.
    * @throws IOException if an I/O error is encountered accessing or reading the layout files.
    */
+  // TODO: 2018/3/21 by zmyer
   public StaticClusterAgentsFactory(ClusterMapConfig clusterMapConfig, String hardwareLayoutFilePath,
       String partitionLayoutFilePath) throws JSONException, IOException {
     this(clusterMapConfig, new PartitionLayout(
@@ -55,24 +62,30 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
    * Instantiate an instance of this factory.
    * @param partitionLayout the {@link PartitionLayout} to use.
    */
+  // TODO: 2018/3/21 by zmyer
   StaticClusterAgentsFactory(ClusterMapConfig clusterMapConfig, PartitionLayout partitionLayout) {
     this.clusterMapConfig = Objects.requireNonNull(clusterMapConfig, "ClusterMapConfig cannot be null");
     this.partitionLayout = Objects.requireNonNull(partitionLayout, "PartitionLayout cannot be null");
     this.metricRegistry = new MetricRegistry();
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public StaticClusterManager getClusterMap() {
     if (staticClusterManager == null) {
+      //创建静态集群管理器
       staticClusterManager =
           new StaticClusterManager(partitionLayout, clusterMapConfig.clusterMapDatacenterName, metricRegistry);
     }
+    //返回结果
     return staticClusterManager;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public ClusterParticipant getClusterParticipant() throws IOException {
     if (clusterParticipant == null) {
+      //如果集群参与者为空，则提供默认实现
       clusterParticipant = new ClusterParticipant() {
         @Override
         public void initialize(String hostname, int port, List<AmbryHealthReport> ambryHealthReports) {
@@ -90,12 +103,14 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
         }
       };
     }
+    //返回结果
     return clusterParticipant;
   }
 
   /**
    * @return the {@link MetricRegistry} used when creating the {@link StaticClusterManager}
    */
+  // TODO: 2018/3/21 by zmyer
   MetricRegistry getMetricRegistry() {
     return metricRegistry;
   }

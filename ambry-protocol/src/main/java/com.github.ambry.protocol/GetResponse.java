@@ -17,6 +17,7 @@ import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.network.Send;
 import com.github.ambry.utils.Utils;
+
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,137 +30,140 @@ import java.util.List;
 /**
  * Response to GetRequest to fetch data
  */
+// TODO: 2018/4/20 by zmyer
 public class GetResponse extends Response {
 
-  private Send toSend = null;
-  private InputStream stream = null;
-  private final List<PartitionResponseInfo> partitionResponseInfoList;
-  private int partitionResponseInfoSize;
+    private Send toSend = null;
+    private InputStream stream = null;
+    private final List<PartitionResponseInfo> partitionResponseInfoList;
+    private int partitionResponseInfoSize;
 
-  private static int Partition_Response_Info_List_Size = 4;
-  static final short GET_RESPONSE_VERSION_V_1 = 1;
-  static final short GET_RESPONSE_VERSION_V_2 = 2;
-  static final short GET_RESPONSE_VERSION_V_3 = 3;
-  static final short GET_RESPONSE_VERSION_V_4 = 4;
+    private static int Partition_Response_Info_List_Size = 4;
+    static final short GET_RESPONSE_VERSION_V_1 = 1;
+    static final short GET_RESPONSE_VERSION_V_2 = 2;
+    static final short GET_RESPONSE_VERSION_V_3 = 3;
+    static final short GET_RESPONSE_VERSION_V_4 = 4;
 
-  static short CURRENT_VERSION = GET_RESPONSE_VERSION_V_4;
+    static short CURRENT_VERSION = GET_RESPONSE_VERSION_V_4;
 
-  public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
-      Send send, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
-    this.partitionResponseInfoList = partitionResponseInfoList;
-    this.partitionResponseInfoSize = 0;
-    for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
-      this.partitionResponseInfoSize += partitionResponseInfo.sizeInBytes();
-    }
-    this.toSend = send;
-  }
-
-  public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
-      InputStream stream, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
-    this.partitionResponseInfoList = partitionResponseInfoList;
-    this.partitionResponseInfoSize = 0;
-    for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
-      this.partitionResponseInfoSize += partitionResponseInfo.sizeInBytes();
-    }
-    this.stream = stream;
-  }
-
-  public GetResponse(int correlationId, String clientId, ServerErrorCode error) {
-    super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
-    this.partitionResponseInfoList = null;
-    this.partitionResponseInfoSize = 0;
-  }
-
-  public InputStream getInputStream() {
-    return stream;
-  }
-
-  public List<PartitionResponseInfo> getPartitionResponseInfoList() {
-    return partitionResponseInfoList;
-  }
-
-  public static GetResponse readFrom(DataInputStream stream, ClusterMap map) throws IOException {
-    short typeval = stream.readShort();
-    RequestOrResponseType type = RequestOrResponseType.values()[typeval];
-    if (type != RequestOrResponseType.GetResponse) {
-      throw new IllegalArgumentException("The type of request response is not compatible");
-    }
-    Short versionId = stream.readShort();
-    // ignore version for now
-    int correlationId = stream.readInt();
-    String clientId = Utils.readIntString(stream);
-    ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
-
-    if (error != ServerErrorCode.No_Error) {
-      return new GetResponse(correlationId, clientId, error);
-    } else {
-      int partitionResponseInfoCount = stream.readInt();
-      ArrayList<PartitionResponseInfo> partitionResponseInfoList =
-          new ArrayList<PartitionResponseInfo>(partitionResponseInfoCount);
-      for (int i = 0; i < partitionResponseInfoCount; i++) {
-        PartitionResponseInfo partitionResponseInfo = PartitionResponseInfo.readFrom(stream, map, versionId);
-        partitionResponseInfoList.add(partitionResponseInfo);
-      }
-      return new GetResponse(correlationId, clientId, partitionResponseInfoList, stream, error);
-    }
-  }
-
-  @Override
-  public long writeTo(WritableByteChannel channel) throws IOException {
-    long written = 0;
-    if (bufferToSend == null) {
-      bufferToSend = ByteBuffer.allocate(
-          (int) super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize));
-      writeHeader();
-      if (partitionResponseInfoList != null) {
-        bufferToSend.putInt(partitionResponseInfoList.size());
+    public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
+            Send send, ServerErrorCode error) {
+        super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
+        this.partitionResponseInfoList = partitionResponseInfoList;
+        this.partitionResponseInfoSize = 0;
         for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
-          partitionResponseInfo.writeTo(bufferToSend);
+            this.partitionResponseInfoSize += partitionResponseInfo.sizeInBytes();
         }
-      }
-      bufferToSend.flip();
+        this.toSend = send;
     }
-    if (bufferToSend.remaining() > 0) {
-      written = channel.write(bufferToSend);
-    }
-    if (bufferToSend.remaining() == 0 && toSend != null && !toSend.isSendComplete()) {
-      written += toSend.writeTo(channel);
-    }
-    return written;
-  }
 
-  @Override
-  public boolean isSendComplete() {
-    return (super.isSendComplete()) && (toSend == null || toSend.isSendComplete());
-  }
-
-  @Override
-  public long sizeInBytes() {
-    return super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize) + ((toSend == null) ? 0
-        : toSend.sizeInBytes());
-  }
-
-  @Override
-  public String toString() {
-    StringBuilder sb = new StringBuilder();
-    sb.append("GetResponse[");
-    if (toSend != null) {
-      sb.append("SizeToSend=").append(toSend.sizeInBytes());
+    public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
+            InputStream stream, ServerErrorCode error) {
+        super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
+        this.partitionResponseInfoList = partitionResponseInfoList;
+        this.partitionResponseInfoSize = 0;
+        for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
+            this.partitionResponseInfoSize += partitionResponseInfo.sizeInBytes();
+        }
+        this.stream = stream;
     }
-    sb.append(" ServerErrorCode=").append(getError());
-    if (partitionResponseInfoList != null) {
-      sb.append(" PartitionResponseInfoList=").append(partitionResponseInfoList);
-    }
-    sb.append("]");
-    return sb.toString();
-  }
 
-  /**
-   * @return the current version in which new GetResponse objects are created.
-   */
-  static short getCurrentVersion() {
-    return CURRENT_VERSION;
-  }
+    public GetResponse(int correlationId, String clientId, ServerErrorCode error) {
+        super(RequestOrResponseType.GetResponse, CURRENT_VERSION, correlationId, clientId, error);
+        this.partitionResponseInfoList = null;
+        this.partitionResponseInfoSize = 0;
+    }
+
+    public InputStream getInputStream() {
+        return stream;
+    }
+
+    public List<PartitionResponseInfo> getPartitionResponseInfoList() {
+        return partitionResponseInfoList;
+    }
+
+    // TODO: 2018/4/27 by zmyer
+    public static GetResponse readFrom(DataInputStream stream, ClusterMap map) throws IOException {
+        short typeval = stream.readShort();
+        RequestOrResponseType type = RequestOrResponseType.values()[typeval];
+        if (type != RequestOrResponseType.GetResponse) {
+            throw new IllegalArgumentException("The type of request response is not compatible");
+        }
+        Short versionId = stream.readShort();
+        // ignore version for now
+        int correlationId = stream.readInt();
+        String clientId = Utils.readIntString(stream);
+        ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
+
+        if (error != ServerErrorCode.No_Error) {
+            return new GetResponse(correlationId, clientId, error);
+        } else {
+            int partitionResponseInfoCount = stream.readInt();
+            ArrayList<PartitionResponseInfo> partitionResponseInfoList =
+                    new ArrayList<PartitionResponseInfo>(partitionResponseInfoCount);
+            for (int i = 0; i < partitionResponseInfoCount; i++) {
+                PartitionResponseInfo partitionResponseInfo = PartitionResponseInfo.readFrom(stream, map, versionId);
+                partitionResponseInfoList.add(partitionResponseInfo);
+            }
+            return new GetResponse(correlationId, clientId, partitionResponseInfoList, stream, error);
+        }
+    }
+
+    @Override
+    public long writeTo(WritableByteChannel channel) throws IOException {
+        long written = 0;
+        if (bufferToSend == null) {
+            bufferToSend = ByteBuffer.allocate(
+                    (int) super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize));
+            writeHeader();
+            if (partitionResponseInfoList != null) {
+                bufferToSend.putInt(partitionResponseInfoList.size());
+                for (PartitionResponseInfo partitionResponseInfo : partitionResponseInfoList) {
+                    partitionResponseInfo.writeTo(bufferToSend);
+                }
+            }
+            bufferToSend.flip();
+        }
+        if (bufferToSend.remaining() > 0) {
+            written = channel.write(bufferToSend);
+        }
+        if (bufferToSend.remaining() == 0 && toSend != null && !toSend.isSendComplete()) {
+            written += toSend.writeTo(channel);
+        }
+        return written;
+    }
+
+    @Override
+    public boolean isSendComplete() {
+        return (super.isSendComplete()) && (toSend == null || toSend.isSendComplete());
+    }
+
+    @Override
+    public long sizeInBytes() {
+        return super.sizeInBytes() + (Partition_Response_Info_List_Size + partitionResponseInfoSize) +
+                ((toSend == null) ? 0
+                        : toSend.sizeInBytes());
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("GetResponse[");
+        if (toSend != null) {
+            sb.append("SizeToSend=").append(toSend.sizeInBytes());
+        }
+        sb.append(" ServerErrorCode=").append(getError());
+        if (partitionResponseInfoList != null) {
+            sb.append(" PartitionResponseInfoList=").append(partitionResponseInfoList);
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    /**
+     * @return the current version in which new GetResponse objects are created.
+     */
+    static short getCurrentVersion() {
+        return CURRENT_VERSION;
+    }
 }

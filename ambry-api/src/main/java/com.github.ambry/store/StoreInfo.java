@@ -19,20 +19,23 @@ import java.util.List;
 /**
  * The info returned by the store on a get call
  */
+// TODO: 2018/3/22 by zmyer
 public class StoreInfo {
-  private final MessageReadSet readSet;
-  private final List<MessageInfo> messageSetInfos;
+    //可读消息集合
+    private final MessageReadSet readSet;
+    //消息信息集合
+    private final List<MessageInfo> messageSetInfos;
 
-  public StoreInfo(MessageReadSet readSet, List<MessageInfo> messageSetInfos) {
-    this.readSet = readSet;
-    this.messageSetInfos = messageSetInfos;
-  }
+    public StoreInfo(MessageReadSet readSet, List<MessageInfo> messageSetInfos) {
+        this.readSet = readSet;
+        this.messageSetInfos = messageSetInfos;
+    }
 
-  public MessageReadSet getMessageReadSet() {
-    return readSet;
-  }
+    public MessageReadSet getMessageReadSet() {
+        return readSet;
+    }
 
-  public List<MessageInfo> getMessageReadSetInfo() {
-    return messageSetInfos;
-  }
+    public List<MessageInfo> getMessageReadSetInfo() {
+        return messageSetInfos;
+    }
 }

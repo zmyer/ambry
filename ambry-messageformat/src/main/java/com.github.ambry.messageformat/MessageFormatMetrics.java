@@ -20,11 +20,13 @@ import com.codahale.metrics.MetricRegistry;
 /**
  * Metrics for messageformat
  */
+// TODO: 2018/4/20 by zmyer
 public class MessageFormatMetrics {
-  public final Histogram calculateOffsetMessageFormatSendTime;
+    public final Histogram calculateOffsetMessageFormatSendTime;
 
-  public MessageFormatMetrics(MetricRegistry registry) {
-    calculateOffsetMessageFormatSendTime =
-        registry.histogram(MetricRegistry.name(MessageFormatSend.class, "CalculateOffsetMessageFormatSendTime"));
-  }
+    public MessageFormatMetrics(MetricRegistry registry) {
+        calculateOffsetMessageFormatSendTime =
+                registry.histogram(
+                        MetricRegistry.name(MessageFormatSend.class, "CalculateOffsetMessageFormatSendTime"));
+    }
 }

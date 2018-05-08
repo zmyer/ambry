@@ -22,6 +22,7 @@ import java.util.List;
 /**
  * Metrics for the {@link HelixClusterManager}
  */
+// TODO: 2018/3/21 by zmyer
 class HelixClusterManagerMetrics {
   private final HelixClusterManager.HelixClusterManagerCallback clusterMapCallback;
   private final MetricRegistry registry;
@@ -71,6 +72,7 @@ class HelixClusterManagerMetrics {
         registry.counter(MetricRegistry.name(HelixClusterManager.class, "getDataNodeIdsMismatchCount"));
   }
 
+  // TODO: 2018/3/21 by zmyer
   void initializeInstantiationMetric(final boolean instantiated) {
     helixClusterManagerInstantiationFailed = new Gauge<Long>() {
       @Override

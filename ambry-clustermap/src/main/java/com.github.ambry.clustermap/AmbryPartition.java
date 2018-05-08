@@ -26,6 +26,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * {@link PartitionId} implementation to use within dynamic cluster managers.
  */
+// TODO: 2018/3/20 by zmyer
 class AmbryPartition extends PartitionId {
   private final Long id;
   private final ClusterManagerCallback clusterManagerCallback;

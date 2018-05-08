@@ -21,39 +21,40 @@ import java.util.List;
 /**
  * Holds multiple Send instances and sends them over the network
  */
+// TODO: 2018/4/20 by zmyer
 public class CompositeSend implements Send {
 
-  private final List<Send> compositSendList;
-  private long totalSizeToWrite;
-  private int currentIndexInProgress;
+    private final List<Send> compositSendList;
+    private long totalSizeToWrite;
+    private int currentIndexInProgress;
 
-  public CompositeSend(List<Send> compositSendList) {
-    this.compositSendList = compositSendList;
-    this.currentIndexInProgress = 0;
-    for (Send messageFormatSend : compositSendList) {
-      totalSizeToWrite += messageFormatSend.sizeInBytes();
+    public CompositeSend(List<Send> compositSendList) {
+        this.compositSendList = compositSendList;
+        this.currentIndexInProgress = 0;
+        for (Send messageFormatSend : compositSendList) {
+            totalSizeToWrite += messageFormatSend.sizeInBytes();
+        }
     }
-  }
 
-  @Override
-  public long writeTo(WritableByteChannel channel) throws IOException {
-    long written = 0;
-    if (currentIndexInProgress < compositSendList.size()) {
-      written = compositSendList.get(currentIndexInProgress).writeTo(channel);
-      if (compositSendList.get(currentIndexInProgress).isSendComplete()) {
-        currentIndexInProgress++;
-      }
+    @Override
+    public long writeTo(WritableByteChannel channel) throws IOException {
+        long written = 0;
+        if (currentIndexInProgress < compositSendList.size()) {
+            written = compositSendList.get(currentIndexInProgress).writeTo(channel);
+            if (compositSendList.get(currentIndexInProgress).isSendComplete()) {
+                currentIndexInProgress++;
+            }
+        }
+        return written;
     }
-    return written;
-  }
 
-  @Override
-  public boolean isSendComplete() {
-    return currentIndexInProgress == compositSendList.size();
-  }
+    @Override
+    public boolean isSendComplete() {
+        return currentIndexInProgress == compositSendList.size();
+    }
 
-  @Override
-  public long sizeInBytes() {
-    return totalSizeToWrite;
-  }
+    @Override
+    public long sizeInBytes() {
+        return totalSizeToWrite;
+    }
 }

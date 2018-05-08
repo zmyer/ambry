@@ -14,53 +14,55 @@
 
 package com.github.ambry.server;
 
+import org.apache.helix.healthcheck.HealthReportProvider;
+
 import java.util.HashMap;
 import java.util.Map;
-import org.apache.helix.healthcheck.HealthReportProvider;
 
 
 /**
  * Customized Helix Health Report for collecting quota stats per node (instance).
  */
+// TODO: 2018/3/20 by zmyer
 class QuotaHealthReport extends HealthReportProvider implements AmbryHealthReport {
-  private static final String QUOTA_REPORT_NAME = "QuotaReport";
-  private static final String QUOTA_STATS_FIELD_NAME = "QuotaStats";
-  private final StatsManager statsManager;
-  private final long aggregatePeriodInMinutes;
+    private static final String QUOTA_REPORT_NAME = "QuotaReport";
+    private static final String QUOTA_STATS_FIELD_NAME = "QuotaStats";
+    private final StatsManager statsManager;
+    private final long aggregatePeriodInMinutes;
 
-  QuotaHealthReport(StatsManager statsManager, long aggregatePeriodInMinutes) {
-    this.statsManager = statsManager;
-    this.aggregatePeriodInMinutes = aggregatePeriodInMinutes;
-  }
+    QuotaHealthReport(StatsManager statsManager, long aggregatePeriodInMinutes) {
+        this.statsManager = statsManager;
+        this.aggregatePeriodInMinutes = aggregatePeriodInMinutes;
+    }
 
-  /**
-   * Get the node wide aggregated quota stats in this node
-   * @return a {@link Map} with the aggregated quota stats mapped with {@link QuotaHealthReport}'s static key
-   */
-  @Override
-  public Map<String, String> getRecentHealthReport() {
-    Map<String, String> report = new HashMap<>();
-    report.put(QUOTA_STATS_FIELD_NAME, statsManager.getNodeStatsInJSON());
-    return report;
-  }
+    /**
+     * Get the node wide aggregated quota stats in this node
+     * @return a {@link Map} with the aggregated quota stats mapped with {@link QuotaHealthReport}'s static key
+     */
+    @Override
+    public Map<String, String> getRecentHealthReport() {
+        Map<String, String> report = new HashMap<>();
+        report.put(QUOTA_STATS_FIELD_NAME, statsManager.getNodeStatsInJSON());
+        return report;
+    }
 
-  @Override
-  public String getReportName() {
-    return QUOTA_REPORT_NAME;
-  }
+    @Override
+    public String getReportName() {
+        return QUOTA_REPORT_NAME;
+    }
 
-  @Override
-  public String getQuotaStatsFieldName() {
-    return QUOTA_STATS_FIELD_NAME;
-  }
+    @Override
+    public String getQuotaStatsFieldName() {
+        return QUOTA_STATS_FIELD_NAME;
+    }
 
-  @Override
-  public long getAggregateIntervalInMinutes() {
-    return aggregatePeriodInMinutes;
-  }
+    @Override
+    public long getAggregateIntervalInMinutes() {
+        return aggregatePeriodInMinutes;
+    }
 
-  @Override
-  public void resetStats() {
-    // no op
-  }
+    @Override
+    public void resetStats() {
+        // no op
+    }
 }

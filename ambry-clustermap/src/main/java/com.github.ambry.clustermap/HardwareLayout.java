@@ -29,37 +29,57 @@ import org.slf4j.LoggerFactory;
 /**
  * An Ambry hardwareLayout consists of a set of {@link Datacenter}s.
  */
+// TODO: 2018/3/20 by zmyer
 class HardwareLayout {
+  //集群名称
   private final String clusterName;
+  //版本信息
   private final long version;
+  //数据中心集合
   private final ArrayList<Datacenter> datacenters;
+  //总的容量大小
   private final long rawCapacityInBytes;
+  //数据节点数目
   private final long dataNodeCount;
+  //磁盘数目
   private final long diskCount;
+  //数据节点状态列表
   private final Map<HardwareState, Long> dataNodeInHardStateCount;
+  //磁盘状态列表
   private final Map<HardwareState, Long> diskInHardStateCount;
+  //集群配置信息
   private final ClusterMapConfig clusterMapConfig;
 
+  //日志对象
   private Logger logger = LoggerFactory.getLogger(getClass());
 
+  // TODO: 2018/3/21 by zmyer
   public HardwareLayout(JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("HardwareLayout " + jsonObject.toString());
     }
+    //读取集群名称
     this.clusterName = jsonObject.getString("clusterName");
+    //读取版本信息
     this.version = jsonObject.getLong("version");
     this.clusterMapConfig = clusterMapConfig;
 
+    //读取数据中心集合
     this.datacenters = new ArrayList<Datacenter>(jsonObject.getJSONArray("datacenters").length());
     for (int i = 0; i < jsonObject.getJSONArray("datacenters").length(); ++i) {
       this.datacenters.add(i,
           new Datacenter(this, jsonObject.getJSONArray("datacenters").getJSONObject(i), clusterMapConfig));
     }
 
+    //计算总的容量大小
     this.rawCapacityInBytes = calculateRawCapacityInBytes();
+    //计算数据节点数目
     this.dataNodeCount = calculateDataNodeCount();
+    //计算磁盘数目
     this.diskCount = calculateDiskCount();
+    //计算数据节点状态集合
     this.dataNodeInHardStateCount = calculateDataNodeInHardStateCount();
+    //计算磁盘状态集合
     this.diskInHardStateCount = calculateDiskInHardStateCount();
 
     validate();
@@ -73,6 +93,7 @@ class HardwareLayout {
     return version;
   }
 
+  // TODO: 2018/3/21 by zmyer
   public List<Datacenter> getDatacenters() {
     return datacenters;
   }
@@ -81,9 +102,11 @@ class HardwareLayout {
     return rawCapacityInBytes;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateRawCapacityInBytes() {
     long capacityInBytes = 0;
     for (Datacenter datacenter : datacenters) {
+      //统计每个数据中心的容量大小，计算总和
       capacityInBytes += datacenter.getRawCapacityInBytes();
     }
     return capacityInBytes;
@@ -97,9 +120,11 @@ class HardwareLayout {
     return dataNodeCount;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateDataNodeCount() {
     long count = 0;
     for (Datacenter datacenter : datacenters) {
+      //统计每个数据中心中包含的数据节点数目，计算总和
       count += datacenter.getDataNodes().size();
     }
     return count;
@@ -109,20 +134,25 @@ class HardwareLayout {
     return diskCount;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateDiskCount() {
     long count = 0;
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
+        //统计每个数据中心下的数据节点的磁盘数目，计算总和
         count += dataNode.getDisks().size();
       }
     }
     return count;
   }
 
+  // TODO: 2018/3/21 by zmyer
   public long getDataNodeInHardStateCount(HardwareState hardwareState) {
+    //统计指定状态下的节点数目
     return dataNodeInHardStateCount.get(hardwareState);
   }
 
+  // TODO: 2018/3/21 by zmyer
   private Map<HardwareState, Long> calculateDataNodeInHardStateCount() {
     Map<HardwareState, Long> dataNodeInStateCount = new HashMap<HardwareState, Long>();
     for (HardwareState hardwareState : HardwareState.values()) {
@@ -130,17 +160,21 @@ class HardwareLayout {
     }
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
+        //统计数据节点状态信息
         dataNodeInStateCount.put(dataNode.getState(), dataNodeInStateCount.get(dataNode.getState()) + 1);
       }
     }
+    //返回结果
     return dataNodeInStateCount;
   }
 
+  // TODO: 2018/3/21 by zmyer
   public long calculateUnavailableDataNodeCount() {
     long count = 0;
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
         if (dataNode.isDown()) {
+          //统计不可用的数据节点数目
           count++;
         }
       }
@@ -148,10 +182,12 @@ class HardwareLayout {
     return count;
   }
 
+  // TODO: 2018/3/21 by zmyer
   public long getDiskInHardStateCount(HardwareState hardwareState) {
     return diskInHardStateCount.get(hardwareState);
   }
 
+  // TODO: 2018/3/21 by zmyer
   private Map<HardwareState, Long> calculateDiskInHardStateCount() {
     Map<HardwareState, Long> diskInStateCount = new HashMap<HardwareState, Long>();
     for (HardwareState hardwareState : HardwareState.values()) {
@@ -160,6 +196,7 @@ class HardwareLayout {
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
         for (Disk disk : dataNode.getDisks()) {
+          //统计磁盘状态信息
           diskInStateCount.put(disk.getState(), diskInStateCount.get(disk.getState()) + 1);
         }
       }
@@ -167,12 +204,14 @@ class HardwareLayout {
     return diskInStateCount;
   }
 
+  // TODO: 2018/3/21 by zmyer
   public long calculateUnavailableDiskCount() {
     long count = 0;
     for (Datacenter datacenter : datacenters) {
       for (DataNode dataNode : datacenter.getDataNodes()) {
         for (Disk disk : dataNode.getDisks()) {
           if (disk.isDown()) {
+            //计算不可用的磁盘数目
             count++;
           }
         }
@@ -187,8 +226,10 @@ class HardwareLayout {
    * @param datacenterName name of datacenter to be found
    * @return Datacenter or null if not found.
    */
+  // TODO: 2018/3/21 by zmyer
   public Datacenter findDatacenter(String datacenterName) {
     for (Datacenter datacenter : datacenters) {
+      //查找对应的数据中中心对象
       if (datacenter.getName().compareToIgnoreCase(datacenterName) == 0) {
         return datacenter;
       }
@@ -203,13 +244,16 @@ class HardwareLayout {
    * @param port of datanode
    * @return DataNode or null if not found.
    */
+  // TODO: 2018/3/20 by zmyer
   public DataNode findDataNode(String hostname, int port) {
+    //获取主机名
     String canonicalHostname =
         clusterMapConfig.clusterMapResolveHostnames ? ClusterMapUtils.getFullyQualifiedDomainName(hostname) : hostname;
     logger.trace("host to find host {} port {}", canonicalHostname, port);
     for (Datacenter datacenter : datacenters) {
       logger.trace("datacenter {}", datacenter.getName());
       for (DataNode dataNode : datacenter.getDataNodes()) {
+        //依次遍历每个数据节点，根据主机名和端口查找
         if (dataNode.getHostname().equals(canonicalHostname) && (dataNode.getPort() == port)) {
           return dataNode;
         }
@@ -226,11 +270,14 @@ class HardwareLayout {
    * @param mountPath of disk
    * @return Disk or null if not found.
    */
+  // TODO: 2018/3/21 by zmyer
   public Disk findDisk(String hostname, int port, String mountPath) {
+    //根据主机名和端口
     DataNode dataNode = findDataNode(hostname, port);
     if (dataNode != null) {
       for (Disk disk : dataNode.getDisks()) {
         if (disk.getMountPath().equals(mountPath)) {
+          //根据挂载路径，查找具体的磁盘信息
           return disk;
         }
       }
@@ -238,6 +285,7 @@ class HardwareLayout {
     return null;
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateClusterName() {
     if (clusterName == null) {
       throw new IllegalStateException("HardwareLayout clusterName cannot be null.");
@@ -246,6 +294,7 @@ class HardwareLayout {
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   // Validate each hardware component (Datacenter, DataNode, and Disk) are unique
   protected void validateUniqueness() throws IllegalStateException {
     logger.trace("begin validateUniqueness.");
@@ -271,6 +320,7 @@ class HardwareLayout {
     logger.trace("complete validateUniqueness.");
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validate() {
     logger.trace("begin validate.");
     validateClusterName();
@@ -278,6 +328,7 @@ class HardwareLayout {
     logger.trace("complete validate.");
   }
 
+  // TODO: 2018/3/21 by zmyer
   public JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject =
         new JSONObject().put("clusterName", clusterName).put("version", version).put("datacenters", new JSONArray());
@@ -287,6 +338,7 @@ class HardwareLayout {
     return jsonObject;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public String toString() {
     try {
@@ -297,6 +349,7 @@ class HardwareLayout {
     return null;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public boolean equals(Object o) {
     if (this == o) {

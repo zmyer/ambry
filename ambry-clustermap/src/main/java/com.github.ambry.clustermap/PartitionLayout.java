@@ -32,20 +32,30 @@ import org.slf4j.LoggerFactory;
 /**
  * PartitionLayout of {@link Partition}s and {@link Replica}s on an Ambry cluster (see {@link HardwareLayout}).
  */
+// TODO: 2018/3/20 by zmyer
 class PartitionLayout {
+  //最小的分区id
   private static final long MinPartitionId = 0;
-
+  //硬件布置层对象
   private final HardwareLayout hardwareLayout;
+  //集群名称
   private final String clusterName;
+  //版本信息
   private final long version;
+  //分区集合
   private final Map<ByteBuffer, Partition> partitionMap;
 
+  //最大分区id
   private long maxPartitionId;
+  //已分配的容量大小
   private long allocatedRawCapacityInBytes;
+  //已分配可用的容量大小
   private long allocatedUsableCapacityInBytes;
 
+  //日志对象
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
+  // TODO: 2018/3/21 by zmyer
   public PartitionLayout(HardwareLayout hardwareLayout, JSONObject jsonObject) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("PartitionLayout " + hardwareLayout + ", " + jsonObject.toString());
@@ -56,13 +66,16 @@ class PartitionLayout {
     this.version = jsonObject.getLong("version");
     this.partitionMap = new HashMap<ByteBuffer, Partition>();
 
+    //创建分区对象
     for (int i = 0; i < jsonObject.getJSONArray("partitions").length(); ++i) {
       addPartition(new Partition(this, jsonObject.getJSONArray("partitions").getJSONObject(i)));
     }
 
+    //资源验证
     validate();
   }
 
+  // TODO: 2018/3/21 by zmyer
   // Constructor for initial PartitionLayout.
   public PartitionLayout(HardwareLayout hardwareLayout) {
     if (logger.isTraceEnabled()) {
@@ -94,9 +107,11 @@ class PartitionLayout {
     return partitionMap.size();
   }
 
+  // TODO: 2018/3/21 by zmyer
   public long getPartitionInStateCount(PartitionState partitionState) {
     int count = 0;
     for (Partition partition : partitionMap.values()) {
+      //统计指定分区状态下的分区数目
       if (partition.getPartitionState() == partitionState) {
         count++;
       }
@@ -104,28 +119,35 @@ class PartitionLayout {
     return count;
   }
 
+  // TODO: 2018/3/20 by zmyer
   public List<PartitionId> getPartitions() {
     return new ArrayList<PartitionId>(partitionMap.values());
   }
 
+  // TODO: 2018/3/20 by zmyer
   public List<PartitionId> getWritablePartitions() {
     List<PartitionId> writablePartitions = new ArrayList();
     List<PartitionId> healthyWritablePartitions = new ArrayList();
     for (Partition partition : partitionMap.values()) {
+      //依次遍历每个分区信息
       if (partition.getPartitionState() == PartitionState.READ_WRITE) {
+        //将可读写的分区插入到结果集中
         writablePartitions.add(partition);
         boolean up = true;
+        //依次检查每个分区副本信息，如果有跪掉的情况，则需要设置up标记
         for (Replica replica : partition.getReplicas()) {
           if (replica.isDown()) {
             up = false;
             break;
           }
         }
+        //如果当前的分区副本都完好，则将对应的分区插入到结果集中
         if (up) {
           healthyWritablePartitions.add(partition);
         }
       }
     }
+    //返回结果集
     return healthyWritablePartitions.isEmpty() ? writablePartitions : healthyWritablePartitions;
   }
 
@@ -133,6 +155,7 @@ class PartitionLayout {
     return allocatedRawCapacityInBytes;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateAllocatedRawCapacityInBytes() {
     long allocatedRawCapacityInBytes = 0;
     for (Partition partition : partitionMap.values()) {
@@ -145,6 +168,7 @@ class PartitionLayout {
     return allocatedUsableCapacityInBytes;
   }
 
+  // TODO: 2018/3/21 by zmyer
   private long calculateAllocatedUsableCapacityInBytes() {
     long allocatedUsableCapacityInBytes = 0;
     for (Partition partition : partitionMap.values()) {
@@ -156,19 +180,24 @@ class PartitionLayout {
   /**
    * Adds Partition to and validates Partition is unique. A duplicate Partition results in an exception.
    */
+  // TODO: 2018/3/21 by zmyer
   private void addPartition(Partition partition) {
+    //将分区插入到分区集合中
     if (partitionMap.put(ByteBuffer.wrap(partition.getBytes()), partition) != null) {
       throw new IllegalStateException("Duplicate Partition detected: " + partition.toString());
     }
     if (partition.getId() >= maxPartitionId) {
+      //更新最大分区id
       maxPartitionId = partition.getId() + 1;
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateClusterName() {
     if (clusterName == null) {
       throw new IllegalStateException("ClusterName cannot be null.");
     }
+    //如果分区所述的集群名称与硬件层不一致，则直接异常
     if (!hardwareLayout.getClusterName().equals(clusterName)) {
       throw new IllegalStateException(
           "PartitionLayout cluster name does not match that of HardwareLayout: " + clusterName + " != " + hardwareLayout
@@ -176,6 +205,7 @@ class PartitionLayout {
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validatePartitionIds() {
     for (Partition partition : partitionMap.values()) {
       long partitionId = partition.getId();
@@ -188,10 +218,12 @@ class PartitionLayout {
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateUniqueness() {
     // Validate uniqueness of each logical component. Partition uniqueness is validated by method addPartition.
     Set<Replica> replicaSet = new HashSet<Replica>();
 
+    //验证分区副本唯一性
     for (Partition partition : partitionMap.values()) {
       for (Replica replica : partition.getReplicas()) {
         if (!replicaSet.add(replica)) {
@@ -201,44 +233,60 @@ class PartitionLayout {
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validate() {
     logger.trace("begin validate.");
+    //验证集群名称
     validateClusterName();
+    //验证分区id
     validatePartitionIds();
+    //验证唯一性
     validateUniqueness();
     this.allocatedRawCapacityInBytes = calculateAllocatedRawCapacityInBytes();
     this.allocatedUsableCapacityInBytes = calculateAllocatedUsableCapacityInBytes();
     logger.trace("complete validate.");
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected long getNewPartitionId() {
+    //设置当前分区id
     long currentPartitionId = maxPartitionId;
+    //递增分区id
     maxPartitionId++;
+    //返回结果
     return currentPartitionId;
   }
 
+  // TODO: 2018/3/21 by zmyer
   // Creates a Partition and corresponding Replicas for each specified disk
   public Partition addNewPartition(List<Disk> disks, long replicaCapacityInBytes) {
+    //如果磁盘为空，则直接报错
     if (disks == null || disks.size() == 0) {
       throw new IllegalArgumentException("Disks either null or of zero length.");
     }
 
+    //创建分区对象
     Partition partition = new Partition(getNewPartitionId(), PartitionState.READ_WRITE, replicaCapacityInBytes);
     for (Disk disk : disks) {
+      //为分区分配对应的副本信息，该副本信息包含了磁盘数据
       partition.addReplica(new Replica(partition, disk));
     }
+    //将该分区插入到分区列表中
     addPartition(partition);
+    //验证
     validate();
 
     return partition;
   }
 
+  // TODO: 2018/3/21 by zmyer
   // Adds replicas to the partition for each specified disk
   public void addNewReplicas(Partition partition, List<Disk> disks) {
     if (partition == null || disks == null || disks.size() == 0) {
       throw new IllegalArgumentException("Partition or disks is null or disks is of zero length");
     }
     for (Disk disk : disks) {
+      //添加新的分区
       partition.addReplica(new Replica(partition, disk));
     }
     validate();
@@ -250,11 +298,15 @@ class PartitionLayout {
    * @param stream byte-serialized partition ID
    * @return requested Partition else null.
    */
+  // TODO: 2018/3/21 by zmyer
   public Partition getPartition(InputStream stream) throws IOException {
+    //读取分区信息
     byte[] partitionBytes = Partition.readPartitionBytesFromStream(stream);
+    //根据分区信息，读取具体的分区
     return partitionMap.get(ByteBuffer.wrap(partitionBytes));
   }
 
+  // TODO: 2018/3/21 by zmyer
   public JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject = new JSONObject().put("clusterName", hardwareLayout.getClusterName())
         .put("version", version)
@@ -265,6 +317,7 @@ class PartitionLayout {
     return jsonObject;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public String toString() {
     try {
@@ -275,6 +328,7 @@ class PartitionLayout {
     return null;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public boolean equals(Object o) {
     if (this == o) {

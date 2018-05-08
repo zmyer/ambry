@@ -29,12 +29,16 @@ import org.slf4j.LoggerFactory;
  * its {@link Disk}. Note that this induces a constraint that a Partition can never have more than one Replica on a
  * given Disk. This ensures that a Partition does not have Replicas that share fates.
  */
+// TODO: 2018/3/20 by zmyer
 class Replica implements ReplicaId {
+  //副本对应的分区信息
   private final Partition partition;
+  //副本所储存的磁盘信息
   private Disk disk;
 
   private Logger logger = LoggerFactory.getLogger(getClass());
 
+  // TODO: 2018/3/21 by zmyer
   Replica(Partition partition, Disk disk) {
     if (logger.isTraceEnabled()) {
       logger.trace("Replica " + partition + ", " + disk);
@@ -45,6 +49,7 @@ class Replica implements ReplicaId {
     validate();
   }
 
+  // TODO: 2018/3/28 by zmyer
   Replica(HardwareLayout hardwareLayout, Partition partition, JSONObject jsonObject) throws JSONException {
     this.partition = partition;
     this.disk = hardwareLayout.findDisk(jsonObject.getString("hostname"), jsonObject.getInt("port"),
@@ -72,12 +77,14 @@ class Replica implements ReplicaId {
     return getMountPath() + File.separator + partition.toPathString();
   }
 
+  // TODO: 2018/3/28 by zmyer
   @Override
   public List<ReplicaId> getPeerReplicaIds() {
     List<Replica> peerReplicas = getPeerReplicas();
     return new ArrayList<ReplicaId>(peerReplicas);
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public long getCapacityInBytes() {
     return partition.getReplicaCapacityInBytes();
@@ -103,6 +110,7 @@ class Replica implements ReplicaId {
     return partition;
   }
 
+  // TODO: 2018/3/28 by zmyer
   List<Replica> getPeerReplicas() {
     List<Replica> peers = new ArrayList<Replica>(partition.getReplicas().size());
     for (Replica peer : partition.getReplicas()) {

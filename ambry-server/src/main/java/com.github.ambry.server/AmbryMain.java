@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Start point for creating an instance of {@link AmbryServer} and starting/shutting it down.
  */
+// TODO: 2018/3/19 by zmyer
 public class AmbryMain {
   private static Logger logger = LoggerFactory.getLogger(AmbryMain.class);
 
@@ -37,11 +38,14 @@ public class AmbryMain {
       InvocationOptions options = new InvocationOptions(args);
       Properties properties = Utils.loadProps(options.serverPropsFilePath);
       VerifiableProperties verifiableProperties = new VerifiableProperties(properties);
+      //集群配置信息
       ClusterMapConfig clusterMapConfig = new ClusterMapConfig(verifiableProperties);
+      //集群agent工厂
       ClusterAgentsFactory clusterAgentsFactory =
           Utils.getObj(clusterMapConfig.clusterMapClusterAgentsFactory, clusterMapConfig,
               options.hardwareLayoutFilePath, options.partitionLayoutFilePath);
       logger.info("Bootstrapping AmbryServer");
+      //创建ambry服务器
       ambryServer = new AmbryServer(verifiableProperties, clusterAgentsFactory, SystemTime.getInstance());
       // attach shutdown handler to catch control-c
       Runtime.getRuntime().addShutdownHook(new Thread() {
@@ -50,13 +54,16 @@ public class AmbryMain {
           ambryServer.shutdown();
         }
       });
+      //ambry服务器启动
       ambryServer.startup();
+      //等待服务关闭
       ambryServer.awaitShutdown();
     } catch (Exception e) {
       logger.error("Exception during bootstrap of AmbryServer", e);
       exitCode = 1;
     }
     logger.info("Exiting AmbryMain");
+    //进程退出
     System.exit(exitCode);
   }
 }

@@ -22,12 +22,18 @@ import java.io.IOException;
  * A factory class to construct {@link HelixClusterManager} and {@link HelixParticipant}. Only one instance of each
  * type of objects will ever be created by this factory.
  */
+// TODO: 2018/3/19 by zmyer
 public class HelixClusterAgentsFactory implements ClusterAgentsFactory {
+  //集群配置信息
   private final ClusterMapConfig clusterMapConfig;
+  //实例名称
   private final String instanceName;
+  //helix工厂对象
   private final HelixFactory helixFactory;
   private final MetricRegistry metricRegistry;
+  //helix集群管理器
   private HelixClusterManager helixClusterManager;
+  //helix参与者对象
   private HelixParticipant helixParticipant;
 
   /**
@@ -36,11 +42,13 @@ public class HelixClusterAgentsFactory implements ClusterAgentsFactory {
    * @param hardwareLayoutFilePath unused.
    * @param partitionLayoutFilePath unused.
    */
+  // TODO: 2018/3/21 by zmyer
   public HelixClusterAgentsFactory(ClusterMapConfig clusterMapConfig, String hardwareLayoutFilePath,
       String partitionLayoutFilePath) {
     this(clusterMapConfig, new MetricRegistry());
   }
 
+  // TODO: 2018/3/21 by zmyer
   HelixClusterAgentsFactory(ClusterMapConfig clusterMapConfig, MetricRegistry metricRegistry) {
     this.clusterMapConfig = clusterMapConfig;
     this.instanceName =
@@ -49,17 +57,21 @@ public class HelixClusterAgentsFactory implements ClusterAgentsFactory {
     this.metricRegistry = metricRegistry;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public HelixClusterManager getClusterMap() throws IOException {
     if (helixClusterManager == null) {
+      //创建helix集群管理器
       helixClusterManager = new HelixClusterManager(clusterMapConfig, instanceName, helixFactory, metricRegistry);
     }
     return helixClusterManager;
   }
 
+  // TODO: 2018/3/19 by zmyer
   @Override
   public HelixParticipant getClusterParticipant() throws IOException {
     if (helixParticipant == null) {
+      //创建helix参与者对象
       helixParticipant = new HelixParticipant(clusterMapConfig, helixFactory);
     }
     return helixParticipant;

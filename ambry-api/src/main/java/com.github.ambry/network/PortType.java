@@ -16,6 +16,7 @@ package com.github.ambry.network;
 /**
  * Supported port types
  */
+// TODO: 2018/3/20 by zmyer
 public enum PortType {
   PLAINTEXT, SSL
 }

@@ -14,6 +14,7 @@
 package com.github.ambry.messageformat;
 
 import com.github.ambry.store.StoreKey;
+
 import java.nio.ByteBuffer;
 
 
@@ -30,29 +31,30 @@ import java.nio.ByteBuffer;
  *  - - - - - - - - - - - - -
  *
  */
+// TODO: 2018/4/20 by zmyer
 public class DeleteMessageFormatInputStream extends MessageFormatInputStream {
-  public DeleteMessageFormatInputStream(StoreKey key, short accountId, short containerId, long deletionTimeMs)
-      throws MessageFormatException {
-    int headerSize = MessageFormatRecord.getHeaderSizeForVersion(MessageFormatRecord.headerVersionToUse);
-    int deleteRecordSize = MessageFormatRecord.Delete_Format_V2.getDeleteRecordSize();
-    buffer = ByteBuffer.allocate(headerSize + key.sizeInBytes() + deleteRecordSize);
-    if (MessageFormatRecord.headerVersionToUse == MessageFormatRecord.Message_Header_Version_V1) {
-      MessageFormatRecord.MessageHeader_Format_V1.serializeHeader(buffer, deleteRecordSize,
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
-    } else {
-      MessageFormatRecord.MessageHeader_Format_V2.serializeHeader(buffer, deleteRecordSize,
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
-          MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+    public DeleteMessageFormatInputStream(StoreKey key, short accountId, short containerId, long deletionTimeMs)
+            throws MessageFormatException {
+        int headerSize = MessageFormatRecord.getHeaderSizeForVersion(MessageFormatRecord.headerVersionToUse);
+        int deleteRecordSize = MessageFormatRecord.Delete_Format_V2.getDeleteRecordSize();
+        buffer = ByteBuffer.allocate(headerSize + key.sizeInBytes() + deleteRecordSize);
+        if (MessageFormatRecord.headerVersionToUse == MessageFormatRecord.Message_Header_Version_V1) {
+            MessageFormatRecord.MessageHeader_Format_V1.serializeHeader(buffer, deleteRecordSize,
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+        } else {
+            MessageFormatRecord.MessageHeader_Format_V2.serializeHeader(buffer, deleteRecordSize,
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset, headerSize + key.sizeInBytes(),
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset,
+                    MessageFormatRecord.Message_Header_Invalid_Relative_Offset);
+        }
+        buffer.put(key.toBytes());
+        // set the message as deleted
+        MessageFormatRecord.Delete_Format_V2.serializeDeleteRecord(buffer,
+                new DeleteRecord(accountId, containerId, deletionTimeMs));
+        messageLength = buffer.capacity();
+        buffer.flip();
     }
-    buffer.put(key.toBytes());
-    // set the message as deleted
-    MessageFormatRecord.Delete_Format_V2.serializeDeleteRecord(buffer,
-        new DeleteRecord(accountId, containerId, deletionTimeMs));
-    messageLength = buffer.capacity();
-    buffer.flip();
-  }
 }

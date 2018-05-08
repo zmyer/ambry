@@ -17,6 +17,7 @@ import java.io.Closeable;
 import java.nio.ByteBuffer;
 
 
+// TODO: 2018/3/22 by zmyer
 public interface IFilter extends Closeable {
   /**
    * Add the key to the filter

@@ -16,6 +16,7 @@ package com.github.ambry.config;
 /**
  * The configs for network layer
  */
+// TODO: 2018/3/19 by zmyer
 public class NetworkConfig {
 
   /**
@@ -75,6 +76,7 @@ public class NetworkConfig {
   @Default("104857600")
   public final int socketRequestMaxBytes;
 
+  // TODO: 2018/3/19 by zmyer
   public NetworkConfig(VerifiableProperties verifiableProperties) {
 
     numNetworkThreads = verifiableProperties.getIntInRange("num.network.threads", 3, 1, Integer.MAX_VALUE);

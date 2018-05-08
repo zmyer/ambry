@@ -18,51 +18,53 @@ package com.github.ambry.store;
  * Describes the additional segments required by a store-related entity. This is provided to the
  * {@link DiskSpaceAllocator} to initialize a disk space pool.
  */
+// TODO: 2018/3/22 by zmyer
 class DiskSpaceRequirements {
-  private final long segmentSizeInBytes;
-  private final long segmentsNeeded;
-  private final long swapSegmentsInUse;
+    private final long segmentSizeInBytes;
+    private final long segmentsNeeded;
+    private final long swapSegmentsInUse;
 
-  /**
-   * @param segmentSizeInBytes the size of each segment needed, in bytes.
-   * @param segmentsNeeded the number of additional segments needed in the disk space pool.
-   * @param swapSegmentsInUse the number of swap segments currently in use by this entity.
-   */
-  DiskSpaceRequirements(long segmentSizeInBytes, long segmentsNeeded, long swapSegmentsInUse) {
-    if (segmentSizeInBytes <= 0 || segmentsNeeded < 0 || swapSegmentsInUse < 0) {
-      throw new IllegalArgumentException(
-          "Arguments cannot be negative. segmentSizeInBytes: " + segmentSizeInBytes + ", segmentsNeeded: "
-              + segmentsNeeded + ", swapSegmentsInUse: " + swapSegmentsInUse);
+    /**
+     * @param segmentSizeInBytes the size of each segment needed, in bytes.
+     * @param segmentsNeeded the number of additional segments needed in the disk space pool.
+     * @param swapSegmentsInUse the number of swap segments currently in use by this entity.
+     */
+    DiskSpaceRequirements(long segmentSizeInBytes, long segmentsNeeded, long swapSegmentsInUse) {
+        if (segmentSizeInBytes <= 0 || segmentsNeeded < 0 || swapSegmentsInUse < 0) {
+            throw new IllegalArgumentException(
+                    "Arguments cannot be negative. segmentSizeInBytes: " + segmentSizeInBytes + ", segmentsNeeded: "
+                            + segmentsNeeded + ", swapSegmentsInUse: " + swapSegmentsInUse);
+        }
+        this.segmentSizeInBytes = segmentSizeInBytes;
+        this.segmentsNeeded = segmentsNeeded;
+        this.swapSegmentsInUse = swapSegmentsInUse;
     }
-    this.segmentSizeInBytes = segmentSizeInBytes;
-    this.segmentsNeeded = segmentsNeeded;
-    this.swapSegmentsInUse = swapSegmentsInUse;
-  }
 
-  /**
-   * @return the size of each segment needed, in bytes.
-   */
-  long getSegmentsNeeded() {
-    return segmentsNeeded;
-  }
+    /**
+     * @return the size of each segment needed, in bytes.
+     */
+    // TODO: 2018/3/22 by zmyer
+    long getSegmentsNeeded() {
+        return segmentsNeeded;
+    }
 
-  /**
-   * @return the number of additional segments needed in the disk space pool
-   */
-  long getSegmentSizeInBytes() {
-    return segmentSizeInBytes;
-  }
+    /**
+     * @return the number of additional segments needed in the disk space pool
+     */
+    long getSegmentSizeInBytes() {
+        return segmentSizeInBytes;
+    }
 
-  /**
-   * @return the number of swap segments currently in use by this entity.
-   */
-  long getSwapSegmentsInUse() {
-    return swapSegmentsInUse;
-  }
+    /**
+     * @return the number of swap segments currently in use by this entity.
+     */
+    long getSwapSegmentsInUse() {
+        return swapSegmentsInUse;
+    }
 
-  @Override
-  public String toString() {
-    return "DiskSpaceRequirements{segmentSizeInBytes=" + segmentSizeInBytes + ", segmentsNeeded=" + segmentsNeeded
-        + ", swapSegmentsInUse=" + swapSegmentsInUse + '}';
-  }
+    @Override
+    public String toString() {
+        return "DiskSpaceRequirements{segmentSizeInBytes=" + segmentSizeInBytes + ", segmentsNeeded=" + segmentsNeeded
+                + ", swapSegmentsInUse=" + swapSegmentsInUse + '}';
+    }
 }

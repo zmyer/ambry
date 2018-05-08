@@ -16,40 +16,42 @@ package com.github.ambry.store;
 /**
  * Represents a portion of a log. Provides the start and end offset of a log
  */
+// TODO: 2018/3/22 by zmyer
 class FileSpan {
-  private Offset startOffset;
-  private Offset endOffset;
+    private Offset startOffset;
+    private Offset endOffset;
 
-  /**
-   * Creates a file span with the given start and end offsets.
-   * @param startOffset the start {@link Offset} of the FileSpan.
-   * @param endOffset the end {@link Offset} of the FileSpan.
-   * @throws IllegalArgumentException if {@code endOffset} < {@code startOffset}
-   */
-  FileSpan(Offset startOffset, Offset endOffset) {
-    if (endOffset.compareTo(startOffset) < 0) {
-      throw new IllegalArgumentException("File span needs to be positive");
+    /**
+     * Creates a file span with the given start and end offsets.
+     * @param startOffset the start {@link Offset} of the FileSpan.
+     * @param endOffset the end {@link Offset} of the FileSpan.
+     * @throws IllegalArgumentException if {@code endOffset} < {@code startOffset}
+     */
+    // TODO: 2018/3/22 by zmyer
+    FileSpan(Offset startOffset, Offset endOffset) {
+        if (endOffset.compareTo(startOffset) < 0) {
+            throw new IllegalArgumentException("File span needs to be positive");
+        }
+        this.startOffset = startOffset;
+        this.endOffset = endOffset;
     }
-    this.startOffset = startOffset;
-    this.endOffset = endOffset;
-  }
 
-  /**
-   * @return the start {@link Offset} represented by this FileSpan. Guaranteed to be <= {@link #getEndOffset()}.
-   */
-  Offset getStartOffset() {
-    return startOffset;
-  }
+    /**
+     * @return the start {@link Offset} represented by this FileSpan. Guaranteed to be <= {@link #getEndOffset()}.
+     */
+    Offset getStartOffset() {
+        return startOffset;
+    }
 
-  /**
-   * @return the end {@link Offset} represented by this FileSpan. Guaranteed to be >= {@link #getStartOffset()}.
-   */
-  Offset getEndOffset() {
-    return endOffset;
-  }
+    /**
+     * @return the end {@link Offset} represented by this FileSpan. Guaranteed to be >= {@link #getStartOffset()}.
+     */
+    Offset getEndOffset() {
+        return endOffset;
+    }
 
-  @Override
-  public String toString() {
-    return "StartOffset=[" + startOffset + "], EndOffset=[" + endOffset + "]";
-  }
+    @Override
+    public String toString() {
+        return "StartOffset=[" + startOffset + "], EndOffset=[" + endOffset + "]";
+    }
 }

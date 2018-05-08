@@ -21,6 +21,7 @@ import org.apache.helix.InstanceType;
 /**
  * A factory class to construct and get a reference to a {@link HelixManager}
  */
+// TODO: 2018/3/20 by zmyer
 public class HelixFactory {
   /**
    * Get a reference to a {@link HelixManager}
@@ -30,6 +31,7 @@ public class HelixFactory {
    * @param zkAddr the address identifying the zk service to which this request is to be made.
    * @return the constructed {@link HelixManager}.
    */
+  // TODO: 2018/3/20 by zmyer
   HelixManager getZKHelixManager(String clusterName, String instanceName, InstanceType instanceType, String zkAddr) {
     return HelixManagerFactory.getZKHelixManager(clusterName, instanceName, instanceType, zkAddr);
   }

@@ -21,6 +21,7 @@ import java.io.File;
 /**
  * {@link DiskId} implementation to use within dynamic cluster managers.
  */
+// TODO: 2018/3/20 by zmyer
 class AmbryDisk implements DiskId, Resource {
   private final AmbryDataNode datanode;
   private final String mountPath;

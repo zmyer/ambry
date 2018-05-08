@@ -19,6 +19,7 @@ import java.io.IOException;
 /**
  * Basic network server used to accept / send request and responses
  */
+// TODO: 2018/3/19  by zmyer
 public interface NetworkServer {
 
   /**

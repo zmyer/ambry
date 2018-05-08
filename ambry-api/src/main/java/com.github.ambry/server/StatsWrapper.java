@@ -18,24 +18,25 @@ package com.github.ambry.server;
  * A wrapper model object that contains a {@link StatsSnapshot} and a {@link StatsHeader} with metadata about the
  * {@link StatsSnapshot}.
  */
+// TODO: 2018/4/20 by zmyer
 public class StatsWrapper {
-  private StatsHeader header;
-  private StatsSnapshot snapshot;
+    private StatsHeader header;
+    private StatsSnapshot snapshot;
 
-  public StatsWrapper(StatsHeader header, StatsSnapshot snapshot) {
-    this.snapshot = snapshot;
-    this.header = header;
-  }
+    public StatsWrapper(StatsHeader header, StatsSnapshot snapshot) {
+        this.snapshot = snapshot;
+        this.header = header;
+    }
 
-  public StatsWrapper() {
-    // empty constructor for Jackson deserialization
-  }
+    public StatsWrapper() {
+        // empty constructor for Jackson deserialization
+    }
 
-  public StatsHeader getHeader() {
-    return header;
-  }
+    public StatsHeader getHeader() {
+        return header;
+    }
 
-  public StatsSnapshot getSnapshot() {
-    return snapshot;
-  }
+    public StatsSnapshot getSnapshot() {
+        return snapshot;
+    }
 }

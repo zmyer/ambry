@@ -29,6 +29,7 @@ import java.util.Set;
  * instance and uses the {@link StaticClusterManager} as the source-of-truth. It relays events to both and checks for
  * and reports inconsistencies in the views from the two underlying cluster managers.
  */
+// TODO: 2018/3/19 by zmyer
 class CompositeClusterManager implements ClusterMap {
   final StaticClusterManager staticClusterManager;
   final HelixClusterManager helixClusterManager;
@@ -39,6 +40,7 @@ class CompositeClusterManager implements ClusterMap {
    * @param staticClusterManager the {@link StaticClusterManager} instance to use as the source-of-truth.
    * @param helixClusterManager the {@link HelixClusterManager} instance to use for comparison of views.
    */
+  // TODO: 2018/3/20 by zmyer
   CompositeClusterManager(StaticClusterManager staticClusterManager, HelixClusterManager helixClusterManager) {
     if (staticClusterManager.getLocalDatacenterId() != helixClusterManager.getLocalDatacenterId()) {
       throw new IllegalStateException(
@@ -51,18 +53,24 @@ class CompositeClusterManager implements ClusterMap {
         helixClusterManager != null ? helixClusterManager.helixClusterManagerMetrics : null;
   }
 
+  // TODO: 2018/3/20 by zmyer
   @Override
   public PartitionId getPartitionIdFromStream(InputStream stream) throws IOException {
     DuplicatingInputStream duplicatingInputStream = new DuplicatingInputStream(stream);
     duplicatingInputStream.mark(0);
+    //从数据流中读取分区id
     PartitionId partitionIdStatic = staticClusterManager.getPartitionIdFromStream(duplicatingInputStream);
     if (helixClusterManager != null) {
+      //重置数据流
       duplicatingInputStream.reset();
+      //读取分区id
       PartitionId partitionIdDynamic = helixClusterManager.getPartitionIdFromStream(duplicatingInputStream);
       if (!partitionIdStatic.toString().equals(partitionIdDynamic.toString())) {
+        //如果两个数据流不一致，则递增失赔率次数
         helixClusterManagerMetrics.getPartitionIdFromStreamMismatchCount.inc();
       }
     }
+    //返回分区id
     return partitionIdStatic;
   }
 
@@ -71,14 +79,18 @@ class CompositeClusterManager implements ClusterMap {
    * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
    * @return a list of writable partition ids from the underlying {@link StaticClusterManager}.
    */
+  // TODO: 2018/3/20 by zmyer
   @Override
   public List<PartitionId> getWritablePartitionIds() {
+    //先从静态的集群管理器中读取可写的分区列表
     List<PartitionId> staticWritablePartitionIds = staticClusterManager.getWritablePartitionIds();
     if (helixClusterManager != null) {
+      //对比动态集群管理中可写的分区列表，如果不一致，则更新失陪次数
       if (!areEqual(staticWritablePartitionIds, helixClusterManager.getWritablePartitionIds())) {
         helixClusterManagerMetrics.getAllPartitionIdsMismatchCount.inc();
       }
     }
+    //返回可写的分区列表
     return staticWritablePartitionIds;
   }
 
@@ -87,14 +99,18 @@ class CompositeClusterManager implements ClusterMap {
    * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
    * @return a list of partition ids from the underlying {@link StaticClusterManager}.
    */
+  // TODO: 2018/3/20 by zmyer
   @Override
   public List<PartitionId> getAllPartitionIds() {
+    //获取集群中所有的分区id
     List<PartitionId> staticPartitionIds = staticClusterManager.getAllPartitionIds();
     if (helixClusterManager != null) {
+      //读取所有的分区id
       if (!areEqual(staticPartitionIds, helixClusterManager.getAllPartitionIds())) {
         helixClusterManagerMetrics.getAllPartitionIdsMismatchCount.inc();
       }
     }
+    //返回结果集
     return staticPartitionIds;
   }
 
@@ -104,18 +120,23 @@ class CompositeClusterManager implements ClusterMap {
    * @param datacenterName name of datacenter
    * @return true if the datacenter exists in the underlying {@link StaticClusterManager}; false otherwise.
    */
+  // TODO: 2018/3/20 by zmyer
   @Override
   public boolean hasDatacenter(String datacenterName) {
+    //判断指定的数据中心是否存在
     boolean staticHas = staticClusterManager.hasDatacenter(datacenterName);
     if (helixClusterManager != null) {
+      //判断数据中心是否存在
       boolean helixHas = helixClusterManager.hasDatacenter(datacenterName);
       if (staticHas != helixHas) {
         helixClusterManagerMetrics.hasDatacenterMismatchCount.inc();
       }
     }
+    //返回结果
     return staticHas;
   }
 
+  // TODO: 2018/3/20 by zmyer
   @Override
   public byte getLocalDatacenterId() {
     return staticClusterManager.getLocalDatacenterId();
@@ -132,11 +153,15 @@ class CompositeClusterManager implements ClusterMap {
    * @return the {@link DataNodeId} associated with the given hostname and port in the underlying
    * {@link StaticClusterManager}.
    */
+  // TODO: 2018/3/19 by zmyer
   @Override
   public DataNodeId getDataNodeId(String hostname, int port) {
+    //根据主机名和端口，返回对应的数据节点id
     DataNodeId staticDataNode = staticClusterManager.getDataNodeId(hostname, port);
     if (helixClusterManager != null) {
+      //查找数据节点id
       DataNodeId helixDataNode = helixClusterManager.getDataNodeId(hostname, port);
+      //判断获取的节点数据是否一致
       if (!staticDataNode.toString().equals(helixDataNode.toString())) {
         helixClusterManagerMetrics.getDataNodeIdMismatchCount.inc();
       }
@@ -153,8 +178,10 @@ class CompositeClusterManager implements ClusterMap {
    * @return the list of {@link ReplicaId}s as present in the underlying {@link StaticClusterManager} for the given
    * node.
    */
+  // TODO: 2018/3/21 by zmyer
   @Override
   public List<ReplicaId> getReplicaIds(DataNodeId dataNodeId) {
+    //获取数据节点上存储的所有的副本id
     List<ReplicaId> staticReplicaIds = staticClusterManager.getReplicaIds(dataNodeId);
     if (helixClusterManager != null) {
       Set<String> staticReplicaIdStrings = new HashSet<>();
@@ -163,11 +190,13 @@ class CompositeClusterManager implements ClusterMap {
       }
 
       Set<String> helixReplicaIdStrings = new HashSet<>();
+      //获取数据节点上所有的存储的副本id
       DataNodeId ambryDataNode = helixClusterManager.getDataNodeId(dataNodeId.getHostname(), dataNodeId.getPort());
       for (ReplicaId replicaId : helixClusterManager.getReplicaIds(ambryDataNode)) {
         helixReplicaIdStrings.add(replicaId.toString());
       }
 
+      //比较两个地方获取到的副本id信息
       if (!staticReplicaIdStrings.equals(helixReplicaIdStrings)) {
         helixClusterManagerMetrics.getReplicaIdsMismatchCount.inc();
       }
@@ -180,8 +209,10 @@ class CompositeClusterManager implements ClusterMap {
    * Also verify that the underlying {@link HelixClusterManager} has the same set of nodes, if not, update a metric.
    * @return the list of {@link DataNodeId}s present in the underlying {@link StaticClusterManager}
    */
+  // TODO: 2018/3/21 by zmyer
   @Override
   public List<DataNodeId> getDataNodeIds() {
+    //获取集群中所有的数据节点id
     List<DataNodeId> staticDataNodeIds = staticClusterManager.getDataNodeIds();
     if (helixClusterManager != null) {
       Set<String> staticDataNodeIdStrings = new HashSet<>();
@@ -190,17 +221,21 @@ class CompositeClusterManager implements ClusterMap {
       }
 
       Set<String> helixDataNodeIdStrings = new HashSet<>();
+      //获取集群中所有的数据节点id
       for (DataNodeId dataNodeId : helixClusterManager.getDataNodeIds()) {
         helixDataNodeIdStrings.add(dataNodeId.toString());
       }
 
+      //进行比较
       if (!staticDataNodeIdStrings.equals(helixDataNodeIdStrings)) {
         helixClusterManagerMetrics.getDataNodeIdsMismatchCount.inc();
       }
     }
+    //返回结果
     return staticDataNodeIds;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public MetricRegistry getMetricRegistry() {
     return staticClusterManager.getMetricRegistry();
@@ -211,21 +246,28 @@ class CompositeClusterManager implements ClusterMap {
    * @param replicaId the {@link ReplicaId} for which this event has occurred.
    * @param event the {@link ReplicaEventType}.
    */
+  // TODO: 2018/3/21 by zmyer
   @Override
   public void onReplicaEvent(ReplicaId replicaId, ReplicaEventType event) {
+    //处理接收到的副本事件
     staticClusterManager.onReplicaEvent(replicaId, event);
     if (helixClusterManager != null) {
+      //首先获取具体的副本对象
       AmbryReplica ambryReplica =
           helixClusterManager.getReplicaForPartitionOnNode(replicaId.getDataNodeId().getHostname(),
               replicaId.getDataNodeId().getPort(), replicaId.getPartitionId().toString());
+      //开始处理副本事件
       helixClusterManager.onReplicaEvent(ambryReplica, event);
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public void close() {
+    //关闭静态集群管理器
     staticClusterManager.close();
     if (helixClusterManager != null) {
+      //关闭helix集群管理器
       helixClusterManager.close();
     }
   }
@@ -236,6 +278,7 @@ class CompositeClusterManager implements ClusterMap {
    * @param partitionListTwo {@link List} of {@link AmbryPartition}s to compare
    * @return {@code true} if both list are equal, {@code false} otherwise
    */
+  // TODO: 2018/3/21 by zmyer
   private boolean areEqual(List<PartitionId> partitionListOne, List<AmbryPartition> partitionListTwo) {
     Set<String> partitionStringsOne = new HashSet<>();
     for (PartitionId partitionId : partitionListOne) {
@@ -255,6 +298,7 @@ class CompositeClusterManager implements ClusterMap {
  * that it does not do any extra buffering - it only reads as many bytes from the underlying stream as is
  * required to return in the immediate call as part of which the underlying reads are done.
  */
+// TODO: 2018/3/20 by zmyer
 class DuplicatingInputStream extends FilterInputStream {
   private enum Mode {
     SAVE_READS, SERVE_DUPLICATES

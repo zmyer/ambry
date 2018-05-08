@@ -20,13 +20,14 @@ import java.io.IOException;
 /**
  * Factory to create an index key
  */
+// TODO: 2018/3/19 by zmyer
 public interface StoreKeyFactory {
 
-  /**
-   * The store key created using the stream provided
-   * @param stream The stream used to create the store key
-   * @return The store key created from the stream
-   */
-  StoreKey getStoreKey(DataInputStream stream) throws IOException;
+    /**
+     * The store key created using the stream provided
+     * @param stream The stream used to create the store key
+     * @return The store key created from the stream
+     */
+    StoreKey getStoreKey(DataInputStream stream) throws IOException;
 }
 

@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Abstraction class for all the parameters we expect to receive to start Ambry frontend and data nodes.
  */
+// TODO: 2018/3/19 by zmyer
 public class InvocationOptions {
   public final String hardwareLayoutFilePath;
   public final String partitionLayoutFilePath;

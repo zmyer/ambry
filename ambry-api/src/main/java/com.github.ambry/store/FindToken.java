@@ -16,16 +16,17 @@ package com.github.ambry.store;
 /**
  * The find token used to search entries in the store
  */
+// TODO: 2018/3/22 by zmyer
 public interface FindToken {
-  /**
-   * Returns the contents of the token in bytes
-   * @return The byte array representing the token
-   */
-  byte[] toBytes();
+    /**
+     * Returns the contents of the token in bytes
+     * @return The byte array representing the token
+     */
+    byte[] toBytes();
 
-  /**
-   *  Returns the total bytes read so far until this token
-   * @return The total bytes read so far until this token
-   */
-  public long getBytesRead();
+    /**
+     *  Returns the total bytes read so far until this token
+     * @return The total bytes read so far until this token
+     */
+    public long getBytesRead();
 }

@@ -16,6 +16,7 @@ package com.github.ambry.store;
 import com.github.ambry.utils.CrcInputStream;
 import com.github.ambry.utils.CrcOutputStream;
 import com.github.ambry.utils.Utils;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -31,83 +32,86 @@ import java.util.UUID;
  * As of now, store descriptor stores the incarnation Id which is a unique identifier for every new
  * incarnation of the store.
  */
+// TODO: 2018/3/22 by zmyer
 class StoreDescriptor {
-  private final UUID incarnationId;
-  static final short VERSION_0 = 0;
-  static final int VERSION_SIZE = 2;
-  static final int INCARNATION_ID_LENGTH_SIZE = 4;
-  static final String STORE_DESCRIPTOR_FILENAME = "StoreDescriptor";
+    private final UUID incarnationId;
+    static final short VERSION_0 = 0;
+    static final int VERSION_SIZE = 2;
+    static final int INCARNATION_ID_LENGTH_SIZE = 4;
+    static final String STORE_DESCRIPTOR_FILENAME = "StoreDescriptor";
 
-  /**
-   * Instantiates the {@link StoreDescriptor} for the store. If the respective file is present, reads the bytes
-   * to understand the incarnationId. If not, creates a new one with a random Unique identifier as the new incarnationId
-   * @param dataDir the directory path to locate the Store Descriptor file
-   * @throws IOException when file creation or read or write to file fails
-   */
-  StoreDescriptor(String dataDir) throws IOException {
-    File storeDescriptorFile = new File(dataDir, STORE_DESCRIPTOR_FILENAME);
-    if (storeDescriptorFile.exists()) {
-      CrcInputStream crcStream = new CrcInputStream(new FileInputStream(storeDescriptorFile));
-      DataInputStream stream = new DataInputStream(crcStream);
-      short version = stream.readShort();
-      switch (version) {
-        case VERSION_0:
-          // read incarnationId
-          String incarnationIdStr = Utils.readIntString(stream);
-          incarnationId = UUID.fromString(incarnationIdStr);
-          long crc = crcStream.getValue();
-          long crcValueInFile = stream.readLong();
-          if (crc != crcValueInFile) {
-            throw new IllegalStateException(
-                "CRC mismatch for StoreDescriptor. CRC of the stream " + crc + ", CRC from file " + crcValueInFile);
-          }
-          break;
-        default:
-          throw new IllegalArgumentException("Unrecognized version in StoreDescriptor: " + version);
-      }
-    } else {
-      incarnationId = UUID.randomUUID();
-      File tempFile = new File(dataDir, STORE_DESCRIPTOR_FILENAME + ".tmp");
-      File actual = new File(dataDir, STORE_DESCRIPTOR_FILENAME);
-      if (tempFile.createNewFile()) {
-        FileOutputStream fileStream = new FileOutputStream(tempFile);
-        CrcOutputStream crc = new CrcOutputStream(fileStream);
-        DataOutputStream writer = new DataOutputStream(crc);
-        writer.write(toBytes());
-        long crcValue = crc.getValue();
-        writer.writeLong(crcValue);
-        fileStream.getChannel().force(true);
-        if (!tempFile.renameTo(actual)) {
-          throw new IllegalStateException(
-              "File " + tempFile.getAbsolutePath() + " renaming to " + actual.getAbsolutePath() + " failed ");
+    /**
+     * Instantiates the {@link StoreDescriptor} for the store. If the respective file is present, reads the bytes
+     * to understand the incarnationId. If not, creates a new one with a random Unique identifier as the new incarnationId
+     * @param dataDir the directory path to locate the Store Descriptor file
+     * @throws IOException when file creation or read or write to file fails
+     */
+    StoreDescriptor(String dataDir) throws IOException {
+        File storeDescriptorFile = new File(dataDir, STORE_DESCRIPTOR_FILENAME);
+        if (storeDescriptorFile.exists()) {
+            CrcInputStream crcStream = new CrcInputStream(new FileInputStream(storeDescriptorFile));
+            DataInputStream stream = new DataInputStream(crcStream);
+            short version = stream.readShort();
+            switch (version) {
+            case VERSION_0:
+                // read incarnationId
+                String incarnationIdStr = Utils.readIntString(stream);
+                incarnationId = UUID.fromString(incarnationIdStr);
+                long crc = crcStream.getValue();
+                long crcValueInFile = stream.readLong();
+                if (crc != crcValueInFile) {
+                    throw new IllegalStateException(
+                            "CRC mismatch for StoreDescriptor. CRC of the stream " + crc + ", CRC from file " +
+                                    crcValueInFile);
+                }
+                break;
+            default:
+                throw new IllegalArgumentException("Unrecognized version in StoreDescriptor: " + version);
+            }
+        } else {
+            incarnationId = UUID.randomUUID();
+            File tempFile = new File(dataDir, STORE_DESCRIPTOR_FILENAME + ".tmp");
+            File actual = new File(dataDir, STORE_DESCRIPTOR_FILENAME);
+            if (tempFile.createNewFile()) {
+                FileOutputStream fileStream = new FileOutputStream(tempFile);
+                CrcOutputStream crc = new CrcOutputStream(fileStream);
+                DataOutputStream writer = new DataOutputStream(crc);
+                writer.write(toBytes());
+                long crcValue = crc.getValue();
+                writer.writeLong(crcValue);
+                fileStream.getChannel().force(true);
+                if (!tempFile.renameTo(actual)) {
+                    throw new IllegalStateException(
+                            "File " + tempFile.getAbsolutePath() + " renaming to " + actual.getAbsolutePath() +
+                                    " failed ");
+                }
+            } else {
+                throw new IllegalStateException("File " + tempFile.getAbsolutePath() + " creation failed ");
+            }
         }
-      } else {
-        throw new IllegalStateException("File " + tempFile.getAbsolutePath() + " creation failed ");
-      }
     }
-  }
 
-  /**
-   * @return the incarnationId of the store
-   */
-  UUID getIncarnationId() {
-    return incarnationId;
-  }
+    /**
+     * @return the incarnationId of the store
+     */
+    UUID getIncarnationId() {
+        return incarnationId;
+    }
 
-  /**
-   * Returns the serialized form of this {@link StoreDescriptor}
-   * @return the serialized form of this {@link StoreDescriptor}
-   */
-  private byte[] toBytes() {
-    byte[] incarnationIdBytes = incarnationId.toString().getBytes();
-    int size = VERSION_SIZE + INCARNATION_ID_LENGTH_SIZE + incarnationIdBytes.length;
-    byte[] buf = new byte[size];
-    ByteBuffer bufWrap = ByteBuffer.wrap(buf);
-    // add version
-    bufWrap.putShort(VERSION_0);
-    // add incarnationId
-    bufWrap.putInt(incarnationIdBytes.length);
-    bufWrap.put(incarnationIdBytes);
-    return buf;
-  }
+    /**
+     * Returns the serialized form of this {@link StoreDescriptor}
+     * @return the serialized form of this {@link StoreDescriptor}
+     */
+    private byte[] toBytes() {
+        byte[] incarnationIdBytes = incarnationId.toString().getBytes();
+        int size = VERSION_SIZE + INCARNATION_ID_LENGTH_SIZE + incarnationIdBytes.length;
+        byte[] buf = new byte[size];
+        ByteBuffer bufWrap = ByteBuffer.wrap(buf);
+        // add version
+        bufWrap.putShort(VERSION_0);
+        // add incarnationId
+        bufWrap.putInt(incarnationIdBytes.length);
+        bufWrap.put(incarnationIdBytes);
+        return buf;
+    }
 }

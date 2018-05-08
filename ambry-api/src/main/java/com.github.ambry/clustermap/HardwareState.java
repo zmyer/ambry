@@ -16,6 +16,8 @@ package com.github.ambry.clustermap;
 /**
  * The states that a hardware component may be in.
  */
+// TODO: 2018/3/20 by zmyer
 public enum HardwareState {
-  AVAILABLE, UNAVAILABLE
+    AVAILABLE,
+    UNAVAILABLE
 }

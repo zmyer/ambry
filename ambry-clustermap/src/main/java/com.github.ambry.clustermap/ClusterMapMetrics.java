@@ -22,6 +22,7 @@ import java.util.List;
 /**
  * Metrics for the {@link StaticClusterManager}.
  */
+// TODO: 2018/3/21 by zmyer
 class ClusterMapMetrics {
   private MetricRegistry registry;
   private final HardwareLayout hardwareLayout;

@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 
+// TODO: 2018/3/22 by zmyer
 class JournalEntry {
   private final Offset offset;
   private final StoreKey key;
@@ -45,6 +46,7 @@ class JournalEntry {
 /**
  * An in memory journal used to track the most recent blobs for a store.
  */
+// TODO: 2018/3/22 by zmyer
 class Journal {
 
   private final ConcurrentSkipListMap<Offset, StoreKey> journal;
@@ -76,6 +78,7 @@ class Journal {
    * @param key The key that the entry in the journal refers to.
    * @param crc The crc of the object. This may be null if crc is not available.
    */
+  // TODO: 2018/3/22 by zmyer
   void addEntry(Offset offset, StoreKey key, Long crc) {
     if (key == null || offset == null) {
       throw new IllegalArgumentException("Invalid arguments passed to add to the journal");
@@ -114,16 +117,17 @@ class Journal {
    * @return The entries in the journal starting from offset. If the offset is outside the range of the journal,
    *         it returns null.
    */
+  // TODO: 2018/3/22 by zmyer
   List<JournalEntry> getEntriesSince(Offset offset, boolean inclusive) {
     // To prevent synchronizing the addEntry method, we first get all the entries from the journal that are greater
     // than offset. Once we have all the required entries, we finally check if the offset is actually present
     // in the journal. If the offset is not present we return null, else we return the entries we got in the first step.
     // The offset may not be present in the journal as it could be removed.
-
     Map.Entry<Offset, StoreKey> first = journal.firstEntry();
     Map.Entry<Offset, StoreKey> last = journal.lastEntry();
 
     // check if the journal contains the offset.
+    //检查当前日志中是否存在指定的偏移量
     if (first == null || offset.compareTo(first.getKey()) < 0 || last == null || offset.compareTo(last.getKey()) > 0
         || !journal.containsKey(offset)) {
       return null;
@@ -135,6 +139,7 @@ class Journal {
     int entriesAdded = 0;
     for (Map.Entry<Offset, StoreKey> entry : subsetMap.entrySet()) {
       if (inclusive || !entry.getKey().equals(offset)) {
+        //依次获取指定数量的日志实例对象，该实例对象代表着消息存储位置信息
         journalEntries.add(new JournalEntry(entry.getKey(), entry.getValue()));
         entriesAdded++;
         if (entriesAdded == entriesToReturn) {
@@ -174,6 +179,7 @@ class Journal {
    * @param key the key for which the crc is to be obtained.
    * @return the crc associated with this key in the journal if there is one; else returns null.
    */
+  // TODO: 2018/3/22 by zmyer
   Long getCrcOfKey(StoreKey key) {
     return recentCrcs.get(key);
   }

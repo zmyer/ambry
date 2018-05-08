@@ -19,41 +19,42 @@ package com.github.ambry.network;
  * and hence cannot be used to receive response or open a connection as they would
  * be client related operations.
  */
+// TODO: 2018/3/19 by zmyer
 public interface RequestResponseChannel {
 
-  /**
-   * Queue's the response into the channel for the network server to pick up
-   * @param payloadToSend The payload to be sent over the network
-   * @param originalRequest The original request this response belongs to
-   * @param metrics The set of metrics tracked at the network layer
-   * @throws InterruptedException
-   */
-  public void sendResponse(Send payloadToSend, Request originalRequest, ServerNetworkResponseMetrics metrics)
-      throws InterruptedException;
+    /**
+     * Queue's the response into the channel for the network server to pick up
+     * @param payloadToSend The payload to be sent over the network
+     * @param originalRequest The original request this response belongs to
+     * @param metrics The set of metrics tracked at the network layer
+     * @throws InterruptedException
+     */
+    public void sendResponse(Send payloadToSend, Request originalRequest, ServerNetworkResponseMetrics metrics)
+            throws InterruptedException;
 
-  /**
-   * Receives the request from the channel
-   * @return The request that was queued by the network layer into the channel
-   * @throws InterruptedException
-   */
-  public Request receiveRequest() throws InterruptedException;
+    /**
+     * Receives the request from the channel
+     * @return The request that was queued by the network layer into the channel
+     * @throws InterruptedException
+     */
+    public Request receiveRequest() throws InterruptedException;
 
-  /**
-   * Sends a request over the network. The request gets queued by the channel.
-   * @param request The request to be queued by the channel
-   * @throws InterruptedException
-   */
-  public void sendRequest(Request request) throws InterruptedException;
+    /**
+     * Sends a request over the network. The request gets queued by the channel.
+     * @param request The request to be queued by the channel
+     * @throws InterruptedException
+     */
+    public void sendRequest(Request request) throws InterruptedException;
 
-  /**
-   * Closes the connection on which the original request came
-   * @param request The request whose connection needs to be closed
-   * @throws InterruptedException
-   */
-  public void closeConnection(Request request) throws InterruptedException;
+    /**
+     * Closes the connection on which the original request came
+     * @param request The request whose connection needs to be closed
+     * @throws InterruptedException
+     */
+    public void closeConnection(Request request) throws InterruptedException;
 
-  /**
-   * Shuts down the request response channel
-   */
-  public void shutdown();
+    /**
+     * Shuts down the request response channel
+     */
+    public void shutdown();
 }

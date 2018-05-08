@@ -22,17 +22,19 @@ import com.codahale.metrics.MetricRegistry;
 /**
  * Metrics for {@link StatsManager} and related components.
  */
+// TODO: 2018/3/20 by zmyer
 class StatsManagerMetrics {
-  final Counter statsAggregationFailureCount;
-  final Histogram totalFetchAndAggregateTimeMs;
-  final Histogram fetchAndAggregateTimePerStoreMs;
+    final Counter statsAggregationFailureCount;
+    final Histogram totalFetchAndAggregateTimeMs;
+    final Histogram fetchAndAggregateTimePerStoreMs;
 
-  StatsManagerMetrics(MetricRegistry registry) {
-    statsAggregationFailureCount =
-        registry.counter(MetricRegistry.name(StatsManager.class, "StatsAggregationFailureCount"));
-    totalFetchAndAggregateTimeMs =
-        registry.histogram(MetricRegistry.name(StatsManager.class, "TotalFetchAndAggregateTimeMs"));
-    fetchAndAggregateTimePerStoreMs =
-        registry.histogram(MetricRegistry.name(StatsManager.class, "FetchAndAggregateTimePerStoreMs"));
-  }
+    // TODO: 2018/3/20 by zmyer
+    StatsManagerMetrics(MetricRegistry registry) {
+        statsAggregationFailureCount =
+                registry.counter(MetricRegistry.name(StatsManager.class, "StatsAggregationFailureCount"));
+        totalFetchAndAggregateTimeMs =
+                registry.histogram(MetricRegistry.name(StatsManager.class, "TotalFetchAndAggregateTimeMs"));
+        fetchAndAggregateTimePerStoreMs =
+                registry.histogram(MetricRegistry.name(StatsManager.class, "FetchAndAggregateTimePerStoreMs"));
+    }
 }

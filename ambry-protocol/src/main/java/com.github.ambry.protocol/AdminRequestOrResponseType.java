@@ -19,6 +19,10 @@ package com.github.ambry.protocol;
  * The order of these enums should not be changed since their relative position goes into the serialized form of
  * requests/responses
  */
+// TODO: 2018/4/20 by zmyer
 public enum AdminRequestOrResponseType {
-  TriggerCompaction, RequestControl, ReplicationControl, CatchupStatus
+    TriggerCompaction,
+    RequestControl,
+    ReplicationControl,
+    CatchupStatus
 }

@@ -15,6 +15,7 @@
 package com.github.ambry.store;
 
 import com.github.ambry.utils.Throttler;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -28,43 +29,51 @@ import java.util.Map;
  * The initial implementation simply returns MAX_VALUE for the application and uses the throttler for the other 2.
  * In the future this will have functions to submit feedback so that more intelligent decisions can be made.
  */
+// TODO: 2018/3/22 by zmyer
 class DiskIOScheduler {
-  private final Map<String, Throttler> throttlers;
+    //节流器集合
+    private final Map<String, Throttler> throttlers;
 
-  /**
-   * Create a {@link DiskIOScheduler}.
-   * @param throttlers the {@link Throttler}s to use for each job type.
-   */
-  DiskIOScheduler(Map<String, Throttler> throttlers) {
-    this.throttlers = throttlers != null ? throttlers : new HashMap<String, Throttler>();
-  }
-
-  /**
-   * Return the size of I/O permissible based on the parameters provided.
-   * @param jobType the type of the job requesting an I/O slice.
-   * @param jobId the ID of the job requesting an I/O slice.
-   * @param usedSinceLastCall the amount of capacity used since the last call to this function.
-   * @return the I/O slice available for use.
-   */
-  long getSlice(String jobType, String jobId, long usedSinceLastCall) {
-    Throttler throttler = throttlers.get(jobType);
-    if (throttler != null) {
-      try {
-        throttler.maybeThrottle(usedSinceLastCall);
-      } catch (InterruptedException e) {
-        throw new IllegalStateException("Throttler call interrupted", e);
-      }
+    /**
+     * Create a {@link DiskIOScheduler}.
+     * @param throttlers the {@link Throttler}s to use for each job type.
+     */
+    // TODO: 2018/3/22 by zmyer
+    DiskIOScheduler(Map<String, Throttler> throttlers) {
+        this.throttlers = throttlers != null ? throttlers : new HashMap<String, Throttler>();
     }
-    return Long.MAX_VALUE;
-  }
 
-  /**
-   * Disables the DiskIOScheduler i.e. there will be no more blocking calls
-   */
-  void disable() {
-    for (Throttler throttler : throttlers.values()) {
-      throttler.disable();
+    /**
+     * Return the size of I/O permissible based on the parameters provided.
+     * @param jobType the type of the job requesting an I/O slice.
+     * @param jobId the ID of the job requesting an I/O slice.
+     * @param usedSinceLastCall the amount of capacity used since the last call to this function.
+     * @return the I/O slice available for use.
+     */
+    // TODO: 2018/3/22 by zmyer
+    long getSlice(String jobType, String jobId, long usedSinceLastCall) {
+        //根据任务类型，获取对应的节流器
+        Throttler throttler = throttlers.get(jobType);
+        if (throttler != null) {
+            try {
+                //检查节流器是否需要立即节流
+                throttler.maybeThrottle(usedSinceLastCall);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException("Throttler call interrupted", e);
+            }
+        }
+        //返回结果
+        return Long.MAX_VALUE;
     }
-  }
+
+    /**
+     * Disables the DiskIOScheduler i.e. there will be no more blocking calls
+     */
+    // TODO: 2018/3/22 by zmyer
+    void disable() {
+        for (Throttler throttler : throttlers.values()) {
+            throttler.disable();
+        }
+    }
 }
 

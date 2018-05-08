@@ -42,6 +42,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Class that provides functionality to perform hard deletes.
  */
+// TODO: 2018/3/22 by zmyer
 public class HardDeleter implements Runnable {
 
   public static final short Cleanup_Token_Version_V0 = 0;
@@ -96,6 +97,7 @@ public class HardDeleter implements Runnable {
   private final ReentrantLock hardDeleteLock = new ReentrantLock();
   private final Condition pauseCondition = hardDeleteLock.newCondition();
 
+  // TODO: 2018/3/23 by zmyer
   HardDeleter(StoreConfig config, StoreMetrics metrics, String dataDir, Log log, PersistentIndex index,
       MessageStoreHardDelete hardDelete, StoreKeyFactory factory, DiskIOScheduler diskIOScheduler, Time time) {
     this.metrics = metrics;

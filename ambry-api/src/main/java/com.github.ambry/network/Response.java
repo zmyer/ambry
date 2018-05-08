@@ -16,17 +16,18 @@ package com.github.ambry.network;
 /**
  * Simple response
  */
+// TODO: 2018/3/20 by zmyer
 public interface Response {
 
-  /**
-   * Provides the send object that can be sent over the network
-   * @return The send object that is part of this response
-   */
-  Send getPayload();
+    /**
+     * Provides the send object that can be sent over the network
+     * @return The send object that is part of this response
+     */
+    Send getPayload();
 
-  /**
-   * The original request object that this response maps to
-   * @return The request object that maps to this response
-   */
-  Request getRequest();
+    /**
+     * The original request object that this response maps to
+     * @return The request object that maps to this response
+     */
+    Request getRequest();
 }

@@ -17,41 +17,42 @@ package com.github.ambry.store;
  * Represents the index key. To make an object part of an index key,
  * this interface can be implemented
  */
+// TODO: 2018/3/22 by zmyer
 public abstract class StoreKey implements Comparable<StoreKey> {
 
-  /**
-   * The byte version of this key
-   * @return A byte buffer that represents the key
-   */
-  public abstract byte[] toBytes();
+    /**
+     * The byte version of this key
+     * @return A byte buffer that represents the key
+     */
+    public abstract byte[] toBytes();
 
-  /**
-   * The size of the serialized version of the key
-   * @return The size of the key
-   */
-  public abstract short sizeInBytes();
+    /**
+     * The size of the serialized version of the key
+     * @return The size of the key
+     */
+    public abstract short sizeInBytes();
 
-  /**
-   * Get the key in String form
-   * @return the key in String form
-   */
-  public abstract String getID();
+    /**
+     * Get the key in String form
+     * @return the key in String form
+     */
+    public abstract String getID();
 
-  /**
-   * Get accountId of StoreKey, return -1 if unknown.
-   * @return accountId
-   */
-  public abstract short getAccountId();
+    /**
+     * Get accountId of StoreKey, return -1 if unknown.
+     * @return accountId
+     */
+    public abstract short getAccountId();
 
-  /**
-   * Get containerId of StoreKey, return -1 if unknown.
-   * @return containerId
-   */
-  public abstract short getContainerId();
+    /**
+     * Get containerId of StoreKey, return -1 if unknown.
+     * @return containerId
+     */
+    public abstract short getContainerId();
 
-  /**
-   * Get a long form of the key for printing.
-   * @return the long form of the key
-   */
-  public abstract String getLongForm();
+    /**
+     * Get a long form of the key for printing.
+     * @return the long form of the key
+     */
+    public abstract String getLongForm();
 }

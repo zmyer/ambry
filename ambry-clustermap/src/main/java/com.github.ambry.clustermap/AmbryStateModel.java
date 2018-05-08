@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
  * writes. However, going forward, it is useful to have one of the replicas chosen as a LEADER for purposes such as
  * replication.
  */
+// TODO: 2018/3/22 by zmyer
 @StateModelInfo(initialState = "OFFLINE", states = {"LEADER", "STANDBY"})
 public class AmbryStateModel extends StateModel {
   private Logger logger = LoggerFactory.getLogger(getClass());

@@ -20,77 +20,78 @@ import java.io.IOException;
 /**
  * An admin request used to control request behavior (enable/disable)
  */
+// TODO: 2018/4/20 by zmyer
 public class RequestControlAdminRequest extends AdminRequest {
-  private static final short VERSION_V1 = 1;
+    private static final short VERSION_V1 = 1;
 
-  private final RequestOrResponseType requestTypeToControl;
-  private final boolean enable;
-  private final long sizeInBytes;
+    private final RequestOrResponseType requestTypeToControl;
+    private final boolean enable;
+    private final long sizeInBytes;
 
-  /**
-   * Reads from a stream and constructs a {@link RequestControlAdminRequest}.
-   * @param stream the stream to read from
-   * @param adminRequest the {@link AdminRequest} that contains some necessary headers.
-   * @return the {@link RequestControlAdminRequest} constructed from the {@code stream}.
-   * @throws IOException
-   */
-  public static RequestControlAdminRequest readFrom(DataInputStream stream, AdminRequest adminRequest)
-      throws IOException {
-    Short versionId = stream.readShort();
-    if (!versionId.equals(VERSION_V1)) {
-      throw new IllegalStateException("Unrecognized version for RequestControlAdminRequest: " + versionId);
+    /**
+     * Reads from a stream and constructs a {@link RequestControlAdminRequest}.
+     * @param stream the stream to read from
+     * @param adminRequest the {@link AdminRequest} that contains some necessary headers.
+     * @return the {@link RequestControlAdminRequest} constructed from the {@code stream}.
+     * @throws IOException
+     */
+    public static RequestControlAdminRequest readFrom(DataInputStream stream, AdminRequest adminRequest)
+            throws IOException {
+        Short versionId = stream.readShort();
+        if (!versionId.equals(VERSION_V1)) {
+            throw new IllegalStateException("Unrecognized version for RequestControlAdminRequest: " + versionId);
+        }
+        RequestOrResponseType requestType = RequestOrResponseType.values()[stream.readShort()];
+        boolean enable = stream.readByte() == 1;
+        return new RequestControlAdminRequest(requestType, enable, adminRequest);
     }
-    RequestOrResponseType requestType = RequestOrResponseType.values()[stream.readShort()];
-    boolean enable = stream.readByte() == 1;
-    return new RequestControlAdminRequest(requestType, enable, adminRequest);
-  }
 
-  /**
-   * Construct a RequestControlAdminRequest
-   * @param requestTypeToControl the {@link RequestOrResponseType} to control.
-   * @param enable enable/disable flag ({@code true} to enable).
-   * @param adminRequest the {@link AdminRequest} that contains common admin request related information.
-   */
-  public RequestControlAdminRequest(RequestOrResponseType requestTypeToControl, boolean enable,
-      AdminRequest adminRequest) {
-    super(AdminRequestOrResponseType.RequestControl, adminRequest.getPartitionId(), adminRequest.getCorrelationId(),
-        adminRequest.getClientId());
-    this.requestTypeToControl = requestTypeToControl;
-    this.enable = enable;
-    // parent size + version size + request type size + enable flag size
-    sizeInBytes = super.sizeInBytes() + Short.BYTES + Short.BYTES + Byte.BYTES;
-  }
+    /**
+     * Construct a RequestControlAdminRequest
+     * @param requestTypeToControl the {@link RequestOrResponseType} to control.
+     * @param enable enable/disable flag ({@code true} to enable).
+     * @param adminRequest the {@link AdminRequest} that contains common admin request related information.
+     */
+    public RequestControlAdminRequest(RequestOrResponseType requestTypeToControl, boolean enable,
+            AdminRequest adminRequest) {
+        super(AdminRequestOrResponseType.RequestControl, adminRequest.getPartitionId(), adminRequest.getCorrelationId(),
+                adminRequest.getClientId());
+        this.requestTypeToControl = requestTypeToControl;
+        this.enable = enable;
+        // parent size + version size + request type size + enable flag size
+        sizeInBytes = super.sizeInBytes() + Short.BYTES + Short.BYTES + Byte.BYTES;
+    }
 
-  /**
-   * @return the {@link RequestOrResponseType} to control.
-   */
-  public RequestOrResponseType getRequestTypeToControl() {
-    return requestTypeToControl;
-  }
+    /**
+     * @return the {@link RequestOrResponseType} to control.
+     */
+    public RequestOrResponseType getRequestTypeToControl() {
+        return requestTypeToControl;
+    }
 
-  /**
-   * @return if {@link #getRequestTypeToControl()} needs to enabled ({@code true}) or disabled ({@code false}).
-   */
-  public boolean shouldEnable() {
-    return enable;
-  }
+    /**
+     * @return if {@link #getRequestTypeToControl()} needs to enabled ({@code true}) or disabled ({@code false}).
+     */
+    public boolean shouldEnable() {
+        return enable;
+    }
 
-  @Override
-  public long sizeInBytes() {
-    return sizeInBytes;
-  }
+    @Override
+    public long sizeInBytes() {
+        return sizeInBytes;
+    }
 
-  @Override
-  public String toString() {
-    return "RequestControlAdminRequest[ClientId=" + clientId + ", CorrelationId=" + correlationId
-        + ", RequestTypeToControl=" + requestTypeToControl + ", PartitionId=" + getPartitionId() + "]";
-  }
+    @Override
+    public String toString() {
+        return "RequestControlAdminRequest[ClientId=" + clientId + ", CorrelationId=" + correlationId
+                + ", RequestTypeToControl=" + requestTypeToControl + ", PartitionId=" + getPartitionId() + "]";
+    }
 
-  @Override
-  protected void serializeIntoBuffer() {
-    super.serializeIntoBuffer();
-    bufferToSend.putShort(VERSION_V1);
-    bufferToSend.putShort((short) requestTypeToControl.ordinal());
-    bufferToSend.put(enable ? (byte) 1 : 0);
-  }
+    @Override
+    protected void serializeIntoBuffer() {
+        super.serializeIntoBuffer();
+        bufferToSend.putShort(VERSION_V1);
+        bufferToSend.putShort((short) requestTypeToControl.ordinal());
+        bufferToSend.put(enable ? (byte) 1 : 0);
+    }
 }

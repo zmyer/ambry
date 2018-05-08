@@ -28,14 +28,21 @@ import org.slf4j.LoggerFactory;
  * A Disk stores {@link Replica}s. Each Disk is hosted on one specific {@link DataNode}. Each Disk is uniquely
  * identified by its DataNode and mount path (the path to this Disk's device on its DataNode).
  */
+// TODO: 2018/3/20 by zmyer
 class Disk implements DiskId {
+  //所属的数据节点
   private final DataNode dataNode;
+  //挂载点
   private final String mountPath;
+  //资源状态策略
   private final ResourceStatePolicy diskStatePolicy;
+  //磁盘容量
   private long capacityInBytes;
 
+  //日子对象
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
+  // TODO: 2018/3/21 by zmyer
   Disk(DataNode dataNode, JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("Disk " + jsonObject.toString());
@@ -43,6 +50,7 @@ class Disk implements DiskId {
     this.dataNode = dataNode;
     this.mountPath = jsonObject.getString("mountPath");
     try {
+      //设置资源策略
       ResourceStatePolicyFactory resourceStatePolicyFactory =
           Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this,
               HardwareState.valueOf(jsonObject.getString("hardwareState")), clusterMapConfig);
@@ -53,6 +61,7 @@ class Disk implements DiskId {
           e);
     }
     this.capacityInBytes = jsonObject.getLong("capacityInBytes");
+    //资源验证
     validate();
   }
 
@@ -61,6 +70,7 @@ class Disk implements DiskId {
     return mountPath;
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public HardwareState getState() {
     // A Disk is unavailable if its DataNode is unavailable.
@@ -68,10 +78,12 @@ class Disk implements DiskId {
         : HardwareState.UNAVAILABLE;
   }
 
+  // TODO: 2018/3/21 by zmyer
   boolean isDown() {
     return diskStatePolicy.isDown();
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public long getRawCapacityInBytes() {
     return capacityInBytes;
@@ -81,16 +93,19 @@ class Disk implements DiskId {
     return dataNode;
   }
 
+  // TODO: 2018/3/21 by zmyer
   HardwareState getHardState() {
     return diskStatePolicy.isHardDown() ? HardwareState.UNAVAILABLE : HardwareState.AVAILABLE;
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validateDataNode() {
     if (dataNode == null) {
       throw new IllegalStateException("DataNode cannot be null.");
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   private void validateMountPath() {
     if (mountPath == null) {
       throw new IllegalStateException("Mount path cannot be null.");
@@ -104,6 +119,7 @@ class Disk implements DiskId {
     }
   }
 
+  // TODO: 2018/3/21 by zmyer
   protected void validate() {
     logger.trace("begin validate.");
     validateDataNode();
@@ -112,18 +128,21 @@ class Disk implements DiskId {
     logger.trace("complete validate.");
   }
 
+  // TODO: 2018/3/21 by zmyer
   JSONObject toJSONObject() throws JSONException {
     return new JSONObject().put("mountPath", mountPath)
         .put("hardwareState", getHardState())
         .put("capacityInBytes", capacityInBytes);
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public String toString() {
     String dataNodeStr = dataNode == null ? "" : dataNode.getHostname() + ":" + dataNode.getPort() + ":";
     return "Disk[" + dataNodeStr + getMountPath() + "]";
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public boolean equals(Object o) {
     if (this == o) {
@@ -141,6 +160,7 @@ class Disk implements DiskId {
     return mountPath.equals(disk.mountPath);
   }
 
+  // TODO: 2018/3/21 by zmyer
   @Override
   public int hashCode() {
     int result = dataNode.hashCode();
@@ -148,10 +168,12 @@ class Disk implements DiskId {
     return result;
   }
 
+  // TODO: 2018/3/21 by zmyer
   void onDiskError() {
     diskStatePolicy.onError();
   }
 
+  // TODO: 2018/3/21 by zmyer
   void onDiskOk() {
     diskStatePolicy.onSuccess();
   }

@@ -16,6 +16,7 @@ package com.github.ambry.config;
 /**
  * The configs for connection pool.
  */
+// TODO: 2018/3/19 by zmyer
 public class ConnectionPoolConfig {
 
   /**
@@ -60,6 +61,7 @@ public class ConnectionPoolConfig {
   @Default("2")
   public final int connectionPoolMaxConnectionsPerPortSSL;
 
+  // TODO: 2018/3/19 by zmyer
   public ConnectionPoolConfig(VerifiableProperties verifiableProperties) {
     connectionPoolReadBufferSizeBytes =
         verifiableProperties.getIntInRange("connectionpool.read.buffer.size.bytes", 1048576, 1, 1024 * 1024 * 1024);

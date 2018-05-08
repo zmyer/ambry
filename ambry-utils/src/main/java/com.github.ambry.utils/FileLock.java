@@ -24,6 +24,7 @@ import java.nio.channels.OverlappingFileLockException;
 /**
  * File Lock helper
  */
+// TODO: 2018/3/22 by zmyer
 public class FileLock {
   private final File file;
   private final FileChannel channel;

@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
  * FixedBackoffResourceStatePolicy marks a resource as unavailable for retryBackoff milliseconds if the number of
  * consecutive errors the resource encountered is greater than failureCountThreshold.
  */
+// TODO: 2018/3/21 by zmyer
 class FixedBackoffResourceStatePolicy implements ResourceStatePolicy {
   private final Object resource;
   private final AtomicBoolean hardDown;

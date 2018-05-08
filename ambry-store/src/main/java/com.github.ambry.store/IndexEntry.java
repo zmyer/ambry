@@ -16,6 +16,7 @@ package com.github.ambry.store;
 /**
  * A key and value that represents an index entry
  */
+// TODO: 2018/3/22 by zmyer
 class IndexEntry {
   private final StoreKey key;
   private final IndexValue value;

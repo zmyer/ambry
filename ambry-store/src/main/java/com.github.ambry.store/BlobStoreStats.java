@@ -50,6 +50,7 @@ import org.slf4j.LoggerFactory;
  * a forecast boundary. Stats related requests are either served via these buckets or a separate scan that will walk
  * through the entire index if the request is outside of the forecast boundary.
  */
+// TODO: 2018/3/22 by zmyer
 class BlobStoreStats implements StoreStats, Closeable {
   static final String IO_SCHEDULER_JOB_TYPE = "BlobStoreStats";
   static final String IO_SCHEDULER_JOB_ID = "indexSegment_read";
@@ -105,6 +106,7 @@ class BlobStoreStats implements StoreStats, Closeable {
     return new StatsSnapshot(totalSize, accountValidSizeMap);
   }
 
+  // TODO: 2018/3/22 by zmyer
   BlobStoreStats(String storeId, PersistentIndex index, int bucketCount, long bucketSpanTimeInMs,
       long logSegmentForecastOffsetMs, long queueProcessingPeriodInMs, long waitTimeoutInSecs, Time time,
       ScheduledExecutorService longLiveTaskScheduler, ScheduledExecutorService shortLiveTaskScheduler,
@@ -293,6 +295,7 @@ class BlobStoreStats implements StoreStats, Closeable {
    * Function that handles new PUT after a scan to keep the current {@link ScanResults} relevant.
    * @param putValue the {@link IndexValue} of the new PUT
    */
+  // TODO: 2018/3/22 by zmyer
   void handleNewPutEntry(IndexValue putValue) {
     if (recentEntryQueueEnabled) {
       recentEntryQueue.offer(new Pair<IndexValue, IndexValue>(putValue, null));
@@ -305,6 +308,7 @@ class BlobStoreStats implements StoreStats, Closeable {
    * @param deleteValue the {@link IndexValue} of the new DELETE
    * @param originalPutValue the {@link IndexValue} of the original PUT that is getting deleted
    */
+  // TODO: 2018/3/22 by zmyer
   void handleNewDeleteEntry(IndexValue deleteValue, IndexValue originalPutValue) {
     if (recentEntryQueueEnabled) {
       recentEntryQueue.offer(new Pair<>(deleteValue, originalPutValue));

@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Verifiable properties for configs
  */
+// TODO: 2018/3/19 by zmyer
 public class VerifiableProperties {
 
   private final HashSet<String> referenceSet = new HashSet<String>();
@@ -272,6 +273,7 @@ public class VerifiableProperties {
     }
   }
 
+  // TODO: 2018/3/19 by zmyer
   public void verify() {
     logger.info("Verifying properties");
     Enumeration keys = props.propertyNames();

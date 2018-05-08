@@ -23,14 +23,18 @@ import java.io.IOException;
 /**
  * The BlobId factory that creates the blobId
  */
+// TODO: 2018/3/20 by zmyer
 public class BlobIdFactory implements StoreKeyFactory {
 
+  //集群对象
   private ClusterMap clusterMap;
 
+  // TODO: 2018/3/22 by zmyer
   public BlobIdFactory(ClusterMap clusterMap) {
     this.clusterMap = clusterMap;
   }
 
+  // TODO: 2018/3/22 by zmyer
   @Override
   public StoreKey getStoreKey(DataInputStream value) throws IOException {
     return new BlobId(value, clusterMap);

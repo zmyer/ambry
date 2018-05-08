@@ -21,6 +21,7 @@ import java.util.List;
 /**
  * An interface for asynchronous, multi-channel network I/O
  */
+// TODO: 2018/3/27 by zmyer
 public interface Selectable {
 
   /**

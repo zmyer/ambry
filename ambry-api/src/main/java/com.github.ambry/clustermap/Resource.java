@@ -16,6 +16,6 @@ package com.github.ambry.clustermap;
 /**
  * A Resource represents a {@link DiskId}, {@link DataNodeId} or a {@link PartitionId}
  */
-
+// TODO: 2018/4/23 by zmyer
 public interface Resource {
 }
