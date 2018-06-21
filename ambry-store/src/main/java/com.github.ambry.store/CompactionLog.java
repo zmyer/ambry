@@ -83,6 +83,7 @@ class CompactionLog implements Closeable {
      * @param time the {@link Time} instance to use.
      * @param compactionDetails the details about the compaction.
      */
+    // TODO: 2018/5/15 by zmyer
     CompactionLog(String dir, String storeId, Time time, CompactionDetails compactionDetails) throws IOException {
         this.time = time;
         file = new File(dir, storeId + COMPACTION_LOG_SUFFIX);

@@ -16,30 +16,32 @@ package com.github.ambry.clustermap;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.utils.SystemTime;
 
-
+// TODO: 2018/5/15 by zmyer
 public class FixedBackoffResourceStatePolicyFactory implements ResourceStatePolicyFactory {
-  private ResourceStatePolicy resourceStatePolicy;
+    private ResourceStatePolicy resourceStatePolicy;
 
-  public FixedBackoffResourceStatePolicyFactory(Resource resource, HardwareState initialState,
-      ClusterMapConfig clusterMapConfig) throws InstantiationError {
-    resourceStatePolicy = null;
-    if (resource instanceof DataNodeId) {
-      resourceStatePolicy = new FixedBackoffResourceStatePolicy(resource, initialState == HardwareState.UNAVAILABLE,
-          clusterMapConfig.clusterMapFixedTimeoutDatanodeErrorThreshold,
-          clusterMapConfig.clusterMapFixedTimeoutDataNodeRetryBackoffMs, SystemTime.getInstance());
-    } else if (resource instanceof DiskId) {
-      resourceStatePolicy = new FixedBackoffResourceStatePolicy(resource, initialState == HardwareState.UNAVAILABLE,
-          clusterMapConfig.clusterMapFixedTimeoutDiskErrorThreshold,
-          clusterMapConfig.clusterMapFixedTimeoutDiskRetryBackoffMs, SystemTime.getInstance());
+    public FixedBackoffResourceStatePolicyFactory(Resource resource, HardwareState initialState,
+            ClusterMapConfig clusterMapConfig) throws InstantiationError {
+        resourceStatePolicy = null;
+        if (resource instanceof DataNodeId) {
+            resourceStatePolicy = new FixedBackoffResourceStatePolicy(resource,
+                    initialState == HardwareState.UNAVAILABLE,
+                    clusterMapConfig.clusterMapFixedTimeoutDatanodeErrorThreshold,
+                    clusterMapConfig.clusterMapFixedTimeoutDataNodeRetryBackoffMs, SystemTime.getInstance());
+        } else if (resource instanceof DiskId) {
+            resourceStatePolicy = new FixedBackoffResourceStatePolicy(resource,
+                    initialState == HardwareState.UNAVAILABLE,
+                    clusterMapConfig.clusterMapFixedTimeoutDiskErrorThreshold,
+                    clusterMapConfig.clusterMapFixedTimeoutDiskRetryBackoffMs, SystemTime.getInstance());
+        }
+
+        if (resourceStatePolicy == null) {
+            throw new InstantiationError("Unknown resource type, cannot get resource state policy.");
+        }
     }
 
-    if (resourceStatePolicy == null) {
-      throw new InstantiationError("Unknown resource type, cannot get resource state policy.");
+    @Override
+    public ResourceStatePolicy getResourceStatePolicy() {
+        return resourceStatePolicy;
     }
-  }
-
-  @Override
-  public ResourceStatePolicy getResourceStatePolicy() {
-    return resourceStatePolicy;
-  }
 }

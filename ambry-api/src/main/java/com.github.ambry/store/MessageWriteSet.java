@@ -23,17 +23,17 @@ import java.util.List;
 // TODO: 2018/3/22 by zmyer
 public interface MessageWriteSet {
 
-  /**
-   * Write the messages in this set to the given write channel
-   * @param writeChannel The write interface to write the messages to
-   * @return The size in bytes that was written to the write interface
-   */
-  public long writeTo(Write writeChannel) throws IOException;
+    /**
+     * Write the messages in this set to the given write channel
+     * @param writeChannel The write interface to write the messages to
+     * @return The size in bytes that was written to the write interface
+     */
+    public long writeTo(Write writeChannel) throws IOException;
 
-  /**
-   * Returns info about the messages contained in this write set. The messages
-   * need not be ordered in any specific format
-   * @return The list of message info about the message set
-   */
-  public List<MessageInfo> getMessageSetInfo();
+    /**
+     * Returns info about the messages contained in this write set. The messages
+     * need not be ordered in any specific format
+     * @return The list of message info about the message set
+     */
+    public List<MessageInfo> getMessageSetInfo();
 }

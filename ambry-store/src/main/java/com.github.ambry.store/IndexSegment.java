@@ -577,6 +577,7 @@ class IndexSegment {
      * @throws IOException
      * @throws StoreException
      */
+    // TODO: 2018/6/1 by zmyer
     void writeIndexSegmentToFile(Offset safeEndPoint) throws IOException, StoreException {
         if (safeEndPoint.compareTo(startOffset) <= 0) {
             return;
@@ -672,6 +673,7 @@ class IndexSegment {
      * @throws IOException
      * @throws StoreException
      */
+    // TODO: 2018/6/1 by zmyer
     void map(boolean persistBloom) throws IOException, StoreException {
         RandomAccessFile raf = new RandomAccessFile(indexFile, "r");
         rwLock.writeLock().lock();
@@ -706,8 +708,7 @@ class IndexSegment {
                 indexSizeExcludingEntries =
                         VERSION_FIELD_LENGTH + KEY_OR_ENTRY_SIZE_FIELD_LENGTH + VALUE_SIZE_FIELD_LENGTH
                                 + LOG_END_OFFSET_FIELD_LENGTH + CRC_FIELD_LENGTH + LAST_MODIFIED_TIME_FIELD_LENGTH +
-                                resetKey.getFirst()
-                                        .sizeInBytes() + RESET_KEY_TYPE_FIELD_LENGTH;
+                                resetKey.getFirst().sizeInBytes() + RESET_KEY_TYPE_FIELD_LENGTH;
                 firstKeyRelativeOffset = indexSizeExcludingEntries - CRC_FIELD_LENGTH;
                 break;
             case PersistentIndex.VERSION_2:
@@ -754,6 +755,7 @@ class IndexSegment {
      * @throws StoreException
      * @throws IOException
      */
+    // TODO: 2018/6/1 by zmyer
     private void readFromFile(File fileToRead, Journal journal) throws StoreException, IOException {
         logger.info("IndexSegment : {} reading index from file", indexFile.getAbsolutePath());
         index.clear();
@@ -959,6 +961,7 @@ class IndexSegment {
     /**
      * @return the prefix for the index segment file name (also used for bloom filter file name).
      */
+    // TODO: 2018/6/1 by zmyer
     private String generateIndexSegmentFilenamePrefix() {
         String logSegmentName = startOffset.getName();
         StringBuilder filenamePrefix = new StringBuilder(logSegmentName);

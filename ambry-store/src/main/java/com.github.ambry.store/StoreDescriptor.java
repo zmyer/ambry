@@ -46,6 +46,7 @@ class StoreDescriptor {
      * @param dataDir the directory path to locate the Store Descriptor file
      * @throws IOException when file creation or read or write to file fails
      */
+    // TODO: 2018/5/15 by zmyer
     StoreDescriptor(String dataDir) throws IOException {
         File storeDescriptorFile = new File(dataDir, STORE_DESCRIPTOR_FILENAME);
         if (storeDescriptorFile.exists()) {

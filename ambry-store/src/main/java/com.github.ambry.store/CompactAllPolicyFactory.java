@@ -15,10 +15,11 @@ package com.github.ambry.store;
 
 import com.github.ambry.config.StoreConfig;
 import com.github.ambry.utils.Time;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 
 /**
@@ -26,47 +27,49 @@ import org.slf4j.LoggerFactory;
  */
 public class CompactAllPolicyFactory implements CompactionPolicyFactory {
 
-  private final StoreConfig storeConfig;
-  private final Time time;
+    private final StoreConfig storeConfig;
+    private final Time time;
 
-  public CompactAllPolicyFactory(StoreConfig storeConfig, Time time) {
-    this.storeConfig = storeConfig;
-    this.time = time;
-  }
+    public CompactAllPolicyFactory(StoreConfig storeConfig, Time time) {
+        this.storeConfig = storeConfig;
+        this.time = time;
+    }
 
-  public CompactionPolicy getCompactionPolicy() {
-    return new CompactAllPolicy(storeConfig, time);
-  }
+    public CompactionPolicy getCompactionPolicy() {
+        return new CompactAllPolicy(storeConfig, time);
+    }
 }
 
 /**
  * CompactAllPolicy returns the entire list of all log segments non overlapping with {@link Journal} as a candidate
  * to be compacted for {@link #getCompactionDetails(long, long, long, long, List, BlobStoreStats)}
  */
+// TODO: 2018/5/15 by zmyer
 class CompactAllPolicy implements CompactionPolicy {
 
-  private final StoreConfig storeConfig;
-  private final Time time;
-  private final long messageRetentionTimeInMs;
-  private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final StoreConfig storeConfig;
+    private final Time time;
+    private final long messageRetentionTimeInMs;
+    private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  CompactAllPolicy(StoreConfig storeConfig, Time time) {
-    this.storeConfig = storeConfig;
-    this.time = time;
-    this.messageRetentionTimeInMs = TimeUnit.DAYS.toMillis(storeConfig.storeDeletedMessageRetentionDays);
-  }
-
-  @Override
-  public CompactionDetails getCompactionDetails(long totalCapacity, long usedCapacity, long segmentCapacity,
-      long segmentHeaderSize, List<String> logSegmentsNotInJournal, BlobStoreStats blobStoreStats) {
-    CompactionDetails details = null;
-    logger.trace("UsedCapacity {} vs TotalCapacity {}", usedCapacity, totalCapacity);
-    if (usedCapacity >= (storeConfig.storeMinUsedCapacityToTriggerCompactionInPercentage / 100.0) * totalCapacity) {
-      if (logSegmentsNotInJournal != null) {
-        details = new CompactionDetails(time.milliseconds() - messageRetentionTimeInMs, logSegmentsNotInJournal);
-        logger.info("Generating CompactionDetails {} using CompactAllPolicy", details);
-      }
+    CompactAllPolicy(StoreConfig storeConfig, Time time) {
+        this.storeConfig = storeConfig;
+        this.time = time;
+        this.messageRetentionTimeInMs = TimeUnit.DAYS.toMillis(storeConfig.storeDeletedMessageRetentionDays);
     }
-    return details;
-  }
+
+    @Override
+    public CompactionDetails getCompactionDetails(long totalCapacity, long usedCapacity, long segmentCapacity,
+            long segmentHeaderSize, List<String> logSegmentsNotInJournal, BlobStoreStats blobStoreStats) {
+        CompactionDetails details = null;
+        logger.trace("UsedCapacity {} vs TotalCapacity {}", usedCapacity, totalCapacity);
+        if (usedCapacity >= (storeConfig.storeMinUsedCapacityToTriggerCompactionInPercentage / 100.0) * totalCapacity) {
+            if (logSegmentsNotInJournal != null) {
+                details = new CompactionDetails(time.milliseconds() - messageRetentionTimeInMs,
+                        logSegmentsNotInJournal);
+                logger.info("Generating CompactionDetails {} using CompactAllPolicy", details);
+            }
+        }
+        return details;
+    }
 }

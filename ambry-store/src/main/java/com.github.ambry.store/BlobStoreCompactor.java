@@ -108,6 +108,7 @@ class BlobStoreCompactor {
      * @throws IOException if the {@link CompactionLog} could not be created or if commit/cleanup failed during recovery.
      * @throws StoreException if the commit failed during recovery.
      */
+    // TODO: 2018/5/15 by zmyer
     BlobStoreCompactor(String dataDir, String storeId, StoreKeyFactory storeKeyFactory, StoreConfig config,
             StoreMetrics srcMetrics, StoreMetrics tgtMetrics, DiskIOScheduler diskIOScheduler,
             DiskSpaceAllocator diskSpaceAllocator, Log srcLog, Time time, UUID sessionId, UUID incarnationId)
@@ -132,6 +133,7 @@ class BlobStoreCompactor {
      * Initializes the compactor and sets the {@link PersistentIndex} to copy data from.
      * @param srcIndex the {@link PersistentIndex} to copy data from.
      */
+    // TODO: 2018/5/15 by zmyer
     void initialize(PersistentIndex srcIndex) {
         this.srcIndex = srcIndex;
         if (compactionLog == null && srcIndex.hardDeleter != null && srcIndex.hardDeleter.isPaused()) {

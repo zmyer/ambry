@@ -44,6 +44,7 @@ class CompactionDetails {
      * @throws IllegalArgumentException if {@code referenceTimeMs} < 0 or if {@code logSegmentsUnderCompaction} has no
      * elements.
      */
+    // TODO: 2018/5/15 by zmyer
     CompactionDetails(long referenceTimeMs, List<String> logSegmentsUnderCompaction) {
         if (referenceTimeMs < 0 || logSegmentsUnderCompaction.size() == 0) {
             throw new IllegalArgumentException(

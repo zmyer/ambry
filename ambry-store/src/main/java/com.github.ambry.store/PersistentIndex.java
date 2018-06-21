@@ -1768,6 +1768,7 @@ class PersistentIndex {
          * The last index segment is flushed whenever write is invoked.
          * @throws StoreException
          */
+        // TODO: 2018/6/1 by zmyer
         public synchronized void write() throws StoreException {
             final Timer.Context context = metrics.indexFlushTime.time();
             try {
@@ -1827,6 +1828,7 @@ class PersistentIndex {
             }
         }
 
+        // TODO: 2018/6/1 by zmyer
         @Override
         public void run() {
             try {

@@ -15,6 +15,7 @@ package com.github.ambry.clustermap;
 
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.utils.Utils;
+
 import java.io.File;
 
 
@@ -23,100 +24,107 @@ import java.io.File;
  */
 // TODO: 2018/3/20 by zmyer
 class AmbryDisk implements DiskId, Resource {
-  private final AmbryDataNode datanode;
-  private final String mountPath;
-  private final long rawCapacityBytes;
-  private final ResourceStatePolicy resourceStatePolicy;
+    //所属的数据节点
+    private final AmbryDataNode datanode;
+    //挂载点
+    private final String mountPath;
+    //磁盘大小
+    private final long rawCapacityBytes;
+    //资源状态
+    private final ResourceStatePolicy resourceStatePolicy;
 
-  /**
-   * Instantiate an AmbryDisk object.
-   * @param clusterMapConfig the {@link ClusterMapConfig} to use.
-   * @param datanode the {@link AmbryDataNode} on which this disk resides.
-   * @param mountPath the mount path at which this disk is mounted on the datanode.
-   * @param state the initial {@link HardwareState} of this disk.
-   * @param rawCapacityBytes the capacity in bytes.
-   * @throws Exception if there is an exception in instantiating the {@link ResourceStatePolicy}
-   */
-  AmbryDisk(ClusterMapConfig clusterMapConfig, AmbryDataNode datanode, String mountPath, HardwareState state,
-      long rawCapacityBytes) throws Exception {
-    this.datanode = datanode;
-    this.mountPath = mountPath;
-    this.rawCapacityBytes = rawCapacityBytes;
-    ResourceStatePolicyFactory resourceStatePolicyFactory =
-        Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this, state, clusterMapConfig);
-    this.resourceStatePolicy = resourceStatePolicyFactory.getResourceStatePolicy();
-    validate();
-  }
-
-  /**
-   * Validate the newly constructed AmbryDisk instance.
-   */
-  private void validate() {
-    if (datanode == null || mountPath == null) {
-      throw new IllegalStateException("datanode and mount path cannot be null.");
+    /**
+     * Instantiate an AmbryDisk object.
+     * @param clusterMapConfig the {@link ClusterMapConfig} to use.
+     * @param datanode the {@link AmbryDataNode} on which this disk resides.
+     * @param mountPath the mount path at which this disk is mounted on the datanode.
+     * @param state the initial {@link HardwareState} of this disk.
+     * @param rawCapacityBytes the capacity in bytes.
+     * @throws Exception if there is an exception in instantiating the {@link ResourceStatePolicy}
+     */
+    // TODO: 2018/5/15 by zmyer
+    AmbryDisk(ClusterMapConfig clusterMapConfig, AmbryDataNode datanode, String mountPath, HardwareState state,
+            long rawCapacityBytes) throws Exception {
+        this.datanode = datanode;
+        this.mountPath = mountPath;
+        this.rawCapacityBytes = rawCapacityBytes;
+        ResourceStatePolicyFactory resourceStatePolicyFactory =
+                Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this, state, clusterMapConfig);
+        this.resourceStatePolicy = resourceStatePolicyFactory.getResourceStatePolicy();
+        validate();
     }
-    if (mountPath.length() == 0) {
-      throw new IllegalStateException("Mount path cannot be zero-length string.");
+
+    /**
+     * Validate the newly constructed AmbryDisk instance.
+     */
+    // TODO: 2018/5/15 by zmyer
+    private void validate() {
+        if (datanode == null || mountPath == null) {
+            throw new IllegalStateException("datanode and mount path cannot be null.");
+        }
+        if (mountPath.length() == 0) {
+            throw new IllegalStateException("Mount path cannot be zero-length string.");
+        }
+        File mountPathFile = new File(mountPath);
+        if (!mountPathFile.isAbsolute()) {
+            throw new IllegalStateException("Mount path has to be an absolute path.");
+        }
+        ClusterMapUtils.validateDiskCapacity(rawCapacityBytes);
     }
-    File mountPathFile = new File(mountPath);
-    if (!mountPathFile.isAbsolute()) {
-      throw new IllegalStateException("Mount path has to be an absolute path.");
+
+    @Override
+    public String getMountPath() {
+        return mountPath;
     }
-    ClusterMapUtils.validateDiskCapacity(rawCapacityBytes);
-  }
 
-  @Override
-  public String getMountPath() {
-    return mountPath;
-  }
-
-  @Override
-  public HardwareState getState() {
-    return resourceStatePolicy.isDown() || datanode.getState() == HardwareState.UNAVAILABLE ? HardwareState.UNAVAILABLE
-        : HardwareState.AVAILABLE;
-  }
-
-  @Override
-  public long getRawCapacityInBytes() {
-    return rawCapacityBytes;
-  }
-
-  @Override
-  public String toString() {
-    return "Disk[" + datanode.getHostname() + ":" + datanode.getPort() + ":" + getMountPath() + "]";
-  }
-
-  /**
-   * @return the {@link AmbryDataNode} associated with this disk.
-   */
-  AmbryDataNode getDataNode() {
-    return datanode;
-  }
-
-  /**
-   * Set the hard state of this disk dynamically.
-   * @param newState the updated {@link HardwareState}
-   */
-  void setState(HardwareState newState) {
-    if (newState == HardwareState.AVAILABLE) {
-      resourceStatePolicy.onHardUp();
-    } else {
-      resourceStatePolicy.onHardDown();
+    @Override
+    public HardwareState getState() {
+        return resourceStatePolicy.isDown() || datanode.getState() == HardwareState.UNAVAILABLE
+                ? HardwareState.UNAVAILABLE
+                : HardwareState.AVAILABLE;
     }
-  }
 
-  /**
-   * Take actions, if any, when an error is received for this disk.
-   */
-  void onDiskError() {
-    resourceStatePolicy.onError();
-  }
+    @Override
+    public long getRawCapacityInBytes() {
+        return rawCapacityBytes;
+    }
 
-  /**
-   * Take actions, if any, when this disk is back in a good state.
-   */
-  void onDiskOk() {
-    resourceStatePolicy.onSuccess();
-  }
+    @Override
+    public String toString() {
+        return "Disk[" + datanode.getHostname() + ":" + datanode.getPort() + ":" + getMountPath() + "]";
+    }
+
+    /**
+     * @return the {@link AmbryDataNode} associated with this disk.
+     */
+    AmbryDataNode getDataNode() {
+        return datanode;
+    }
+
+    /**
+     * Set the hard state of this disk dynamically.
+     * @param newState the updated {@link HardwareState}
+     */
+    void setState(HardwareState newState) {
+        if (newState == HardwareState.AVAILABLE) {
+            resourceStatePolicy.onHardUp();
+        } else {
+            resourceStatePolicy.onHardDown();
+        }
+    }
+
+    /**
+     * Take actions, if any, when an error is received for this disk.
+     */
+    void onDiskError() {
+        resourceStatePolicy.onError();
+    }
+
+    /**
+     * Take actions, if any, when this disk is back in a good state.
+     */
+    void onDiskOk() {
+        resourceStatePolicy.onSuccess();
+    }
 }
 

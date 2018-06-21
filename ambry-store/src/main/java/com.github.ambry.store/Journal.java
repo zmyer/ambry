@@ -13,6 +13,9 @@
  */
 package com.github.ambry.store;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,27 +23,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 // TODO: 2018/3/22 by zmyer
 class JournalEntry {
-  private final Offset offset;
-  private final StoreKey key;
+    private final Offset offset;
+    private final StoreKey key;
 
-  JournalEntry(Offset offset, StoreKey key) {
-    this.offset = offset;
-    this.key = key;
-  }
+    JournalEntry(Offset offset, StoreKey key) {
+        this.offset = offset;
+        this.key = key;
+    }
 
-  Offset getOffset() {
-    return offset;
-  }
+    Offset getOffset() {
+        return offset;
+    }
 
-  StoreKey getKey() {
-    return key;
-  }
+    StoreKey getKey() {
+        return key;
+    }
 }
 
 /**
@@ -49,138 +50,138 @@ class JournalEntry {
 // TODO: 2018/3/22 by zmyer
 class Journal {
 
-  private final ConcurrentSkipListMap<Offset, StoreKey> journal;
-  private final ConcurrentHashMap<StoreKey, Long> recentCrcs;
-  private final int maxEntriesToJournal;
-  private final int maxEntriesToReturn;
-  private final AtomicInteger currentNumberOfEntries;
-  private final String dataDir;
-  private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final ConcurrentSkipListMap<Offset, StoreKey> journal;
+    private final ConcurrentHashMap<StoreKey, Long> recentCrcs;
+    private final int maxEntriesToJournal;
+    private final int maxEntriesToReturn;
+    private final AtomicInteger currentNumberOfEntries;
+    private final String dataDir;
+    private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  /**
-   * The journal that holds the most recent entries in a store sorted by offset of the blob on disk
-   * @param maxEntriesToJournal The max number of entries to journal. The oldest entry will be removed from
-   *                            the journal after the size is reached.
-   * @param maxEntriesToReturn The max number of entries to return from the journal when queried for entries.
-   */
-  Journal(String dataDir, int maxEntriesToJournal, int maxEntriesToReturn) {
-    journal = new ConcurrentSkipListMap<>();
-    recentCrcs = new ConcurrentHashMap<>();
-    this.maxEntriesToJournal = maxEntriesToJournal;
-    this.maxEntriesToReturn = maxEntriesToReturn;
-    this.currentNumberOfEntries = new AtomicInteger(0);
-    this.dataDir = dataDir;
-  }
-
-  /**
-   * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and crc.
-   * @param offset The {@link Offset} that the key pertains to.
-   * @param key The key that the entry in the journal refers to.
-   * @param crc The crc of the object. This may be null if crc is not available.
-   */
-  // TODO: 2018/3/22 by zmyer
-  void addEntry(Offset offset, StoreKey key, Long crc) {
-    if (key == null || offset == null) {
-      throw new IllegalArgumentException("Invalid arguments passed to add to the journal");
-    }
-    if (maxEntriesToJournal > 0) {
-      if (currentNumberOfEntries.get() == maxEntriesToJournal) {
-        Map.Entry<Offset, StoreKey> earliestEntry = journal.firstEntry();
-        journal.remove(earliestEntry.getKey());
-        recentCrcs.remove(earliestEntry.getValue());
-        currentNumberOfEntries.decrementAndGet();
-      }
-      journal.put(offset, key);
-      if (crc != null) {
-        recentCrcs.put(key, crc);
-      }
-      logger.trace("Journal : " + dataDir + " offset " + offset + " key " + key);
-      currentNumberOfEntries.incrementAndGet();
-      logger.trace("Journal : " + dataDir + " number of entries " + currentNumberOfEntries.get());
-    }
-  }
-
-  /**
-   * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and a null crc.
-   * @param offset The {@link Offset} that the key pertains to.
-   * @param key The key that the entry in the journal refers to.
-   */
-  void addEntry(Offset offset, StoreKey key) {
-    addEntry(offset, key, null);
-  }
-
-  /**
-   * Gets all the entries from the journal starting at the provided offset and till the maxEntriesToReturn or the
-   * end of the journal is reached.
-   * @param offset The {@link Offset} from where the journal needs to return entries.
-   * @param inclusive if {@code true}, the returned entries (if not {@code null}), contain the entry at {@code offset}.
-   * @return The entries in the journal starting from offset. If the offset is outside the range of the journal,
-   *         it returns null.
-   */
-  // TODO: 2018/3/22 by zmyer
-  List<JournalEntry> getEntriesSince(Offset offset, boolean inclusive) {
-    // To prevent synchronizing the addEntry method, we first get all the entries from the journal that are greater
-    // than offset. Once we have all the required entries, we finally check if the offset is actually present
-    // in the journal. If the offset is not present we return null, else we return the entries we got in the first step.
-    // The offset may not be present in the journal as it could be removed.
-    Map.Entry<Offset, StoreKey> first = journal.firstEntry();
-    Map.Entry<Offset, StoreKey> last = journal.lastEntry();
-
-    // check if the journal contains the offset.
-    //检查当前日志中是否存在指定的偏移量
-    if (first == null || offset.compareTo(first.getKey()) < 0 || last == null || offset.compareTo(last.getKey()) > 0
-        || !journal.containsKey(offset)) {
-      return null;
+    /**
+     * The journal that holds the most recent entries in a store sorted by offset of the blob on disk
+     * @param maxEntriesToJournal The max number of entries to journal. The oldest entry will be removed from
+     *                            the journal after the size is reached.
+     * @param maxEntriesToReturn The max number of entries to return from the journal when queried for entries.
+     */
+    Journal(String dataDir, int maxEntriesToJournal, int maxEntriesToReturn) {
+        journal = new ConcurrentSkipListMap<>();
+        recentCrcs = new ConcurrentHashMap<>();
+        this.maxEntriesToJournal = maxEntriesToJournal;
+        this.maxEntriesToReturn = maxEntriesToReturn;
+        this.currentNumberOfEntries = new AtomicInteger(0);
+        this.dataDir = dataDir;
     }
 
-    ConcurrentNavigableMap<Offset, StoreKey> subsetMap = journal.tailMap(offset, true);
-    int entriesToReturn = Math.min(subsetMap.size(), maxEntriesToReturn);
-    List<JournalEntry> journalEntries = new ArrayList<JournalEntry>(entriesToReturn);
-    int entriesAdded = 0;
-    for (Map.Entry<Offset, StoreKey> entry : subsetMap.entrySet()) {
-      if (inclusive || !entry.getKey().equals(offset)) {
-        //依次获取指定数量的日志实例对象，该实例对象代表着消息存储位置信息
-        journalEntries.add(new JournalEntry(entry.getKey(), entry.getValue()));
-        entriesAdded++;
-        if (entriesAdded == entriesToReturn) {
-          break;
+    /**
+     * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and crc.
+     * @param offset The {@link Offset} that the key pertains to.
+     * @param key The key that the entry in the journal refers to.
+     * @param crc The crc of the object. This may be null if crc is not available.
+     */
+    // TODO: 2018/3/22 by zmyer
+    void addEntry(Offset offset, StoreKey key, Long crc) {
+        if (key == null || offset == null) {
+            throw new IllegalArgumentException("Invalid arguments passed to add to the journal");
         }
-      }
+        if (maxEntriesToJournal > 0) {
+            if (currentNumberOfEntries.get() == maxEntriesToJournal) {
+                Map.Entry<Offset, StoreKey> earliestEntry = journal.firstEntry();
+                journal.remove(earliestEntry.getKey());
+                recentCrcs.remove(earliestEntry.getValue());
+                currentNumberOfEntries.decrementAndGet();
+            }
+            journal.put(offset, key);
+            if (crc != null) {
+                recentCrcs.put(key, crc);
+            }
+            logger.trace("Journal : " + dataDir + " offset " + offset + " key " + key);
+            currentNumberOfEntries.incrementAndGet();
+            logger.trace("Journal : " + dataDir + " number of entries " + currentNumberOfEntries.get());
+        }
     }
 
-    // Ensure that the offset was not pushed out of the journal.
-    first = journal.firstEntry();
-    if (first == null || offset.compareTo(first.getKey()) < 0) {
-      return null;
+    /**
+     * Adds an entry into the journal with the given {@link Offset}, {@link StoreKey}, and a null crc.
+     * @param offset The {@link Offset} that the key pertains to.
+     * @param key The key that the entry in the journal refers to.
+     */
+    void addEntry(Offset offset, StoreKey key) {
+        addEntry(offset, key, null);
     }
 
-    logger.trace("Journal : " + dataDir + " entries returned " + journalEntries.size());
-    return journalEntries;
-  }
+    /**
+     * Gets all the entries from the journal starting at the provided offset and till the maxEntriesToReturn or the
+     * end of the journal is reached.
+     * @param offset The {@link Offset} from where the journal needs to return entries.
+     * @param inclusive if {@code true}, the returned entries (if not {@code null}), contain the entry at {@code offset}.
+     * @return The entries in the journal starting from offset. If the offset is outside the range of the journal,
+     *         it returns null.
+     */
+    // TODO: 2018/3/22 by zmyer
+    List<JournalEntry> getEntriesSince(Offset offset, boolean inclusive) {
+        // To prevent synchronizing the addEntry method, we first get all the entries from the journal that are greater
+        // than offset. Once we have all the required entries, we finally check if the offset is actually present
+        // in the journal. If the offset is not present we return null, else we return the entries we got in the first step.
+        // The offset may not be present in the journal as it could be removed.
+        Map.Entry<Offset, StoreKey> first = journal.firstEntry();
+        Map.Entry<Offset, StoreKey> last = journal.lastEntry();
 
-  /**
-   * @return the first/smallest offset in the journal or {@code null} if no such entry exists.
-   */
-  Offset getFirstOffset() {
-    Map.Entry<Offset, StoreKey> first = journal.firstEntry();
-    return first == null ? null : first.getKey();
-  }
+        // check if the journal contains the offset.
+        //检查当前日志中是否存在指定的偏移量
+        if (first == null || offset.compareTo(first.getKey()) < 0 || last == null || offset.compareTo(last.getKey()) > 0
+                || !journal.containsKey(offset)) {
+            return null;
+        }
 
-  /**
-   * @return the last/greatest offset in the journal or {@code null} if no such entry exists.
-   */
-  Offset getLastOffset() {
-    Map.Entry<Offset, StoreKey> last = journal.lastEntry();
-    return last == null ? null : last.getKey();
-  }
+        ConcurrentNavigableMap<Offset, StoreKey> subsetMap = journal.tailMap(offset, true);
+        int entriesToReturn = Math.min(subsetMap.size(), maxEntriesToReturn);
+        List<JournalEntry> journalEntries = new ArrayList<JournalEntry>(entriesToReturn);
+        int entriesAdded = 0;
+        for (Map.Entry<Offset, StoreKey> entry : subsetMap.entrySet()) {
+            if (inclusive || !entry.getKey().equals(offset)) {
+                //依次获取指定数量的日志实例对象，该实例对象代表着消息存储位置信息
+                journalEntries.add(new JournalEntry(entry.getKey(), entry.getValue()));
+                entriesAdded++;
+                if (entriesAdded == entriesToReturn) {
+                    break;
+                }
+            }
+        }
 
-  /**
-   * Returns the crc associated with this key in the journal if there is one; else returns null.
-   * @param key the key for which the crc is to be obtained.
-   * @return the crc associated with this key in the journal if there is one; else returns null.
-   */
-  // TODO: 2018/3/22 by zmyer
-  Long getCrcOfKey(StoreKey key) {
-    return recentCrcs.get(key);
-  }
+        // Ensure that the offset was not pushed out of the journal.
+        first = journal.firstEntry();
+        if (first == null || offset.compareTo(first.getKey()) < 0) {
+            return null;
+        }
+
+        logger.trace("Journal : " + dataDir + " entries returned " + journalEntries.size());
+        return journalEntries;
+    }
+
+    /**
+     * @return the first/smallest offset in the journal or {@code null} if no such entry exists.
+     */
+    Offset getFirstOffset() {
+        Map.Entry<Offset, StoreKey> first = journal.firstEntry();
+        return first == null ? null : first.getKey();
+    }
+
+    /**
+     * @return the last/greatest offset in the journal or {@code null} if no such entry exists.
+     */
+    Offset getLastOffset() {
+        Map.Entry<Offset, StoreKey> last = journal.lastEntry();
+        return last == null ? null : last.getKey();
+    }
+
+    /**
+     * Returns the crc associated with this key in the journal if there is one; else returns null.
+     * @param key the key for which the crc is to be obtained.
+     * @return the crc associated with this key in the journal if there is one; else returns null.
+     */
+    // TODO: 2018/3/22 by zmyer
+    Long getCrcOfKey(StoreKey key) {
+        return recentCrcs.get(key);
+    }
 }

@@ -35,6 +35,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 // TODO: 2018/3/22 by zmyer
 class CompactionManager {
+    //线程前缀
     static final String THREAD_NAME_PREFIX = "StoreCompactionThread-";
 
     private enum Trigger {
@@ -42,15 +43,24 @@ class CompactionManager {
         ADMIN
     }
 
+    //挂载点
     private final String mountPath;
+    //存储配置
     private final StoreConfig storeConfig;
+    //定时器
     private final Time time;
+    //存储对象集合
     private final Collection<BlobStore> stores;
+    //压缩执行器
     private final CompactionExecutor compactionExecutor;
+    //存储管理器统计信息
     private final StorageManagerMetrics metrics;
+    //压缩策略
     private final CompactionPolicy compactionPolicy;
+    //日志对象
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    //压缩线程
     private Thread compactionThread;
 
     /**
@@ -92,6 +102,7 @@ class CompactionManager {
     /**
      * Enables the compaction manager allowing it execute compactions if required.
      */
+    // TODO: 2018/5/15 by zmyer
     void enable() {
         if (compactionExecutor != null) {
             logger.info("Compaction thread started for {}", mountPath);
@@ -163,6 +174,7 @@ class CompactionManager {
      * {@code null} if compaction is not required
      * @throws StoreException when {@link BlobStore} is not started
      */
+    // TODO: 2018/5/15 by zmyer
     private CompactionDetails getCompactionDetails(BlobStore blobStore) throws StoreException {
         return blobStore.getCompactionDetails(compactionPolicy);
     }
@@ -170,23 +182,33 @@ class CompactionManager {
     /**
      * A {@link Runnable} that cycles through the stores and executes compaction if required.
      */
+    // TODO: 2018/5/15 by zmyer
     private class CompactionExecutor implements Runnable {
+        //触发器集合
         private final EnumSet<Trigger> triggers;
+        //日志对象
         private final Logger logger = LoggerFactory.getLogger(getClass());
+        //重入锁
         private final ReentrantLock lock = new ReentrantLock();
+        //条件变量
         private final Condition waitCondition = lock.newCondition();
+        //跳过的储存对象集合
         private final Set<BlobStore> storesToSkip = new HashSet<>();
+        //无法压缩的粗存储对象集合
         private final Set<BlobStore> storesDisabledCompaction = ConcurrentHashMap.newKeySet();
+        //待检测存储对象队列
         private final LinkedBlockingDeque<BlobStore> storesToCheck = new LinkedBlockingDeque<>();
+        //检查频率
         private final long waitTimeMs = TimeUnit.HOURS.toMillis(storeConfig.storeCompactionCheckFrequencyInHours);
-
+        //是否开启压缩检查
         private volatile boolean enabled = true;
-
+        //压缩线程是否运行
         volatile boolean isRunning = false;
 
         /**
          * @param triggers the {@link EnumSet} of active compaction triggers.
          */
+        // TODO: 2018/5/15 by zmyer
         CompactionExecutor(EnumSet<Trigger> triggers) {
             this.triggers = triggers;
         }
@@ -207,11 +229,13 @@ class CompactionManager {
                         logger.trace("{} is started and eligible for resume check", store);
                         metrics.markCompactionStart(false);
                         try {
+                            //恢复压缩存储对象
                             store.maybeResumeCompaction();
                         } catch (Exception e) {
                             metrics.compactionErrorCount.inc();
                             logger.error("Compaction of store {} failed on resume. Continuing with the next store",
                                     store, e);
+                            //将压缩失败的存储对象插入到跳过列表中
                             storesToSkip.add(store);
                         } finally {
                             metrics.markCompactionStop();
@@ -221,11 +245,13 @@ class CompactionManager {
                 // continue to do compactions as required.
                 long expectedNextCheckTime = time.milliseconds() + waitTimeMs;
                 if (triggers.contains(Trigger.PERIODIC)) {
+                    //将所有的存储对象插入到待检测列表中
                     storesToCheck.addAll(stores);
                 }
                 while (enabled) {
                     try {
                         while (enabled && storesToCheck.peek() != null) {
+                            //取出待压缩的存储对象
                             BlobStore store = storesToCheck.poll();
                             logger.trace("{} being checked for compaction", store);
                             boolean compactionStarted = false;
@@ -233,11 +259,13 @@ class CompactionManager {
                                 if (store.isStarted() && !storesToSkip.contains(store) &&
                                         !storesDisabledCompaction.contains(store)) {
                                     logger.info("{} is started and is being checked for compaction eligibility", store);
+                                    //获取存储对象的压缩详情
                                     CompactionDetails details = getCompactionDetails(store);
                                     if (details != null) {
                                         logger.trace("Generated {} as details for {}", details, store);
                                         metrics.markCompactionStart(true);
                                         compactionStarted = true;
+                                        //开始针对存储对象进行压缩操作
                                         store.compact(details);
                                     } else {
                                         logger.info("{} is not eligible for compaction", store);

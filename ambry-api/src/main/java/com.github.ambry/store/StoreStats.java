@@ -23,28 +23,28 @@ import com.github.ambry.utils.Pair;
  */
 // TODO: 2018/3/22 by zmyer
 public interface StoreStats {
-  /**
-   * Gets the size of valid data at a particular point in time. The caller specifies a reference time and acceptable
-   * resolution for the stats in the form of a {@link TimeRange}. The store will return valid data size for a point
-   * in time within the specified range.
-   * The following data are considered as valid data for this API:
-   * 1. PUT with no expiry and no corresponding DELETE
-   * 2. PUT expiring at t_exp but t_exp_ref < t_exp
-   * 3. PUT with corresponding DELETE at time t_delete but t_del_ref < t_delete
-   * 4. DELETE record
-   * For this API, t_del_ref is based on the given {@link TimeRange} and t_exp_ref is the time when the API is called.
-   * @param timeRange the reference {@link TimeRange} at which the data is requested. Defines both the reference time
-   *                  and the acceptable resolution
-   * @return a {@link Pair} whose first element is the time at which stats was collected (in ms) and whose second
-   * element is the valid data size
-   */
-  Pair<Long, Long> getValidSize(TimeRange timeRange) throws StoreException;
+    /**
+     * Gets the size of valid data at a particular point in time. The caller specifies a reference time and acceptable
+     * resolution for the stats in the form of a {@link TimeRange}. The store will return valid data size for a point
+     * in time within the specified range.
+     * The following data are considered as valid data for this API:
+     * 1. PUT with no expiry and no corresponding DELETE
+     * 2. PUT expiring at t_exp but t_exp_ref < t_exp
+     * 3. PUT with corresponding DELETE at time t_delete but t_del_ref < t_delete
+     * 4. DELETE record
+     * For this API, t_del_ref is based on the given {@link TimeRange} and t_exp_ref is the time when the API is called.
+     * @param timeRange the reference {@link TimeRange} at which the data is requested. Defines both the reference time
+     *                  and the acceptable resolution
+     * @return a {@link Pair} whose first element is the time at which stats was collected (in ms) and whose second
+     * element is the valid data size
+     */
+    Pair<Long, Long> getValidSize(TimeRange timeRange) throws StoreException;
 
-  /**
-   * Fetches stats for the corresponding {@link Store} as a {@link StatsSnapshot}.
-   * @param referenceTimeInMs the reference time in ms until which deletes and expiration are relevant
-   * @return a {@link StatsSnapshot} with relevant stats
-   * @throws StoreException
-   */
-  StatsSnapshot getStatsSnapshot(long referenceTimeInMs) throws StoreException;
+    /**
+     * Fetches stats for the corresponding {@link Store} as a {@link StatsSnapshot}.
+     * @param referenceTimeInMs the reference time in ms until which deletes and expiration are relevant
+     * @return a {@link StatsSnapshot} with relevant stats
+     * @throws StoreException
+     */
+    StatsSnapshot getStatsSnapshot(long referenceTimeInMs) throws StoreException;
 }

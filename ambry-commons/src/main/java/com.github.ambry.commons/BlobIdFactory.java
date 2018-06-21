@@ -16,6 +16,7 @@ package com.github.ambry.commons;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.store.StoreKeyFactory;
+
 import java.io.DataInputStream;
 import java.io.IOException;
 
@@ -26,17 +27,17 @@ import java.io.IOException;
 // TODO: 2018/3/20 by zmyer
 public class BlobIdFactory implements StoreKeyFactory {
 
-  //集群对象
-  private ClusterMap clusterMap;
+    //集群对象
+    private ClusterMap clusterMap;
 
-  // TODO: 2018/3/22 by zmyer
-  public BlobIdFactory(ClusterMap clusterMap) {
-    this.clusterMap = clusterMap;
-  }
+    // TODO: 2018/3/22 by zmyer
+    public BlobIdFactory(ClusterMap clusterMap) {
+        this.clusterMap = clusterMap;
+    }
 
-  // TODO: 2018/3/22 by zmyer
-  @Override
-  public StoreKey getStoreKey(DataInputStream value) throws IOException {
-    return new BlobId(value, clusterMap);
-  }
+    // TODO: 2018/3/22 by zmyer
+    @Override
+    public StoreKey getStoreKey(DataInputStream value) throws IOException {
+        return new BlobId(value, clusterMap);
+    }
 }
