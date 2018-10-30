@@ -28,6 +28,9 @@ public class MockHelixCluster {
   private final MockHelixAdminFactory helixAdminFactory;
   private final Map<String, MockHelixAdmin> helixAdmins;
   private final String clusterName;
+  private final String hardwareLayoutPath;
+  private final String partitionLayoutPath;
+  private final String zkLayoutPath;
 
   /**
    * Instantiate a MockHelixCluster.
@@ -41,9 +44,43 @@ public class MockHelixCluster {
       throws Exception {
     helixAdminFactory = new MockHelixAdminFactory();
     helixAdmins = helixAdminFactory.getAllHelixAdmins();
-    HelixBootstrapUpgradeUtil.bootstrapOrUpgrade(hardwareLayoutPath, partitionLayoutPath, zkLayoutPath, clusterName,
-        null, 3, helixAdminFactory);
+    this.hardwareLayoutPath = hardwareLayoutPath;
+    this.partitionLayoutPath = partitionLayoutPath;
+    this.zkLayoutPath = zkLayoutPath;
+    HelixBootstrapUpgradeUtil.bootstrapOrUpgrade(hardwareLayoutPath, partitionLayoutPath, zkLayoutPath, clusterName, 3,
+        false, false, helixAdminFactory);
     this.clusterName = clusterName;
+  }
+
+  /**
+   * Upgrade based on the hardwareLayout.
+   * @param hardwareLayoutPath the new hardware layout.
+   * @throws Exception
+   */
+  void upgradeWithNewHardwareLayout(String hardwareLayoutPath) throws Exception {
+    HelixBootstrapUpgradeUtil.bootstrapOrUpgrade(hardwareLayoutPath, partitionLayoutPath, zkLayoutPath, clusterName, 3,
+        false, false, helixAdminFactory);
+    triggerInstanceConfigChangeNotification();
+  }
+
+  /**
+   * Upgrade based on the partitionLayout.
+   * @param partitionLayoutPath the new partition layout.
+   * @throws Exception
+   */
+  void upgradeWithNewPartitionLayout(String partitionLayoutPath) throws Exception {
+    HelixBootstrapUpgradeUtil.bootstrapOrUpgrade(hardwareLayoutPath, partitionLayoutPath, zkLayoutPath, clusterName, 3,
+        false, false, helixAdminFactory);
+    triggerInstanceConfigChangeNotification();
+  }
+
+  /**
+   * Trigger an InstanceConfig change notification for all datacenters.
+   */
+  void triggerInstanceConfigChangeNotification() {
+    for (MockHelixAdmin helixAdmin : helixAdmins.values()) {
+      helixAdmin.triggerInstanceConfigChangeNotification(false);
+    }
   }
 
   /**
@@ -71,14 +108,25 @@ public class MockHelixCluster {
    * Set or reset the replica state for the given partition on the given instance.
    * @param partition the partition whose replica needs the state change.
    * @param instance the instance hosting the replica.
-   * @param isSealed whether to set or reset the state.
+   * @param stateType the type of state to be set or reset.
+   * @param setState whether to set or reset the state.
    * @param tagAsInit whether the InstanceConfig notification should be tagged with
    *                  {@link org.apache.helix.NotificationContext.Type#INIT}
    */
-  void setReplicaSealedState(AmbryPartition partition, String instance, boolean isSealed, boolean tagAsInit) {
+  void setReplicaState(AmbryPartition partition, String instance, TestUtils.ReplicaStateType stateType,
+      boolean setState, boolean tagAsInit) {
     for (MockHelixAdmin helixAdmin : helixAdmins.values()) {
       if (helixAdmin.getInstancesInCluster(clusterName).contains(instance)) {
-        helixAdmin.setReplicaSealedState(partition, instance, isSealed, tagAsInit);
+        switch (stateType) {
+          case SealedState:
+            helixAdmin.setReplicaSealedState(partition, instance, setState, tagAsInit);
+            break;
+          case StoppedState:
+            helixAdmin.setReplicaStoppedState(partition, instance, setState, tagAsInit);
+            break;
+          default:
+            throw new IllegalStateException("Unrecognized state type");
+        }
       }
     }
   }
@@ -176,6 +224,14 @@ public class MockHelixCluster {
       }
     }
     return instanceConfig;
+  }
+
+  List<InstanceConfig> getAllInstanceConfigs() {
+    List<InstanceConfig> configs = new ArrayList<>();
+    for (MockHelixAdmin helixAdmin : helixAdmins.values()) {
+      configs.addAll(helixAdmin.getInstanceConfigs(clusterName));
+    }
+    return configs;
   }
 
   /**

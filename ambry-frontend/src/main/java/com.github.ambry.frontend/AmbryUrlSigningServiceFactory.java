@@ -15,8 +15,12 @@ package com.github.ambry.frontend;
 
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.config.FrontendConfig;
+import com.github.ambry.config.RouterConfig;
 import com.github.ambry.config.VerifiableProperties;
+import com.github.ambry.rest.RestMethod;
 import com.github.ambry.utils.SystemTime;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 
 /**
@@ -26,15 +30,28 @@ import com.github.ambry.utils.SystemTime;
  */
 public class AmbryUrlSigningServiceFactory implements UrlSigningServiceFactory {
   private final FrontendConfig config;
+  private final int chunkUploadMaxChunkSize;
 
   public AmbryUrlSigningServiceFactory(VerifiableProperties verifiableProperties, MetricRegistry metricRegistry) {
     config = new FrontendConfig(verifiableProperties);
+    chunkUploadMaxChunkSize = new RouterConfig(verifiableProperties).routerMaxPutChunkSizeBytes;
   }
 
   @Override
   public UrlSigningService getUrlSigningService() {
-    return new AmbryUrlSigningService(config.frontendUrlSignerUploadEndpoint, config.frontendUrlSignerDownloadEndpoint,
-        config.frontendUrlSignerDefaultUrlTtlSecs, config.frontendUrlSignerDefaultMaxUploadSizeBytes,
-        config.frontendUrlSignerMaxUrlTtlSecs, SystemTime.getInstance());
+
+    String uploadEndpoint, downloadEndpoint;
+    // Assume urlSignerEndpoints has only POST/GET, nothing nested
+    try {
+      JSONObject root = new JSONObject(config.urlSignerEndpoints);
+      uploadEndpoint = root.getString(RestMethod.POST.name());
+      downloadEndpoint = root.getString(RestMethod.GET.name());
+    } catch (JSONException ex) {
+      throw new IllegalStateException("Invalid config value: " + config.urlSignerEndpoints, ex);
+    }
+
+    return new AmbryUrlSigningService(uploadEndpoint, downloadEndpoint, config.urlSignerDefaultUrlTtlSecs,
+        config.urlSignerDefaultMaxUploadSizeBytes, config.urlSignerMaxUrlTtlSecs,
+        config.chunkUploadInitialChunkTtlSecs, chunkUploadMaxChunkSize, SystemTime.getInstance());
   }
 }

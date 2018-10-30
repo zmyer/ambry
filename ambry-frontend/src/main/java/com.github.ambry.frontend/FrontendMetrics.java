@@ -18,6 +18,7 @@ import com.codahale.metrics.Histogram;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.rest.RestRequestMetrics;
+import com.github.ambry.utils.AsyncOperationTracker;
 
 
 /**
@@ -47,6 +48,9 @@ public class FrontendMetrics {
   // OPTIONS
   public final RestRequestMetrics optionsMetrics;
   public final RestRequestMetrics optionsSSLMetrics;
+  // PUT
+  public final RestRequestMetrics updateBlobTtlMetrics;
+  public final RestRequestMetrics updateBlobTtlSSLMetrics;
 
   // RestRequestMetricsGroup
   public final RestRequestMetricsGroup postRequestMetricsGroup;
@@ -55,6 +59,25 @@ public class FrontendMetrics {
   public final RestRequestMetricsGroup getUserMetadataRequestMetricsGroup;
   public final RestRequestMetricsGroup headRequestMetricsGroup;
 
+  // AsyncOperationTracker.Metrics instances
+  public final AsyncOperationTracker.Metrics postSecurityPreProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics postSecurityProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics postSecurityPostProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics postReadStitchRequestMetrics;
+  public final AsyncOperationTracker.Metrics postRouterStitchBlobMetrics;
+  public final AsyncOperationTracker.Metrics postRouterPutBlobMetrics;
+  public final AsyncOperationTracker.Metrics postIdConversionMetrics;
+  public final AsyncOperationTracker.Metrics postSecurityProcessResponseMetrics;
+
+  public final AsyncOperationTracker.Metrics updateBlobTtlSecurityProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics updateBlobTtlSecurityPostProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics updateBlobTtlRouterMetrics;
+  public final AsyncOperationTracker.Metrics updateBlobTtlIdConversionMetrics;
+  public final AsyncOperationTracker.Metrics updateBlobTtlSecurityProcessResponseMetrics;
+
+  public final AsyncOperationTracker.Metrics getSecurityPostProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics headSecurityPostProcessRequestMetrics;
+  public final AsyncOperationTracker.Metrics deleteSecurityPostProcessRequestMetrics;
   // Rates
   // AmbrySecurityService
   public final Meter securityServicePreProcessRequestRate;
@@ -79,6 +102,8 @@ public class FrontendMetrics {
   public final Histogram optionsPreProcessingTimeInMs;
   public final Histogram optionsSecurityRequestTimeInMs;
   public final Histogram optionsSecurityResponseTimeInMs;
+  // PUT
+  public final Histogram putPreProcessingTimeInMs;
   // DeleteCallback
   public final Histogram deleteCallbackProcessingTimeInMs;
   public final Histogram deleteTimeInMs;
@@ -92,13 +117,6 @@ public class FrontendMetrics {
   public final Histogram getTimeInMs;
   public final Histogram getSecurityResponseCallbackProcessingTimeInMs;
   public final Histogram getSecurityResponseTimeInMs;
-  // PostCallback
-  public final Histogram outboundIdConversionCallbackProcessingTimeInMs;
-  public final Histogram outboundIdConversionTimeInMs;
-  public final Histogram postCallbackProcessingTimeInMs;
-  public final Histogram postTimeInMs;
-  public final Histogram postSecurityResponseTimeInMs;
-  public final Histogram postSecurityResponseCallbackProcessingTimeInMs;
   // InboundIdConverterCallback
   public final Histogram inboundIdConversionCallbackProcessingTimeInMs;
   public final Histogram inboundIdConversionTimeInMs;
@@ -108,11 +126,9 @@ public class FrontendMetrics {
   public final Histogram getPeersSecurityRequestCallbackProcessingTimeInMs;
   public final Histogram getSignedUrlSecurityRequestCallbackProcessingTimeInMs;
   public final Histogram headSecurityRequestCallbackProcessingTimeInMs;
-  public final Histogram postSecurityRequestCallbackProcessingTimeInMs;
   public final Histogram deleteSecurityRequestTimeInMs;
   public final Histogram getSecurityRequestTimeInMs;
   public final Histogram headSecurityRequestTimeInMs;
-  public final Histogram postSecurityRequestTimeInMs;
   public final Histogram getPeersSecurityRequestTimeInMs;
   public final Histogram getSignedUrlSecurityRequestTimeInMs;
   // SecurityPostProcessRequestCallback
@@ -133,13 +149,14 @@ public class FrontendMetrics {
   public final Histogram getReplicasProcessingTimeInMs;
   // GetSignedUrlHandler
   public final Histogram getSignedUrlProcessingTimeInMs;
+  public final Histogram getSignedUrlIdConverterCallbackProcessingTimeInMs;
 
   // Errors
   // AmbryBlobStorageService
   public final Counter responseSubmissionError;
   public final Counter resourceReleaseError;
-  public final Counter routerCallbackError;
   public final Counter ttlTooLargeError;
+  public final Counter ttlNotCompliantError;
   // DeleteCallback
   public final Counter deleteCallbackProcessingError;
   // HeadCallback
@@ -147,9 +164,6 @@ public class FrontendMetrics {
   // GetCallback
   public final Counter getCallbackProcessingError;
   public final Counter getSecurityResponseCallbackProcessingError;
-  // PostCallback
-  public final Counter postCallbackProcessingError;
-  public final Counter outboundIdConversionCallbackProcessingError;
   // GetPeersHandler
   public final Counter unknownDatanodeError;
   // GetReplicasHandler
@@ -192,6 +206,10 @@ public class FrontendMetrics {
     // OPTIONS
     optionsMetrics = new RestRequestMetrics(AmbryBlobStorageService.class, "Options", metricRegistry);
     optionsSSLMetrics = new RestRequestMetrics(AmbryBlobStorageService.class, "Options" + SSL_SUFFIX, metricRegistry);
+    // PUT
+    updateBlobTtlMetrics = new RestRequestMetrics(TtlUpdateHandler.class, "UpdateBlobTtl", metricRegistry);
+    updateBlobTtlSSLMetrics =
+        new RestRequestMetrics(TtlUpdateHandler.class, "UpdateBlobTtl" + SSL_SUFFIX, metricRegistry);
 
     // RestRequestMetricsGroup
     postRequestMetricsGroup = new RestRequestMetricsGroup("Post", BLOB);
@@ -199,6 +217,44 @@ public class FrontendMetrics {
     getBlobRequestMetricsGroup = new RestRequestMetricsGroup("Get", BLOB);
     getUserMetadataRequestMetricsGroup = new RestRequestMetricsGroup("Get", USER_METADATA);
     headRequestMetricsGroup = new RestRequestMetricsGroup("Head", BLOB);
+
+    // AsyncOperationTracker.Metrics instances
+    postSecurityPreProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postSecurityPreProcessRequest", metricRegistry);
+    postSecurityProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postSecurityProcessRequest", metricRegistry);
+    postSecurityPostProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postSecurityPostProcessRequest", metricRegistry);
+    postReadStitchRequestMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postReadStitchRequest", metricRegistry);
+    postRouterStitchBlobMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postRouterStitchBlob", metricRegistry);
+    postRouterPutBlobMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postRouterPutBlob", metricRegistry);
+    postIdConversionMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postIdConversion", metricRegistry);
+    postSecurityProcessResponseMetrics =
+        new AsyncOperationTracker.Metrics(PostBlobHandler.class, "postSecurityProcessResponse", metricRegistry);
+
+    updateBlobTtlSecurityProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(TtlUpdateHandler.class, "securityProcessRequest", metricRegistry);
+    updateBlobTtlSecurityPostProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(TtlUpdateHandler.class, "securityPostProcessRequest", metricRegistry);
+    updateBlobTtlRouterMetrics = new AsyncOperationTracker.Metrics(TtlUpdateHandler.class, "router", metricRegistry);
+    updateBlobTtlIdConversionMetrics =
+        new AsyncOperationTracker.Metrics(TtlUpdateHandler.class, "idConversion", metricRegistry);
+    updateBlobTtlSecurityProcessResponseMetrics =
+        new AsyncOperationTracker.Metrics(TtlUpdateHandler.class, "securityProcessResponse", metricRegistry);
+
+    getSecurityPostProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(AmbryBlobStorageService.class, "getSecurityPostProcessRequest",
+            metricRegistry);
+    headSecurityPostProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(AmbryBlobStorageService.class, "headSecurityPostProcessRequest",
+            metricRegistry);
+    deleteSecurityPostProcessRequestMetrics =
+        new AsyncOperationTracker.Metrics(AmbryBlobStorageService.class, "deleteSecurityPostProcessRequest",
+            metricRegistry);
 
     // Rates
     // AmbrySecurityService
@@ -236,6 +292,9 @@ public class FrontendMetrics {
         metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "OptionsSecurityRequestTimeInMs"));
     optionsSecurityResponseTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "OptionsSecurityResponseTimeInMs"));
+    // PUT
+    putPreProcessingTimeInMs =
+        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "PutPreProcessingTimeInMs"));
     // DeleteCallback
     deleteCallbackProcessingTimeInMs = metricRegistry.histogram(
         MetricRegistry.name(AmbryBlobStorageService.class, "DeleteCallbackProcessingTimeInMs"));
@@ -259,19 +318,6 @@ public class FrontendMetrics {
         MetricRegistry.name(AmbryBlobStorageService.class, "GetSecurityResponseCallbackProcessingTimeInMs"));
     getSecurityResponseTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "GetSecurityResponseTimeInMs"));
-    // PostCallback
-    outboundIdConversionCallbackProcessingTimeInMs = metricRegistry.histogram(
-        MetricRegistry.name(AmbryBlobStorageService.class, "OutboundIdCallbackProcessingTimeInMs"));
-    outboundIdConversionTimeInMs =
-        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "OutboundIdConversionTimeInMs"));
-    postCallbackProcessingTimeInMs =
-        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "PostCallbackProcessingTimeInMs"));
-    postTimeInMs =
-        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "PostCallbackResultTimeInMs"));
-    postSecurityResponseTimeInMs =
-        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "PostSecurityResponseTimeInMs"));
-    postSecurityResponseCallbackProcessingTimeInMs = metricRegistry.histogram(
-        MetricRegistry.name(AmbryBlobStorageService.class, "PostSecurityResponseCallbackProcessingTimeInMs"));
     // InboundIdConverterCallback
     inboundIdConversionCallbackProcessingTimeInMs = metricRegistry.histogram(
         MetricRegistry.name(AmbryBlobStorageService.class, "InboundIdCallbackProcessingTimeInMs"));
@@ -294,10 +340,6 @@ public class FrontendMetrics {
         MetricRegistry.name(GetSignedUrlHandler.class, "SecurityRequestCallbackProcessingTimeInMs"));
     getSecurityRequestTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "GetSecurityRequestTimeInMs"));
-    postSecurityRequestCallbackProcessingTimeInMs = metricRegistry.histogram(
-        MetricRegistry.name(AmbryBlobStorageService.class, "PostSecurityRequestCallbackProcessingTimeInMs"));
-    postSecurityRequestTimeInMs =
-        metricRegistry.histogram(MetricRegistry.name(AmbryBlobStorageService.class, "PostSecurityRequestTimeInMs"));
     getPeersSecurityRequestTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(GetPeersHandler.class, "SecurityRequestTimeInMs"));
     getSignedUrlSecurityRequestTimeInMs =
@@ -331,6 +373,8 @@ public class FrontendMetrics {
     // GetSignedUrlHandler
     getSignedUrlProcessingTimeInMs =
         metricRegistry.histogram(MetricRegistry.name(GetSignedUrlHandler.class, "ProcessingTimeInMs"));
+    getSignedUrlIdConverterCallbackProcessingTimeInMs =
+        metricRegistry.histogram(MetricRegistry.name(GetSignedUrlHandler.class, "IdConverterProcessingTimeInMs"));
 
     // Errors
     // AmbryBlobStorageService
@@ -338,8 +382,6 @@ public class FrontendMetrics {
         metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "ResponseSubmissionError"));
     resourceReleaseError =
         metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "ResourceReleaseError"));
-    routerCallbackError =
-        metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "RouterCallbackError"));
     // DeleteCallback
     deleteCallbackProcessingError =
         metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "DeleteCallbackProcessingError"));
@@ -351,12 +393,10 @@ public class FrontendMetrics {
         metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "GetCallbackProcessingError"));
     getSecurityResponseCallbackProcessingError = metricRegistry.counter(
         MetricRegistry.name(AmbryBlobStorageService.class, "GetSecurityResponseCallbackProcessingError"));
-    // PostCallback
-    postCallbackProcessingError =
-        metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "PostCallbackProcessingError"));
-    outboundIdConversionCallbackProcessingError = metricRegistry.counter(
-        MetricRegistry.name(AmbryBlobStorageService.class, "OutboundIdConversionCallbackProcessingError"));
+    // PostBlobHandler
     ttlTooLargeError = metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "TtlTooLargeError"));
+    ttlNotCompliantError =
+        metricRegistry.counter(MetricRegistry.name(AmbryBlobStorageService.class, "TtlNotCompliantError"));
     // GetPeersHandler
     unknownDatanodeError = metricRegistry.counter(MetricRegistry.name(GetPeersHandler.class, "UnknownDatanodeError"));
     // GetReplicasHandler

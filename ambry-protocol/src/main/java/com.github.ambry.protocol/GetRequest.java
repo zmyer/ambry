@@ -36,10 +36,11 @@ public class GetRequest extends RequestOrResponse {
     private int sizeSent;
     private int totalPartitionRequestInfoListSize;
 
-    private static final int MessageFormat_Size_In_Bytes = 2;
-    private static final int GetOption_Size_In_Bytes = 2;
-    private static final int Partition_Request_Info_List_Size = 4;
-    private static final short Get_Request_Version_V2 = 2;
+  private static final int MessageFormat_Size_In_Bytes = 2;
+  private static final int GetOption_Size_In_Bytes = 2;
+  private static final int Partition_Request_Info_List_Size = 4;
+  private static final short Get_Request_Version_V2 = 2;
+  public static final String Replication_Client_Id_Prefix = "replication-fetch-";
 
     public GetRequest(int correlationId, String clientId, MessageFormatFlags flags,
             List<PartitionRequestInfo> partitionRequestInfoList, GetOption getOption) {

@@ -77,40 +77,38 @@ class StatsBasedCompactionPolicy implements CompactionPolicy {
         return details;
     }
 
-    /**
-     * Finds the best candidate to compact by finding the candidate with the best cost benefit ratio
-     * @param validDataPerLogSegments the valid data size for each log segment in the form of a {@link NavigableMap} of segment names to
-     * valid data sizes.
-     * @param segmentCapacity Segment capacity of one {@link LogSegment}
-     * @param segmentHeaderSize Segment header size of a {@link LogSegment}
-     * @param maxBlobSize max blob size to factor in when calculating the cost benefit ratio
-     * @return the {@link CostBenefitInfo} for the best candidate to compact. {@code null} if there isn't any.
-     */
-    private CostBenefitInfo getBestCandidateToCompact(NavigableMap<String, Long> validDataPerLogSegments,
-            long segmentCapacity, long segmentHeaderSize, long maxBlobSize) {
-        Map.Entry<String, Long> firstEntry = validDataPerLogSegments.firstEntry();
-        Map.Entry<String, Long> lastEntry = validDataPerLogSegments.lastEntry();
-        CostBenefitInfo bestCandidateToCompact = null;
-        while (firstEntry != null) {
-            Map.Entry<String, Long> endEntry = lastEntry;
-            while (endEntry != null && firstEntry.getKey().compareTo(endEntry.getKey()) <= 0) {
-                CostBenefitInfo costBenefitInfo =
-                        getCostBenefitInfo(firstEntry.getKey(), endEntry.getKey(), validDataPerLogSegments,
-                                segmentCapacity,
-                                segmentHeaderSize, maxBlobSize);
-                if (costBenefitInfo.getBenefit() >= storeConfig.storeMinLogSegmentCountToReclaimToTriggerCompaction && (
-                        bestCandidateToCompact == null
-                                || costBenefitInfo.getCostBenefitRatio().compareTo(
-                                bestCandidateToCompact.getCostBenefitRatio()) < 0)) {
-                    bestCandidateToCompact = costBenefitInfo;
-                    logger.trace("Updating best candidate to compact to {} ", bestCandidateToCompact);
-                }
-                endEntry = validDataPerLogSegments.lowerEntry(endEntry.getKey());
-            }
-            firstEntry = validDataPerLogSegments.higherEntry(firstEntry.getKey());
+  /**
+   * Finds the best candidate to compact by finding the candidate with the best cost benefit ratio
+   * @param validDataPerLogSegments the valid data size for each log segment in the form of a {@link NavigableMap} of segment names to
+   * valid data sizes.
+   * @param segmentCapacity Segment capacity of one {@link LogSegment}
+   * @param segmentHeaderSize Segment header size of a {@link LogSegment}
+   * @param maxBlobSize max blob size to factor in when calculating the cost benefit ratio
+   * @return the {@link CostBenefitInfo} for the best candidate to compact. {@code null} if there isn't any.
+   */
+  private CostBenefitInfo getBestCandidateToCompact(NavigableMap<String, Long> validDataPerLogSegments,
+      long segmentCapacity, long segmentHeaderSize, long maxBlobSize) {
+    Map.Entry<String, Long> firstEntry = validDataPerLogSegments.firstEntry();
+    Map.Entry<String, Long> lastEntry = validDataPerLogSegments.lastEntry();
+    CostBenefitInfo bestCandidateToCompact = null;
+    while (firstEntry != null) {
+      Map.Entry<String, Long> endEntry = lastEntry;
+      while (endEntry != null && LogSegmentNameHelper.COMPARATOR.compare(firstEntry.getKey(), endEntry.getKey()) <= 0) {
+        CostBenefitInfo costBenefitInfo =
+            getCostBenefitInfo(firstEntry.getKey(), endEntry.getKey(), validDataPerLogSegments, segmentCapacity,
+                segmentHeaderSize, maxBlobSize);
+        if (costBenefitInfo.getBenefit() >= storeConfig.storeMinLogSegmentCountToReclaimToTriggerCompaction && (
+            bestCandidateToCompact == null
+                || costBenefitInfo.getCostBenefitRatio().compareTo(bestCandidateToCompact.getCostBenefitRatio()) < 0)) {
+          bestCandidateToCompact = costBenefitInfo;
+          logger.trace("Updating best candidate to compact to {} ", bestCandidateToCompact);
         }
-        return bestCandidateToCompact;
+        endEntry = validDataPerLogSegments.lowerEntry(endEntry.getKey());
+      }
+      firstEntry = validDataPerLogSegments.higherEntry(firstEntry.getKey());
     }
+    return bestCandidateToCompact;
+  }
 
     /**
      * Calculates the {@link CostBenefitInfo} for the candidate to compact

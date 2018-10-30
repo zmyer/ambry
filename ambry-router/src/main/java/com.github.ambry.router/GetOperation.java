@@ -20,15 +20,17 @@ import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.ResponseHandler;
-import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.RouterConfig;
+import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.messageformat.MessageFormatFlags;
 import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.protocol.GetOption;
 import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.PartitionRequestInfo;
+import com.github.ambry.store.MessageInfo;
 import com.github.ambry.utils.Time;
+import com.github.ambry.utils.Utils;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -58,6 +60,7 @@ abstract class GetOperation {
   protected final AtomicReference<Exception> operationException = new AtomicReference<>();
   protected GetBlobResultInternal operationResult;
   protected final long submissionTimeMs;
+  protected final boolean isEncrypted;
 
   private static final Logger logger = LoggerFactory.getLogger(GetOperation.class);
 
@@ -77,12 +80,13 @@ abstract class GetOperation {
    * @param cryptoService {@link CryptoService} to assist in encryption or decryption
    * @param cryptoJobHandler {@link CryptoJobHandler} to assist in the execution of crypto jobs
    * @param time the {@link Time} instance to use.
+   * @param isEncrypted if encrypted bit is set based on original blobId string.
    */
   GetOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ClusterMap clusterMap,
       ResponseHandler responseHandler, BlobId blobId, GetBlobOptionsInternal options,
       Callback<GetBlobResultInternal> getOperationCallback, Histogram localColoTracker, Histogram crossColoTracker,
       Counter pastDueCounter, KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler,
-      Time time) {
+      Time time, boolean isEncrypted) {
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
     this.clusterMap = clusterMap;
@@ -98,6 +102,7 @@ abstract class GetOperation {
     this.time = time;
     submissionTimeMs = time.milliseconds();
     this.blobId = blobId;
+    this.isEncrypted = isEncrypted;
     validateTrackerType();
   }
 
@@ -209,20 +214,22 @@ abstract class GetOperation {
    */
   private Integer getPrecedenceLevel(RouterErrorCode routerErrorCode) {
     switch (routerErrorCode) {
-      case BlobDeleted:
+      case BlobAuthorizationFailure:
         return 1;
-      case BlobExpired:
+      case BlobDeleted:
         return 2;
-      case RangeNotSatisfiable:
+      case BlobExpired:
         return 3;
-      case AmbryUnavailable:
+      case RangeNotSatisfiable:
         return 4;
-      case UnexpectedInternalError:
+      case AmbryUnavailable:
         return 5;
-      case OperationTimedOut:
+      case UnexpectedInternalError:
         return 6;
-      case BlobDoesNotExist:
+      case OperationTimedOut:
         return 7;
+      case BlobDoesNotExist:
+        return 8;
       default:
         return Integer.MIN_VALUE;
     }
@@ -248,22 +255,38 @@ abstract class GetOperation {
    * @param partitionId the {@link PartitionId} for which a tracker is required.
    * @return an {@link OperationTracker} based on the config and {@code partitionId}.
    */
-  protected OperationTracker getOperationTracker(PartitionId partitionId) {
+  protected OperationTracker getOperationTracker(PartitionId partitionId, byte datacenterId) {
     OperationTracker operationTracker;
     String trackerType = routerConfig.routerGetOperationTrackerType;
+    String originatingDcName = clusterMap.getDatacenterName(datacenterId);
     if (trackerType.equals(SimpleOperationTracker.class.getSimpleName())) {
       operationTracker = new SimpleOperationTracker(routerConfig.routerDatacenterName, partitionId,
-          routerConfig.routerGetCrossDcEnabled, routerConfig.routerGetSuccessTarget,
-          routerConfig.routerGetRequestParallelism);
+          routerConfig.routerGetCrossDcEnabled, originatingDcName,
+          routerConfig.routerGetIncludeNonOriginatingDcReplicas, routerConfig.routerGetReplicasRequired,
+          routerConfig.routerGetSuccessTarget, routerConfig.routerGetRequestParallelism);
     } else if (trackerType.equals(AdaptiveOperationTracker.class.getSimpleName())) {
       operationTracker = new AdaptiveOperationTracker(routerConfig.routerDatacenterName, partitionId,
-          routerConfig.routerGetCrossDcEnabled, routerConfig.routerGetSuccessTarget,
-          routerConfig.routerGetRequestParallelism, time, localColoTracker, crossColoTracker, pastDueCounter,
-          routerConfig.routerLatencyToleranceQuantile);
+          routerConfig.routerGetCrossDcEnabled, originatingDcName,
+          routerConfig.routerGetIncludeNonOriginatingDcReplicas, routerConfig.routerGetReplicasRequired,
+          routerConfig.routerGetSuccessTarget, routerConfig.routerGetRequestParallelism, time, localColoTracker,
+          crossColoTracker, pastDueCounter, routerConfig.routerLatencyToleranceQuantile);
     } else {
       throw new IllegalArgumentException("Unrecognized tracker type: " + trackerType);
     }
     return operationTracker;
+  }
+
+  /**
+   * Updates the TTL in {@code blobProperties} if required
+   * @param blobProperties the {@link BlobProperties} of the blob
+   * @param messageInfo the {@link MessageInfo} received with the GET response
+   */
+  protected void updateTtlIfRequired(BlobProperties blobProperties, MessageInfo messageInfo) {
+    if (messageInfo.isTtlUpdated()) {
+      long newTtlSecs =
+          Utils.getTtlInSecsFromExpiryMs(messageInfo.getExpirationTimeInMs(), blobProperties.getCreationTimeInMs());
+      blobProperties.setTimeToLiveInSeconds(newTtlSecs);
+    }
   }
 
   /**

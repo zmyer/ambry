@@ -29,7 +29,7 @@ public enum RouterErrorCode {
    */
   InvalidBlobId, /**
    * Caller passed in an illegal argument for
-   * {@link Router#putBlob(com.github.ambry.messageformat.BlobProperties, byte[], ReadableStreamChannel)}
+   * {@link Router#putBlob(com.github.ambry.messageformat.BlobProperties, byte[], ReadableStreamChannel, PutBlobOptions)}
    * operation (and its variant).
    */
   InvalidPutArgument, /**
@@ -75,5 +75,11 @@ public enum RouterErrorCode {
   RangeNotSatisfiable, /**
    * The channel returned to the user in a getBlob operation has been closed before operation completion.
    */
-  ChannelClosed
+  ChannelClosed, /**
+   * The update has been rejected
+   */
+  BlobUpdateNotAllowed, /**
+   * ContainerId or AccountId from blobId doesn't match these in store server.
+   */
+  BlobAuthorizationFailure
 }

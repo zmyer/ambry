@@ -14,6 +14,8 @@
 package com.github.ambry.rest;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.account.Account;
+import com.github.ambry.account.Container;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.config.NettyConfig;
 import com.github.ambry.config.VerifiableProperties;
@@ -21,7 +23,9 @@ import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.notification.BlobReplicaSourceType;
 import com.github.ambry.notification.NotificationBlobType;
 import com.github.ambry.notification.NotificationSystem;
+import com.github.ambry.notification.UpdateType;
 import com.github.ambry.router.InMemoryRouter;
+import com.github.ambry.store.MessageInfo;
 import com.github.ambry.utils.TestUtils;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.Unpooled;
@@ -327,8 +331,8 @@ public class NettyMessageProcessorTest {
       }
       channel.writeInbound(LastHttpContent.EMPTY_LAST_CONTENT);
     }
-    if (!notificationSystem.operationCompleted.await(100, TimeUnit.MILLISECONDS)) {
-      fail("Post did not succeed after 100ms. There is an error or timeout needs to increase");
+    if (!notificationSystem.operationCompleted.await(1000, TimeUnit.MILLISECONDS)) {
+      fail("Post did not succeed after 1000ms. There is an error or timeout needs to increase");
     }
     assertNotNull("Blob id operated on cannot be null", notificationSystem.blobIdOperatedOn);
     return router.getActiveBlobs().get(notificationSystem.blobIdOperatedOn).getBlob();
@@ -435,13 +439,20 @@ public class NettyMessageProcessorTest {
     protected volatile CountDownLatch operationCompleted = new CountDownLatch(1);
 
     @Override
-    public void onBlobCreated(String blobId, BlobProperties blobProperties, NotificationBlobType notificationBlobType) {
+    public void onBlobCreated(String blobId, BlobProperties blobProperties, Account account, Container container,
+        NotificationBlobType notificationBlobType) {
       blobIdOperatedOn = blobId;
       operationCompleted.countDown();
     }
 
     @Override
-    public void onBlobDeleted(String blobId, String serviceId) {
+    public void onBlobTtlUpdated(String blobId, String serviceId, long expiresAtMs, Account account,
+        Container container) {
+      throw new IllegalStateException("Not implemented");
+    }
+
+    @Override
+    public void onBlobDeleted(String blobId, String serviceId, Account account, Container container) {
       throw new IllegalStateException("Not implemented");
     }
 
@@ -452,6 +463,12 @@ public class NettyMessageProcessorTest {
 
     @Override
     public void onBlobReplicaDeleted(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType) {
+      throw new IllegalStateException("Not implemented");
+    }
+
+    @Override
+    public void onBlobReplicaUpdated(String sourceHost, int port, String blobId, BlobReplicaSourceType sourceType,
+        UpdateType updateType, MessageInfo info) {
       throw new IllegalStateException("Not implemented");
     }
 

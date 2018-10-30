@@ -14,14 +14,13 @@
 package com.github.ambry.server;
 
 import com.github.ambry.clustermap.DataNodeId;
+import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.PortType;
 import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.IOException;
-import java.net.URISyntaxException;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -44,8 +43,10 @@ public class ServerPlaintextTest {
   public static void initializeTests() throws Exception {
     routerProps = new Properties();
     routerProps.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
-    notificationSystem = new MockNotificationSystem(9);
-    plaintextCluster = new MockCluster(notificationSystem, false, SystemTime.getInstance());
+    routerProps.setProperty("clustermap.default.partition.class", MockClusterMap.DEFAULT_PARTITION_CLASS);
+    plaintextCluster = new MockCluster(false, SystemTime.getInstance());
+    notificationSystem = new MockNotificationSystem(plaintextCluster.getClusterMap());
+    plaintextCluster.initializeServers(notificationSystem);
     plaintextCluster.startServers();
   }
 
@@ -55,10 +56,10 @@ public class ServerPlaintextTest {
    */
   @Parameterized.Parameters
   public static List<Object[]> data() {
-    return Arrays.asList(new Object[][]{{true}});
+    return Arrays.asList(new Object[][]{{false}, {true}});
   }
 
-  public ServerPlaintextTest(boolean testEncryption) throws Exception {
+  public ServerPlaintextTest(boolean testEncryption) {
     this.testEncryption = testEncryption;
   }
 
@@ -67,28 +68,32 @@ public class ServerPlaintextTest {
     long start = System.currentTimeMillis();
     // cleanup appears to hang sometimes. And, it sometimes takes a long time. Printing some info until cleanup is fast
     // and reliable.
-    System.out.println("About to invoke cluster.cleanup()");
+    System.out.println("ServerPlaintextTest::About to invoke cluster.cleanup()");
     if (plaintextCluster != null) {
       plaintextCluster.cleanup();
     }
-    System.out.println("cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
+    System.out.println("ServerPlaintextTest::cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
   }
 
   @Test
-  public void startStopTest() throws IOException, InstantiationException, URISyntaxException, GeneralSecurityException {
+  public void endToEndTest() {
+    DataNodeId dataNodeId = plaintextCluster.getGeneralDataNode();
+    ServerTestUtil.endToEndTest(new Port(dataNodeId.getPort(), PortType.PLAINTEXT), "DC1", plaintextCluster, null, null,
+        routerProps, testEncryption);
+  }
+
+  /**
+   * Do endToEndTest with the last dataNode whose storeEnablePrefetch is true.
+   */
+  @Test
+  public void endToEndTestWithPrefetch() {
+    DataNodeId dataNodeId = plaintextCluster.getPrefetchDataNode();
+    ServerTestUtil.endToEndTest(new Port(dataNodeId.getPort(), PortType.PLAINTEXT), "DC1", plaintextCluster, null, null,
+        routerProps, testEncryption);
   }
 
   @Test
-  public void endToEndTest()
-      throws InterruptedException, IOException, InstantiationException, URISyntaxException, GeneralSecurityException {
-    DataNodeId dataNodeId = plaintextCluster.getClusterMap().getDataNodeIds().get(0);
-    ServerTestUtil.endToEndTest(new Port(dataNodeId.getPort(), PortType.PLAINTEXT), "DC1", "", plaintextCluster, null,
-        null, routerProps, testEncryption);
-  }
-
-  @Test
-  public void endToEndReplicationWithMultiNodeMultiPartitionTest()
-      throws InterruptedException, IOException, InstantiationException, URISyntaxException, GeneralSecurityException {
+  public void endToEndReplicationWithMultiNodeMultiPartitionTest() throws Exception {
     DataNodeId dataNode = plaintextCluster.getClusterMap().getDataNodeIds().get(0);
     ArrayList<String> dataCenterList = Utils.splitString("DC1,DC2,DC3", ",");
     List<DataNodeId> dataNodes = plaintextCluster.getOneDataNodeFromEachDatacenter(dataCenterList);

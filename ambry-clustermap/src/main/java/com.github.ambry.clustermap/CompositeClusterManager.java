@@ -75,45 +75,41 @@ class CompositeClusterManager implements ClusterMap {
         return partitionIdStatic;
     }
 
-    /**
-     * Get writable partition ids from both the underlying {@link StaticClusterManager} and the underlying
-     * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
-     * @return a list of writable partition ids from the underlying {@link StaticClusterManager}.
-     */
-    // TODO: 2018/3/20 by zmyer
-    @Override
-    public List<PartitionId> getWritablePartitionIds() {
-        //先从静态的集群管理器中读取可写的分区列表
-        List<PartitionId> staticWritablePartitionIds = staticClusterManager.getWritablePartitionIds();
-        if (helixClusterManager != null) {
-            //对比动态集群管理中可写的分区列表，如果不一致，则更新失陪次数
-            if (!areEqual(staticWritablePartitionIds, helixClusterManager.getWritablePartitionIds())) {
-                helixClusterManagerMetrics.getAllPartitionIdsMismatchCount.inc();
-            }
-        }
-        //返回可写的分区列表
-        return staticWritablePartitionIds;
+  /**
+   * {@inheritDoc}
+   * Get writable partition ids from both the underlying {@link StaticClusterManager} and the underlying
+   * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
+   * @param partitionClass the partition class whose writable partitions are required. Can be {@code null}
+   * @return a list of writable partition ids from the underlying {@link StaticClusterManager}.
+   */
+  @Override
+  public List<PartitionId> getWritablePartitionIds(String partitionClass) {
+    List<PartitionId> staticWritablePartitionIds = staticClusterManager.getWritablePartitionIds(partitionClass);
+    if (helixClusterManager != null) {
+      if (!areEqual(staticWritablePartitionIds, helixClusterManager.getWritablePartitionIds(partitionClass))) {
+        helixClusterManagerMetrics.getWritablePartitionIdsMismatchCount.inc();
+      }
     }
+    return staticWritablePartitionIds;
+  }
 
-    /**
-     * Get all partition ids from both the underlying {@link StaticClusterManager} and the underlying
-     * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
-     * @return a list of partition ids from the underlying {@link StaticClusterManager}.
-     */
-    // TODO: 2018/3/20 by zmyer
-    @Override
-    public List<PartitionId> getAllPartitionIds() {
-        //获取集群中所有的分区id
-        List<PartitionId> staticPartitionIds = staticClusterManager.getAllPartitionIds();
-        if (helixClusterManager != null) {
-            //读取所有的分区id
-            if (!areEqual(staticPartitionIds, helixClusterManager.getAllPartitionIds())) {
-                helixClusterManagerMetrics.getAllPartitionIdsMismatchCount.inc();
-            }
-        }
-        //返回结果集
-        return staticPartitionIds;
+  /**
+   * {@inheritDoc}
+   * Get all partition ids from both the underlying {@link StaticClusterManager} and the underlying
+   * {@link HelixClusterManager}. Compare the two and if there is a mismatch, update a metric.
+   * @param partitionClass the partition class whose partitions are required. Can be {@code null}
+   * @return a list of partition ids from the underlying {@link StaticClusterManager}.
+   */
+  @Override
+  public List<PartitionId> getAllPartitionIds(String partitionClass) {
+    List<PartitionId> staticPartitionIds = staticClusterManager.getAllPartitionIds(partitionClass);
+    if (helixClusterManager != null) {
+      if (!areEqual(staticPartitionIds, helixClusterManager.getAllPartitionIds(partitionClass))) {
+        helixClusterManagerMetrics.getAllPartitionIdsMismatchCount.inc();
+      }
     }
+    return staticPartitionIds;
+  }
 
     /**
      * Check for existence of the given datacenter from both the static and the helix based cluster managers and update
@@ -143,32 +139,37 @@ class CompositeClusterManager implements ClusterMap {
         return staticClusterManager.getLocalDatacenterId();
     }
 
-    /**
-     * Return the {@link DataNodeId} associated with the given hostname and port in the underlying
-     * {@link StaticClusterManager}.
-     * Also get the associated data node from the underlying {@link HelixClusterManager} and if the two returned
-     * DataNodeId
-     * objects do not refer to the same actual instance, update a metric.
-     * @param hostname of the DataNodeId
-     * @param port of the DataNodeId
-     * @return the {@link DataNodeId} associated with the given hostname and port in the underlying
-     * {@link StaticClusterManager}.
-     */
-    // TODO: 2018/3/19 by zmyer
-    @Override
-    public DataNodeId getDataNodeId(String hostname, int port) {
-        //根据主机名和端口，返回对应的数据节点id
-        DataNodeId staticDataNode = staticClusterManager.getDataNodeId(hostname, port);
-        if (helixClusterManager != null) {
-            //查找数据节点id
-            DataNodeId helixDataNode = helixClusterManager.getDataNodeId(hostname, port);
-            //判断获取的节点数据是否一致
-            if (!staticDataNode.toString().equals(helixDataNode.toString())) {
-                helixClusterManagerMetrics.getDataNodeIdMismatchCount.inc();
-            }
-        }
-        return staticDataNode;
+  @Override
+  public String getDatacenterName(byte id) {
+    String dcName = staticClusterManager.getDatacenterName(id);
+    if (!dcName.equals(helixClusterManager.getDatacenterName(id))) {
+      helixClusterManagerMetrics.getDatacenterNameMismatchCount.inc();
     }
+    return dcName;
+  }
+
+  /**
+   * Return the {@link DataNodeId} associated with the given hostname and port in the underlying
+   * {@link StaticClusterManager}.
+   * Also get the associated data node from the underlying {@link HelixClusterManager} and if the two returned
+   * DataNodeId
+   * objects do not refer to the same actual instance, update a metric.
+   * @param hostname of the DataNodeId
+   * @param port of the DataNodeId
+   * @return the {@link DataNodeId} associated with the given hostname and port in the underlying
+   * {@link StaticClusterManager}.
+   */
+  @Override
+  public DataNodeId getDataNodeId(String hostname, int port) {
+    DataNodeId staticDataNode = staticClusterManager.getDataNodeId(hostname, port);
+    if (helixClusterManager != null) {
+      DataNodeId helixDataNode = helixClusterManager.getDataNodeId(hostname, port);
+      if (!staticDataNode.toString().equals(helixDataNode.toString())) {
+        helixClusterManagerMetrics.getDataNodeIdMismatchCount.inc();
+      }
+    }
+    return staticDataNode;
+  }
 
     /**
      * Get the list of {@link ReplicaId}s associated with the given {@link DataNodeId} in the underlying
@@ -274,24 +275,23 @@ class CompositeClusterManager implements ClusterMap {
         }
     }
 
-    /**
-     * Check if two lists of partitions are equivalent
-     * @param partitionListOne {@link List} of {@link PartitionId}s to compare
-     * @param partitionListTwo {@link List} of {@link AmbryPartition}s to compare
-     * @return {@code true} if both list are equal, {@code false} otherwise
-     */
-    // TODO: 2018/3/21 by zmyer
-    private boolean areEqual(List<PartitionId> partitionListOne, List<AmbryPartition> partitionListTwo) {
-        Set<String> partitionStringsOne = new HashSet<>();
-        for (PartitionId partitionId : partitionListOne) {
-            partitionStringsOne.add(partitionId.toString());
-        }
-        Set<String> partitionStringsTwo = new HashSet<>();
-        for (PartitionId partitionId : partitionListTwo) {
-            partitionStringsTwo.add(partitionId.toString());
-        }
-        return partitionStringsOne.equals(partitionStringsTwo);
+  /**
+   * Check if two lists of partitions are equivalent
+   * @param partitionListOne {@link List} of {@link PartitionId}s to compare
+   * @param partitionListTwo {@link List} of {@link PartitionId}s to compare
+   * @return {@code true} if both list are equal, {@code false} otherwise
+   */
+  private boolean areEqual(List<PartitionId> partitionListOne, List<PartitionId> partitionListTwo) {
+    Set<String> partitionStringsOne = new HashSet<>();
+    for (PartitionId partitionId : partitionListOne) {
+      partitionStringsOne.add(partitionId.toString());
     }
+    Set<String> partitionStringsTwo = new HashSet<>();
+    for (PartitionId partitionId : partitionListTwo) {
+      partitionStringsTwo.add(partitionId.toString());
+    }
+    return partitionStringsOne.equals(partitionStringsTwo);
+  }
 }
 
 /**

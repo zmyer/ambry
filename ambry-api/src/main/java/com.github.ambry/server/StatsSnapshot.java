@@ -14,7 +14,11 @@
 
 package com.github.ambry.server;
 
+import java.util.HashMap;
 import java.util.Map;
+import org.codehaus.jackson.annotate.JsonAnyGetter;
+import org.codehaus.jackson.annotate.JsonAnySetter;
+import org.codehaus.jackson.annotate.JsonPropertyOrder;
 
 
 /**
@@ -25,7 +29,7 @@ import java.util.Map;
  * {@link StatsSnapshot}'s subMap will contain all the containers in the account that is mapped with. At the leaf level
  * {@link StatsSnapshot}'s subMap will be null.
  */
-// TODO: 2018/4/20 by zmyer
+@JsonPropertyOrder({"value", "subMap"})
 public class StatsSnapshot {
     private long value;
     private Map<String, StatsSnapshot> subMap;
@@ -62,9 +66,10 @@ public class StatsSnapshot {
         return value;
     }
 
-    public Map<String, StatsSnapshot> getSubMap() {
-        return subMap;
-    }
+  @JsonAnyGetter
+  public Map<String, StatsSnapshot> getSubMap() {
+    return subMap;
+  }
 
     public void setValue(long value) {
         this.value = value;
@@ -74,14 +79,20 @@ public class StatsSnapshot {
         this.subMap = subMap;
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
+  @JsonAnySetter
+  public void add(String str, StatsSnapshot statsSnapshot) {
+    subMap = subMap == null ? new HashMap<>() : subMap;
+    subMap.put(str, statsSnapshot);
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
 
         StatsSnapshot that = (StatsSnapshot) o;
 

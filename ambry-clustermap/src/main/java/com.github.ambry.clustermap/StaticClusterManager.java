@@ -88,14 +88,14 @@ class StaticClusterManager implements ClusterMap {
 
   // TODO: 2018/3/20 by zmyer
   @Override
-  public List<PartitionId> getWritablePartitionIds() {
-    return partitionLayout.getWritablePartitions();
+  public List<PartitionId> getWritablePartitionIds(String partitionClass) {
+    return partitionLayout.getWritablePartitions(partitionClass);
   }
 
   // TODO: 2018/3/20 by zmyer
   @Override
-  public List<PartitionId> getAllPartitionIds() {
-    return partitionLayout.getPartitions();
+  public List<PartitionId> getAllPartitionIds(String partitionClass) {
+    return partitionLayout.getPartitions(partitionClass);
   }
 
   // TODO: 2018/3/20 by zmyer
@@ -121,7 +121,12 @@ class StaticClusterManager implements ClusterMap {
     return localDatacenterId;
   }
 
-  // TODO: 2018/3/20 by zmyer
+  @Override
+  public String getDatacenterName(byte id) {
+    Datacenter datacenter = hardwareLayout.findDatacenter(id);
+    return datacenter == null ? null : datacenter.getName();
+  }
+
   @Override
   public DataNodeId getDataNodeId(String hostname, int port) {
     return hardwareLayout.findDataNode(hostname, port);
@@ -139,8 +144,7 @@ class StaticClusterManager implements ClusterMap {
   // TODO: 2018/3/21 by zmyer
   List<Replica> getReplicas(DataNodeId dataNodeId) {
     List<Replica> replicas = new ArrayList<Replica>();
-    for (PartitionId partition : partitionLayout.getPartitions()) {
-      //依次遍历每个分区信息
+    for (PartitionId partition : partitionLayout.getPartitions(null)) {
       for (Replica replica : ((Partition) partition).getReplicas()) {
         //获取每个副本信息，比较存放的数据节点信息
         if (replica.getDataNodeId().equals(dataNodeId)) {
@@ -190,8 +194,7 @@ class StaticClusterManager implements ClusterMap {
   // TODO: 2018/3/21 by zmyer
   long getAllocatedRawCapacityInBytes(Datacenter datacenter) {
     long allocatedRawCapacityInBytes = 0;
-    for (PartitionId partition : partitionLayout.getPartitions()) {
-      //依次遍历每个分区对象
+    for (PartitionId partition : partitionLayout.getPartitions(null)) {
       for (Replica replica : ((Partition) partition).getReplicas()) {
         //获取每个分区对应的副本信息
         //获取副本对应的磁盘信息
@@ -209,8 +212,7 @@ class StaticClusterManager implements ClusterMap {
   // TODO: 2018/3/21 by zmyer
   long getAllocatedRawCapacityInBytes(DataNodeId dataNode) {
     long allocatedRawCapacityInBytes = 0;
-    for (PartitionId partition : partitionLayout.getPartitions()) {
-      //依次遍历每个分
+    for (PartitionId partition : partitionLayout.getPartitions(null)) {
       for (Replica replica : ((Partition) partition).getReplicas()) {
         //获取每个副本对应的磁盘信息
         Disk disk = (Disk) replica.getDiskId();
@@ -227,7 +229,7 @@ class StaticClusterManager implements ClusterMap {
   // TODO: 2018/3/21 by zmyer
   long getAllocatedRawCapacityInBytes(Disk disk) {
     long allocatedRawCapacityInBytes = 0;
-    for (PartitionId partition : partitionLayout.getPartitions()) {
+    for (PartitionId partition : partitionLayout.getPartitions(null)) {
       for (Replica replica : ((Partition) partition).getReplicas()) {
         Disk currentDisk = (Disk) replica.getDiskId();
         if (currentDisk.equals(disk)) {
@@ -286,9 +288,8 @@ class StaticClusterManager implements ClusterMap {
     return maxCapacityDisk;
   }
 
-  // TODO: 2018/3/21 by zmyer
-  PartitionId addNewPartition(List<Disk> disks, long replicaCapacityInBytes) {
-    return partitionLayout.addNewPartition(disks, replicaCapacityInBytes);
+  PartitionId addNewPartition(List<Disk> disks, long replicaCapacityInBytes, String partitionClass) {
+    return partitionLayout.addNewPartition(disks, replicaCapacityInBytes, partitionClass);
   }
 
   // TODO: 2018/3/21 by zmyer
@@ -341,7 +342,7 @@ class StaticClusterManager implements ClusterMap {
   // TODO: 2018/3/21 by zmyer
   private Disk getBestDiskCandidate(List<DataNode> dataNodes, Set<DataNode> dataNodesUsed, long replicaCapacityInBytes,
       boolean rackAware, int numChoices) {
-    Set<Long> rackIdsUsed = new HashSet<>();
+    Set<String> rackIdsUsed = new HashSet<>();
     if (rackAware) {
       for (DataNode dataNode : dataNodesUsed) {
         //首先需要统计已经在使用的数据节点所在的机架号
@@ -459,15 +460,15 @@ class StaticClusterManager implements ClusterMap {
    * Allocate partitions for {@code numPartitions} new partitions on all datacenters.
    *
    * @param numPartitions How many partitions to allocate.
+   * @param partitionClass the partition class that the created partitions must be tagged with
    * @param replicaCountPerDatacenter The number of replicas per partition on each datacenter
    * @param replicaCapacityInBytes How large each replica (of a partition) should be
    * @param attemptNonRackAwareOnFailure {@code true} if we should attempt a non rack-aware allocation if a rack-aware
    *                                     one is not possible.
    * @return A list of the new {@link PartitionId}s.
    */
-  // TODO: 2018/3/21 by zmyer
-  List<PartitionId> allocatePartitions(int numPartitions, int replicaCountPerDatacenter, long replicaCapacityInBytes,
-      boolean attemptNonRackAwareOnFailure) {
+  List<PartitionId> allocatePartitions(int numPartitions, String partitionClass, int replicaCountPerDatacenter,
+      long replicaCapacityInBytes, boolean attemptNonRackAwareOnFailure) {
     ArrayList<PartitionId> partitions = new ArrayList<PartitionId>(numPartitions);
     int partitionsAllocated = 0;
     //检查目前整个集群中是否有足够的空间来分配分区
@@ -482,14 +483,10 @@ class StaticClusterManager implements ClusterMap {
         //将待分配的磁盘空间插入到列表中
         disksToAllocate.addAll(disks);
       }
-      //开始将新创建的分区信息插入到分区列表中
-      partitions.add(partitionLayout.addNewPartition(disksToAllocate, replicaCapacityInBytes));
-      //递增已经分配的分区数目
+      partitions.add(partitionLayout.addNewPartition(disksToAllocate, replicaCapacityInBytes, partitionClass));
       partitionsAllocated++;
       System.out.println("Allocated " + partitionsAllocated + " new partitions so far.");
     }
-
-    //返回结果
     return partitions;
   }
 
@@ -597,6 +594,12 @@ class StaticClusterManager implements ClusterMap {
       case Partition_ReadOnly:
         //处理分区只读事件
         ((Partition) replicaId.getPartitionId()).onPartitionReadOnly();
+        break;
+      case Replica_Unavailable:
+        ((Replica) replicaId).onReplicaUnavailable();
+        break;
+      case Replica_Available:
+        ((Replica) replicaId).onReplicaResponse();
         break;
     }
   }

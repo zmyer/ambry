@@ -55,6 +55,22 @@ public class RouterConfig {
   public final int routerScalingUnitMaxConnectionsPerPortSsl;
 
   /**
+   * The percentage of {@link RouterConfig#routerScalingUnitMaxConnectionsPerPortSsl} or
+   * {@link RouterConfig#routerScalingUnitMaxConnectionsPerPortPlainText} to warm up in the startup.
+   * {@link RouterConfig#routerConnectionsWarmUpTimeoutMs} may need to be adjusted.
+   */
+  @Config("router.connections.warm.up.percentage.per.port")
+  @Default("25")
+  public final int routerConnectionsWarmUpPercentagePerPort;
+
+  /**
+   * The max time allowed to establish connections to local DC in the startup
+   */
+  @Config("router.connections.warm.up.timeout.ms")
+  @Default("5000")
+  public final int routerConnectionsWarmUpTimeoutMs;
+
+  /**
    * Timeout for checking out an available connection to a (datanode, port).
    */
   @Config("router.connection.checkout.timeout.ms")
@@ -132,6 +148,21 @@ public class RouterConfig {
   public final boolean routerGetCrossDcEnabled;
 
   /**
+   * Indicates whether get operations are allowed to make requests to nodes in non-originating remote data centers.
+   */
+  @Config("router.get.include.non.originating.dc.replicas")
+  @Default("true")
+  public final boolean routerGetIncludeNonOriginatingDcReplicas;
+
+  /**
+   * Number of replicas required for GET OperationTracker when routerGetIncludeNonOriginatingDcReplicas is False.
+   * Please note routerGetReplicasRequired is 6 because total number of local and originating replicas is always <= 6.
+   * This may no longer be true with partition classes and flexible replication.
+   */
+  @Config("router.get.replicas.required")
+  @Default("6")
+  public final int routerGetReplicasRequired;
+  /**
    * The OperationTracker to use for GET operations.
    */
   @Config("router.get.operation.tracker.type")
@@ -150,7 +181,7 @@ public class RouterConfig {
    * The version to use for new BlobIds.
    */
   @Config("router.blobid.current.version")
-  @Default("3")
+  @Default("5")
   public final short routerBlobidCurrentVersion;
 
   /**
@@ -175,6 +206,20 @@ public class RouterConfig {
   public final int routerCryptoJobsWorkerCount;
 
   /**
+   * The maximum number of parallel requests issued at a time by the TTL update manager for a chunk.
+   */
+  @Config("router.ttl.update.request.parallelism")
+  @Default("3")
+  public final int routerTtlUpdateRequestParallelism;
+
+  /**
+   * The minimum number of successful responses required for a TTL update operation.
+   */
+  @Config("router.ttl.update.success.target")
+  @Default("2")
+  public final int routerTtlUpdateSuccessTarget;
+
+  /**
    * Create a RouterConfig instance.
    * @param verifiableProperties the properties map to refer to.
    */
@@ -186,6 +231,10 @@ public class RouterConfig {
         verifiableProperties.getIntInRange("router.scaling.unit.max.connections.per.port.plain.text", 5, 1, 20);
     routerScalingUnitMaxConnectionsPerPortSsl =
         verifiableProperties.getIntInRange("router.scaling.unit.max.connections.per.port.ssl", 2, 1, 20);
+    routerConnectionsWarmUpPercentagePerPort =
+        verifiableProperties.getIntInRange("router.connections.warm.up.percentage.per.port", 25, 0, 100);
+    routerConnectionsWarmUpTimeoutMs =
+        verifiableProperties.getIntInRange("router.connections.warm.up.timeout.ms", 5000, 0, Integer.MAX_VALUE);
     routerConnectionCheckoutTimeoutMs =
         verifiableProperties.getIntInRange("router.connection.checkout.timeout.ms", 1000, 1, 5000);
     routerRequestTimeoutMs = verifiableProperties.getIntInRange("router.request.timeout.ms", 2000, 1, 10000);
@@ -204,18 +253,26 @@ public class RouterConfig {
         verifiableProperties.getIntInRange("router.get.request.parallelism", 2, 1, Integer.MAX_VALUE);
     routerGetSuccessTarget = verifiableProperties.getIntInRange("router.get.success.target", 1, 1, Integer.MAX_VALUE);
     routerGetCrossDcEnabled = verifiableProperties.getBoolean("router.get.cross.dc.enabled", true);
+    routerGetIncludeNonOriginatingDcReplicas =
+        verifiableProperties.getBoolean("router.get.include.non.originating.dc.replicas", true);
+    routerGetReplicasRequired =
+        verifiableProperties.getIntInRange("router.get.replicas.required", 6, 1, Integer.MAX_VALUE);
     routerGetOperationTrackerType =
         verifiableProperties.getString("router.get.operation.tracker.type", "SimpleOperationTracker");
     routerLatencyToleranceQuantile =
         verifiableProperties.getDoubleInRange("router.latency.tolerance.quantile", 0.9, 0.0, 1.0);
     routerBlobidCurrentVersion =
-        verifiableProperties.getShortFromAllowedValues("router.blobid.current.version", (short) 3,
-            new Short[]{1, 2, 3});
+        verifiableProperties.getShortFromAllowedValues("router.blobid.current.version", (short) 6,
+            new Short[]{1, 2, 3, 4, 5, 6});
     routerKeyManagementServiceFactory = verifiableProperties.getString("router.key.management.service.factory",
         "com.github.ambry.router.SingleKeyManagementServiceFactory");
     routerCryptoServiceFactory = verifiableProperties.getString("router.crypto.service.factory",
         "com.github.ambry.router.GCMCryptoServiceFactory");
     routerCryptoJobsWorkerCount =
         verifiableProperties.getIntInRange("router.crypto.jobs.worker.count", 1, 1, Integer.MAX_VALUE);
+    routerTtlUpdateRequestParallelism =
+        verifiableProperties.getIntInRange("router.ttl.update.request.parallelism", 3, 1, Integer.MAX_VALUE);
+    routerTtlUpdateSuccessTarget =
+        verifiableProperties.getIntInRange("router.ttl.update.success.target", 2, 1, Integer.MAX_VALUE);
   }
 }

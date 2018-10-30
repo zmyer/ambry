@@ -93,6 +93,7 @@ subprojects {
 
 project(':ambry-utils') {
     dependencies {
+        compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "commons-codec:commons-codec:$commonsVersion"
         compile "org.json:json:$jsonVersion"
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
@@ -103,7 +104,11 @@ project(':ambry-utils') {
 project(':ambry-api') {
     dependencies {
         compile project(':ambry-utils')
+        compile "org.apache.helix:helix-core:$helixVersion"
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
+        compile "org.codehaus.jackson:jackson-core-asl:$jacksonVersion"
+        compile "org.codehaus.jackson:jackson-mapper-asl:$jacksonVersion"
+        testCompile project(':ambry-clustermap')
         testCompile project(':ambry-utils').sourceSets.test.output
     }
 }
@@ -118,6 +123,7 @@ project(':ambry-account') {
         compile "org.json:json:$jsonVersion"
         testCompile project(':ambry-utils').sourceSets.test.output
         testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-clustermap').sourceSets.test.output
     }
 }
 
@@ -128,6 +134,7 @@ project(':ambry-clustermap') {
         compile "org.apache.helix:helix-core:$helixVersion"
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "org.json:json:$jsonVersion"
+        testCompile project(':ambry-commons')
         testCompile project(':ambry-utils').sourceSets.test.output
     }
 }
@@ -149,10 +156,12 @@ project(':ambry-network') {
     dependencies {
         compile project(':ambry-api'),
                 project(':ambry-utils'),
-                project(':ambry-commons')
+                project(':ambry-commons'),
+                project(':ambry-clustermap')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         testCompile project(':ambry-utils').sourceSets.test.output
         testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
@@ -175,6 +184,7 @@ project(':ambry-server') {
         testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-commons').sourceSets.test.output
         testCompile project(':ambry-replication').sourceSets.test.output
+        testCompile project(':ambry-messageformat').sourceSets.test.output
         testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
@@ -184,8 +194,10 @@ project(':ambry-store') {
         compile project(':ambry-api'),
                 project(':ambry-utils')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
+        testCompile project(':ambry-clustermap')
         testCompile project(':ambry-clustermap').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-api').sourceSets.test.output
     }
 }
 
@@ -194,6 +206,7 @@ project(':ambry-messageformat') {
         compile project(':ambry-api'),
                 project(':ambry-utils')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
+        testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
     }
 }
@@ -208,8 +221,10 @@ project(':ambry-replication') {
                 project(':ambry-network')
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         testCompile project(':ambry-clustermap').sourceSets.test.output
+        testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
         testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-messageformat').sourceSets.test.output
     }
 }
 
@@ -218,6 +233,7 @@ project(':ambry-tools') {
         compile project(':ambry-api'),
                 project(':ambry-account'),
                 project(':ambry-store'),
+                project(':ambry-server'),
                 project(':ambry-rest'),
                 project(':ambry-frontend')
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
@@ -226,6 +242,8 @@ project(':ambry-tools') {
         testCompile project(':ambry-commons').sourceSets.test.output
         testCompile project(':ambry-store').sourceSets.test.output
         testCompile project(':ambry-utils').sourceSets.test.output
+        testCompile project(':ambry-api').sourceSets.test.output
+        testCompile project(':ambry-messageformat').sourceSets.test.output
     }
 }
 
@@ -251,6 +269,7 @@ project(':ambry-rest') {
         compile "com.codahale.metrics:metrics-core:$metricsVersion"
         compile "net.sf.jopt-simple:jopt-simple:$joptSimpleVersion"
         compile "io.netty:netty-all:$nettyVersion"
+        compile "io.netty:netty-tcnative-boringssl-static:$nettyTcnativeVersion"
         compile "javax.servlet:javax.servlet-api:$javaxVersion"
         testCompile project(':ambry-api').sourceSets.test.output
         testCompile project(':ambry-clustermap').sourceSets.test.output
@@ -258,6 +277,8 @@ project(':ambry-rest') {
         testCompile project(':ambry-commons').sourceSets.test.output
         testCompile project(':ambry-router').sourceSets.main.output
         testCompile project(':ambry-router').sourceSets.test.output
+        testCompile project(':ambry-account').sourceSets.main.output
+        testCompile project(':ambry-account').sourceSets.test.output
         testCompile "org.bouncycastle:bcpkix-jdk15on:$bouncycastleVersion"
     }
 }
@@ -278,6 +299,8 @@ project(':ambry-router') {
         testCompile project(':ambry-utils').sourceSets.test.output
         testCompile project(':ambry-network').sourceSets.test.output
         testCompile project(':ambry-commons').sourceSets.test.output
+        testCompile project(':ambry-account').sourceSets.main.output
+        testCompile project(':ambry-account').sourceSets.test.output
     }
 }
 

@@ -19,12 +19,14 @@ package com.github.ambry.config;
 // TODO: 2018/3/19 by zmyer
 public class ClusterMapConfig {
 
-    /**
-     * The factory class used to get the resource state policies.
-     */
-    @Config("clustermap.resourcestatepolicy.factory")
-    @Default("com.github.ambry.clustermap.FixedBackoffResourceStatePolicyFactory")
-    public final String clusterMapResourceStatePolicyFactory;
+  private static final String MAX_REPLICAS_ALL_DATACENTERS = "max-replicas-all-datacenters";
+
+  /**
+   * The factory class used to get the resource state policies.
+   */
+  @Config("clustermap.resourcestatepolicy.factory")
+  @Default("com.github.ambry.clustermap.FixedBackoffResourceStatePolicyFactory")
+  public final String clusterMapResourceStatePolicyFactory;
 
     /**
      * The threshold for the number of consecutive errors to tolerate for a datanode.
@@ -54,12 +56,26 @@ public class ClusterMapConfig {
     @Default("10 * 60 * 1000")
     public final int clusterMapFixedTimeoutDiskRetryBackoffMs;
 
-    /**
-     * List of Datacenters to which local node needs SSL encryption to communicate
-     */
-    @Config("clustermap.ssl.enabled.datacenters")
-    @Default("")
-    public final String clusterMapSslEnabledDatacenters;
+  /**
+   * The threshold for the number of errors to tolerate for a replica.
+   */
+  @Config("clustermap.fixedtimeout.replica.error.threshold")
+  @Default("1")
+  public final int clusterMapFixedTimeoutReplicaErrorThreshold;
+
+  /**
+   * The time to wait before a replica is retried after it has been determined to be down.
+   */
+  @Config("clustermap.fixedtimeout.replica.retry.backoff.ms")
+  @Default("10 * 60 * 1000")
+  public final int clusterMapFixedTimeoutReplicaRetryBackoffMs;
+
+  /**
+   * List of Datacenters to which local node needs SSL encryption to communicate
+   */
+  @Config("clustermap.ssl.enabled.datacenters")
+  @Default("")
+  public final String clusterMapSslEnabledDatacenters;
 
     /**
      * The clustermap agent factory to use for instantiating the Cluster Map and the Cluster Participant.
@@ -130,29 +146,70 @@ public class ClusterMapConfig {
     @Default("true")
     public final boolean clusterMapResolveHostnames;
 
-    // TODO: 2018/3/19 by zmyer
-    public ClusterMapConfig(VerifiableProperties verifiableProperties) {
-        clusterMapFixedTimeoutDatanodeErrorThreshold =
-                verifiableProperties.getIntInRange("clustermap.fixedtimeout.datanode.error.threshold", 3, 1, 100);
-        clusterMapResourceStatePolicyFactory = verifiableProperties.getString("clustermap.resourcestatepolicy.factory",
-                "com.github.ambry.clustermap.FixedBackoffResourceStatePolicyFactory");
-        clusterMapFixedTimeoutDataNodeRetryBackoffMs =
-                verifiableProperties.getIntInRange("clustermap.fixedtimeout.datanode.retry.backoff.ms", 5 * 60 * 1000,
-                        1,
-                        20 * 60 * 1000);
-        clusterMapFixedTimeoutDiskErrorThreshold =
-                verifiableProperties.getIntInRange("clustermap.fixedtimeout.disk.error.threshold", 1, 1, 100);
-        clusterMapFixedTimeoutDiskRetryBackoffMs =
-                verifiableProperties.getIntInRange("clustermap.fixedtimeout.disk.retry.backoff.ms", 10 * 60 * 1000, 1,
-                        30 * 60 * 1000);
-        clusterMapSslEnabledDatacenters = verifiableProperties.getString("clustermap.ssl.enabled.datacenters", "");
-        clusterMapClusterAgentsFactory = verifiableProperties.getString("clustermap.clusteragents.factory",
-                "com.github.ambry.clustermap.StaticClusterAgentsFactory");
-        clusterMapDcsZkConnectStrings = verifiableProperties.getString("clustermap.dcs.zk.connect.strings", "");
-        clusterMapClusterName = verifiableProperties.getString("clustermap.cluster.name");
-        clusterMapDatacenterName = verifiableProperties.getString("clustermap.datacenter.name");
-        clusterMapHostName = verifiableProperties.getString("clustermap.host.name");
-        clusterMapPort = verifiableProperties.getInteger("clustermap.port", null);
-        clusterMapResolveHostnames = verifiableProperties.getBoolean("clustermap.resolve.hostnames", true);
-    }
+  /**
+   * The partition class to assign to a partition if one is not supplied
+   */
+  @Config("clustermap.default.partition.class")
+  @Default(MAX_REPLICAS_ALL_DATACENTERS)
+  public final String clusterMapDefaultPartitionClass;
+
+  /**
+   * The current xid for this cluster manager. Any changes beyond this xid will be ignored by the cluster manager.
+   */
+  @Config("clustermap.current.xid")
+  @Default("Long.MAX_VALUE")
+  public final Long clustermapCurrentXid;
+
+  /**
+   * Indicate if cluster manager enables override on properties of partition. These properties include partition state
+   * and partition class etc.
+   * By default this config is disabled, the state of partition is dynamically updated based on SEALED list from Helix.
+   * When something goes bad and partition override is enabled, cluster manager uses partition properties in Helix PropertyStore
+   * as source of truth to resolve partition state and ignores any changes from SEALED list in InstanceConfig.
+   */
+  @Config("clustermap.enable.partition.override")
+  @Default("false")
+  public final boolean clusterMapEnablePartitionOverride;
+
+  /**
+   * If set to false, the Helix based cluster manager will only listen to changes to the cluster in the local colo. It
+   * will only connect to the remote ZK servers during initialization.
+   */
+  @Config("clustermap.listen.cross.colo")
+  @Default("true")
+  public final boolean clustermapListenCrossColo;
+
+  public ClusterMapConfig(VerifiableProperties verifiableProperties) {
+    clusterMapFixedTimeoutDatanodeErrorThreshold =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.datanode.error.threshold", 3, 1, 100);
+    clusterMapResourceStatePolicyFactory = verifiableProperties.getString("clustermap.resourcestatepolicy.factory",
+        "com.github.ambry.clustermap.FixedBackoffResourceStatePolicyFactory");
+    clusterMapFixedTimeoutDataNodeRetryBackoffMs =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.datanode.retry.backoff.ms", 5 * 60 * 1000, 1,
+            20 * 60 * 1000);
+    clusterMapFixedTimeoutDiskErrorThreshold =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.disk.error.threshold", 1, 1, 100);
+    clusterMapFixedTimeoutDiskRetryBackoffMs =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.disk.retry.backoff.ms", 10 * 60 * 1000, 1,
+            30 * 60 * 1000);
+    clusterMapFixedTimeoutReplicaErrorThreshold =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.replica.error.threshold", 1, 1, 100);
+    clusterMapFixedTimeoutReplicaRetryBackoffMs =
+        verifiableProperties.getIntInRange("clustermap.fixedtimeout.replica.retry.backoff.ms", 10 * 60 * 1000, 1,
+            30 * 60 * 1000);
+    clusterMapSslEnabledDatacenters = verifiableProperties.getString("clustermap.ssl.enabled.datacenters", "");
+    clusterMapClusterAgentsFactory = verifiableProperties.getString("clustermap.clusteragents.factory",
+        "com.github.ambry.clustermap.StaticClusterAgentsFactory");
+    clusterMapDcsZkConnectStrings = verifiableProperties.getString("clustermap.dcs.zk.connect.strings", "");
+    clusterMapClusterName = verifiableProperties.getString("clustermap.cluster.name");
+    clusterMapDatacenterName = verifiableProperties.getString("clustermap.datacenter.name");
+    clusterMapHostName = verifiableProperties.getString("clustermap.host.name");
+    clusterMapPort = verifiableProperties.getInteger("clustermap.port", null);
+    clusterMapResolveHostnames = verifiableProperties.getBoolean("clustermap.resolve.hostnames", true);
+    clusterMapDefaultPartitionClass =
+        verifiableProperties.getString("clustermap.default.partition.class", MAX_REPLICAS_ALL_DATACENTERS);
+    clustermapCurrentXid = verifiableProperties.getLong("clustermap.current.xid", Long.MAX_VALUE);
+    clusterMapEnablePartitionOverride = verifiableProperties.getBoolean("clustermap.enable.partition.override", false);
+    clustermapListenCrossColo = verifiableProperties.getBoolean("clustermap.listen.cross.colo", true);
+  }
 }

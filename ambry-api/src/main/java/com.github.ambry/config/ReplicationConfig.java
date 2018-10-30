@@ -60,64 +60,80 @@ public class ReplicationConfig {
     @Default("5")
     public final int replicationTokenFlushDelaySeconds;
 
-    /**
-     * The fetch size is an approximate total size that a remote server would return on a fetch request.
-     * This is not guaranteed to be always obeyed. For example, if a single blob is larger than the fetch size
-     * the entire blob would be returned
-     */
-    @Config("replication.fetch.size.in.bytes")
-    @Default("1048576")
-    public final long replicationFetchSizeInBytes;
+  /**
+   * The time (in ms) to sleep between replication cycles to throttle the replica thread in case the thread handles
+   * intra datacenter replicas
+   */
+  @Config("replication.intra.replica.thread.throttle.sleep.duration.ms")
+  @Default("0")
+  public final long replicationIntraReplicaThreadThrottleSleepDurationMs;
 
-    /**
-     * The time for which replication waits between replication of remote replicas of a partition
-     */
-    @Config("replication.wait.time.between.replicas.ms")
-    @Default("1000")
-    public final int replicaWaitTimeBetweenReplicasMs;
+  /**
+   * The time (in ms) to sleep between replication cycles to throttle the replica thread in case the thread handles
+   * inter datacenter replicas
+   */
+  @Config("replication.inter.replica.thread.throttle.sleep.duration.ms")
+  @Default("0")
+  public final long replicationInterReplicaThreadThrottleSleepDurationMs;
 
-    /**
-     * The max lag above which replication does not wait between replicas. A larger value would slow down replication
-     * while reduces the chance of conflicts with direct puts. A smaller value would speed up replication but
-     * increase the chance of conflicts with direct puts
-     */
-    @Config("replication.max.lag.for.wait.time.in.bytes")
-    @Default("5242880")
-    public final long replicationMaxLagForWaitTimeInBytes;
+  /**
+   * The time (in ms) to sleep between replication cycles when the replica thread is not doing any useful work
+   */
+  @Config("replication.replica.thread.idle.sleep.duration.ms")
+  @Default("0")
+  public final long replicationReplicaThreadIdleSleepDurationMs;
 
-    /**
-     * Whether message stream should be tested for validity so that only valid ones are considered during replication
-     */
-    @Config("replication.validate.message.stream")
-    @Default("false")
-    public final boolean replicationValidateMessageStream;
+  /**
+   * The time (in ms) to temporarily disable replication for a replica in order to reduce wasteful network calls
+   */
+  @Config("replication.synced.replica.backoff.duration.ms")
+  @Default("0")
+  public final long replicationSyncedReplicaBackoffDurationMs;
+
+  /**
+   * The fetch size is an approximate total size that a remote server would return on a fetch request.
+   * This is not guaranteed to be always obeyed. For example, if a single blob is larger than the fetch size
+   * the entire blob would be returned
+   */
+  @Config("replication.fetch.size.in.bytes")
+  @Default("1048576")
+  public final long replicationFetchSizeInBytes;
+
+  /**
+   * If true, replication Get requests asks for deleted and expired blobs as well to succeed in scenarios where blobs
+   * get deleted or expired after replication metadata exchange.
+   */
+  @Config("replication.include.all")
+  @Default("true")
+  public final boolean replicationIncludeAll;
 
     // TODO: 2018/3/19 by zmyer
     public ReplicationConfig(VerifiableProperties verifiableProperties) {
 
-        replicationTokenFactory =
-                verifiableProperties.getString("replication.token.factory",
-                        "com.github.ambry.store.StoreFindTokenFactory");
-        replicationNumOfIntraDCReplicaThreads =
-                verifiableProperties.getInt("replication.no.of.intra.dc.replica.threads", 1);
-        replicationNumOfInterDCReplicaThreads =
-                verifiableProperties.getInt("replication.no.of.inter.dc.replica.threads", 1);
-        replicationConnectionPoolCheckoutTimeoutMs =
-                verifiableProperties.getIntInRange("replication.connection.pool.checkout.timeout.ms", 5000, 1000,
-                        10000);
-        replicationTokenFlushIntervalSeconds =
-                verifiableProperties.getIntInRange("replication.token.flush.interval.seconds", 300, 5,
-                        Integer.MAX_VALUE);
-        replicationTokenFlushDelaySeconds =
-                verifiableProperties.getIntInRange("replication.token.flush.delay.seconds", 5, 1, Integer.MAX_VALUE);
-        replicationFetchSizeInBytes =
-                verifiableProperties.getLongInRange("replication.fetch.size.in.bytes", 1048576, 0, 20971520);
-        replicaWaitTimeBetweenReplicasMs =
-                verifiableProperties.getIntInRange("replication.wait.time.between.replicas.ms", 1000, 0, 1000000);
-        replicationMaxLagForWaitTimeInBytes =
-                verifiableProperties.getLongInRange("replication.max.lag.for.wait.time.in.bytes", 5242880, 0,
-                        104857600);
-        replicationValidateMessageStream = verifiableProperties.getBoolean("replication.validate.message.stream",
-                false);
-    }
+    replicationTokenFactory =
+        verifiableProperties.getString("replication.token.factory", "com.github.ambry.store.StoreFindTokenFactory");
+    replicationNumOfIntraDCReplicaThreads =
+        verifiableProperties.getInt("replication.no.of.intra.dc.replica.threads", 1);
+    replicationNumOfInterDCReplicaThreads =
+        verifiableProperties.getInt("replication.no.of.inter.dc.replica.threads", 1);
+    replicationConnectionPoolCheckoutTimeoutMs =
+        verifiableProperties.getIntInRange("replication.connection.pool.checkout.timeout.ms", 5000, 1000, 10000);
+    replicationTokenFlushIntervalSeconds =
+        verifiableProperties.getIntInRange("replication.token.flush.interval.seconds", 300, 5, Integer.MAX_VALUE);
+    replicationTokenFlushDelaySeconds =
+        verifiableProperties.getIntInRange("replication.token.flush.delay.seconds", 5, 1, Integer.MAX_VALUE);
+    replicationIntraReplicaThreadThrottleSleepDurationMs =
+        verifiableProperties.getLongInRange("replication.intra.replica.thread.throttle.sleep.duration.ms", 0, 0,
+            Long.MAX_VALUE);
+    replicationInterReplicaThreadThrottleSleepDurationMs =
+        verifiableProperties.getLongInRange("replication.inter.replica.thread.throttle.sleep.duration.ms", 0, 0,
+            Long.MAX_VALUE);
+    replicationReplicaThreadIdleSleepDurationMs =
+        verifiableProperties.getLongInRange("replication.replica.thread.idle.sleep.duration.ms", 0, 0, Long.MAX_VALUE);
+    replicationSyncedReplicaBackoffDurationMs =
+        verifiableProperties.getLongInRange("replication.synced.replica.backoff.duration.ms", 0, 0, Long.MAX_VALUE);
+    replicationFetchSizeInBytes =
+        verifiableProperties.getLongInRange("replication.fetch.size.in.bytes", 1048576, 1, Long.MAX_VALUE);
+    replicationIncludeAll = verifiableProperties.getBoolean("replication.include.all", true);
+  }
 }

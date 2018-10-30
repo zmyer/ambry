@@ -370,23 +370,19 @@ public class Selector implements Selectable {
             }
         }
 
-        // check ready keys
-        long startSelect = time.milliseconds();
-        //开始select操作
-        int readyKeys = select(timeoutMs);
-        long endSelect = time.milliseconds();
-        this.metrics.selectorSelectTime.update(endSelect - startSelect);
-        this.metrics.selectorSelectCount.inc();
+    // check ready keys
+    long startSelect = time.milliseconds();
+    int readyKeys = select(timeoutMs);
+    this.metrics.selectorSelectCount.inc();
 
-        if (readyKeys > 0) {
-            //获取准备继续的key集合
-            Set<SelectionKey> keys = nioSelector.selectedKeys();
-            Iterator<SelectionKey> iter = keys.iterator();
-            while (iter.hasNext()) {
-                //获取key
-                SelectionKey key = iter.next();
-                //将key从集合删除，这一步必须的！！！
-                iter.remove();
+    if (readyKeys > 0) {
+      long endSelect = time.milliseconds();
+      this.metrics.selectorSelectTime.update(endSelect - startSelect);
+      Set<SelectionKey> keys = nioSelector.selectedKeys();
+      Iterator<SelectionKey> iter = keys.iterator();
+      while (iter.hasNext()) {
+        SelectionKey key = iter.next();
+        iter.remove();
 
                 //从key中读取传输对象
                 Transmission transmission = getTransmission(key);
@@ -410,41 +406,36 @@ public class Selector implements Selectable {
                         continue;
                     }
 
-                    if (key.isReadable() && transmission.ready()) {
-                        //开始执行读取操作
-                        read(key, transmission);
-                    } else if (key.isWritable() && transmission.ready()) {
-                        //开始执行写入操作
-                        write(key, transmission);
-                    } else if (!key.isValid()) {
-                        //关闭key
-                        close(key);
-                    }
-                } catch (IOException e) {
-                    String socketDescription = socketDescription(channel(key));
-                    if (e instanceof EOFException || e instanceof ConnectException) {
-                        metrics.selectorDisconnectedErrorCount.inc();
-                        logger.error("Connection {} disconnected", socketDescription, e);
-                    } else {
-                        metrics.selectorIOErrorCount.inc();
-                        logger.warn("Error in I/O with connection to {}", socketDescription, e);
-                    }
-                    close(key);
-                } catch (Exception e) {
-                    metrics.selectorKeyOperationErrorCount.inc();
-                    logger.error("closing key on exception remote host {}", channel(key).socket()
-                            .getRemoteSocketAddress(), e);
-                    close(key);
-                }
-            }
-            checkUnreadyConnectionsStatus();
-            this.metrics.selectorIOCount.inc();
+          if (key.isReadable() && transmission.ready()) {
+            read(key, transmission);
+          } else if (key.isWritable() && transmission.ready()) {
+            write(key, transmission);
+          } else if (!key.isValid()) {
+            close(key);
+          }
+        } catch (IOException e) {
+          String socketDescription = socketDescription(channel(key));
+          if (e instanceof EOFException || e instanceof ConnectException) {
+            metrics.selectorDisconnectedErrorCount.inc();
+            logger.error("Connection {} disconnected", socketDescription, e);
+          } else {
+            metrics.selectorIOErrorCount.inc();
+            logger.warn("Error in I/O with connection to {}", socketDescription, e);
+          }
+          close(key);
+        } catch (Exception e) {
+          metrics.selectorKeyOperationErrorCount.inc();
+          logger.error("closing key on exception remote host {}", channel(key).socket().getRemoteSocketAddress(), e);
+          close(key);
         }
-        disconnected.addAll(closedConnections);
-        closedConnections.clear();
-        long endIo = time.milliseconds();
-        this.metrics.selectorIOTime.update(endIo - endSelect);
+      }
+      checkUnreadyConnectionsStatus();
+      this.metrics.selectorIOCount.inc();
+      this.metrics.selectorIOTime.update(time.milliseconds() - endSelect);
     }
+    disconnected.addAll(closedConnections);
+    closedConnections.clear();
+  }
 
     /**
      * Check readiness for unready connections and add to completed list if ready

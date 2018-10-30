@@ -346,11 +346,11 @@ public class ServerWritePerformance {
               new BlobProperties(randomNum, "test", Account.UNKNOWN_ACCOUNT_ID, Container.UNKNOWN_CONTAINER_ID, false);
           ConnectedChannel channel = null;
           try {
-            List<? extends PartitionId> partitionIds = clusterMap.getWritablePartitionIds();
+            List<? extends PartitionId> partitionIds = clusterMap.getWritablePartitionIds(null);
             int index = (int) getRandomLong(rand, partitionIds.size());
             PartitionId partitionId = partitionIds.get(index);
             BlobId blobId = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
-                props.getAccountId(), props.getContainerId(), partitionId, false);
+                props.getAccountId(), props.getContainerId(), partitionId, false, BlobId.BlobDataType.DATACHUNK);
             PutRequest putRequest =
                 new PutRequest(0, "perf", blobId, props, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(blob),
                     props.getBlobSize(), BlobType.DataBlob, null);

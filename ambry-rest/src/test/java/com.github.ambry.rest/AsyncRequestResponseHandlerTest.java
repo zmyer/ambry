@@ -457,7 +457,7 @@ public class AsyncRequestResponseHandlerTest {
   private MockRestRequest createRestRequest(RestMethod method, String uri, JSONObject headers,
       List<ByteBuffer> contents) throws JSONException, UnsupportedEncodingException, URISyntaxException {
     JSONObject data = new JSONObject();
-    data.put(MockRestRequest.REST_METHOD_KEY, method);
+    data.put(MockRestRequest.REST_METHOD_KEY, method.name());
     data.put(MockRestRequest.URI_KEY, uri);
     if (headers != null) {
       data.put(MockRestRequest.HEADERS_KEY, headers);
@@ -734,7 +734,8 @@ public class AsyncRequestResponseHandlerTest {
  * used with one event only.
  * @param <T> the type of event that this is a monitor for.
  */
-class EventMonitor<T> implements MockRestResponseChannel.EventListener, MockRestRequest.EventListener, ByteBufferRSC.EventListener {
+class EventMonitor<T>
+    implements MockRestResponseChannel.EventListener, MockRestRequest.EventListener, ByteBufferRSC.EventListener {
   private final T eventOfInterest;
   private final CountDownLatch eventFired = new CountDownLatch(1);
   private final AtomicBoolean eventOccurred = new AtomicBoolean(false);
@@ -955,5 +956,10 @@ class BadRestRequest implements RestRequest {
   @Override
   public byte[] getDigest() {
     throw new IllegalStateException("Not implemented");
+  }
+
+  @Override
+  public long getBytesReceived() {
+    return 0;
   }
 }

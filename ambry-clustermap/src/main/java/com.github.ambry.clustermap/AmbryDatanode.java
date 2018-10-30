@@ -20,12 +20,12 @@ import com.github.ambry.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.TreeSet;
 
 import static com.github.ambry.clustermap.ClusterMapUtils.MAX_PORT;
 import static com.github.ambry.clustermap.ClusterMapUtils.MIN_PORT;
-import static com.github.ambry.clustermap.ClusterMapUtils.UNKNOWN_RACK_ID;
 import static com.github.ambry.clustermap.ClusterMapUtils.getFullyQualifiedDomainName;
 import static com.github.ambry.clustermap.ClusterMapUtils.getInstanceName;
 
@@ -33,43 +33,48 @@ import static com.github.ambry.clustermap.ClusterMapUtils.getInstanceName;
 /**
  * {@link DataNodeId} implementation to use within dynamic cluster managers.
  */
-// TODO: 2018/3/20 by zmyer
-class AmbryDataNode extends DataNodeId implements Resource {
-    private final String hostName;
-    private final Port plainTextPort;
-    private final Port sslPort;
-    private final String dataCenterName;
-    private final long rackId;
-    private final List<String> sslEnabledDataCenters;
-    private final Logger logger = LoggerFactory.getLogger(getClass());
-    private final ResourceStatePolicy resourceStatePolicy;
-    private final ClusterMapConfig clusterMapConfig;
+class AmbryDataNode implements DataNodeId {
+  private final String hostName;
+  private final Port plainTextPort;
+  private final Port sslPort;
+  private final String dataCenterName;
+  private final String rackId;
+  private final long xid;
+  private final List<String> sslEnabledDataCenters;
+  private final Logger logger = LoggerFactory.getLogger(getClass());
+  private final ResourceStatePolicy resourceStatePolicy;
+  private final ClusterMapConfig clusterMapConfig;
+  private final static Comparator<AmbryDataNode> AMBRY_DATA_NODE_COMPARATOR =
+      Comparator.comparingInt((AmbryDataNode k) -> k.plainTextPort.getPort()).
+          thenComparing(k -> k.hostName);
 
-    /**
-     * Instantiate an AmbryDataNode object.
-     * @param dataCenterName the name of the dataCenter associated with this data node.
-     * @param clusterMapConfig the {@link ClusterMapConfig} to use.
-     * @param hostName the hostName identifying this data node.
-     * @param portNum the port identifying this data node.
-     * @param rackId the rack Id associated with this data node (may be null).
-     * @param sslPortNum the ssl port associated with this data node (may be null).
-     * @throws Exception if there is an exception in instantiating the {@link ResourceStatePolicy}
-     */
-    AmbryDataNode(String dataCenterName, ClusterMapConfig clusterMapConfig, String hostName, int portNum, Long rackId,
-            Integer sslPortNum) throws Exception {
-        this.hostName = hostName;
-        this.plainTextPort = new Port(portNum, PortType.PLAINTEXT);
-        this.sslPort = sslPortNum != null ? new Port(sslPortNum, PortType.SSL) : null;
-        this.dataCenterName = dataCenterName;
-        this.clusterMapConfig = clusterMapConfig;
-        this.rackId = rackId != null ? rackId : UNKNOWN_RACK_ID;
-        this.sslEnabledDataCenters = Utils.splitString(clusterMapConfig.clusterMapSslEnabledDatacenters, ",");
-        ResourceStatePolicyFactory resourceStatePolicyFactory =
-                Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this, HardwareState.AVAILABLE,
-                        clusterMapConfig);
-        this.resourceStatePolicy = resourceStatePolicyFactory.getResourceStatePolicy();
-        validate();
-    }
+  /**
+   * Instantiate an AmbryDataNode object.
+   * @param dataCenterName the name of the dataCenter associated with this data node.
+   * @param clusterMapConfig the {@link ClusterMapConfig} to use.
+   * @param hostName the hostName identifying this data node.
+   * @param portNum the port identifying this data node.
+   * @param rackId the rack Id associated with this data node (may be null).
+   * @param sslPortNum the ssl port associated with this data node (may be null).
+   * @param xid the xid associated with this data node.
+   * @throws Exception if there is an exception in instantiating the {@link ResourceStatePolicy}
+   */
+  AmbryDataNode(String dataCenterName, ClusterMapConfig clusterMapConfig, String hostName, int portNum, String rackId,
+      Integer sslPortNum, long xid) throws Exception {
+    this.hostName = hostName;
+    this.plainTextPort = new Port(portNum, PortType.PLAINTEXT);
+    this.sslPort = sslPortNum != null ? new Port(sslPortNum, PortType.SSL) : null;
+    this.dataCenterName = dataCenterName;
+    this.clusterMapConfig = clusterMapConfig;
+    this.rackId = rackId;
+    this.xid = xid;
+    this.sslEnabledDataCenters = Utils.splitString(clusterMapConfig.clusterMapSslEnabledDatacenters, ",");
+    ResourceStatePolicyFactory resourceStatePolicyFactory =
+        Utils.getObj(clusterMapConfig.clusterMapResourceStatePolicyFactory, this, HardwareState.AVAILABLE,
+            clusterMapConfig);
+    this.resourceStatePolicy = resourceStatePolicyFactory.getResourceStatePolicy();
+    validate();
+  }
 
     /**
      * Validate the constructed AmbryDataNode.
@@ -137,24 +142,24 @@ class AmbryDataNode extends DataNodeId implements Resource {
         return dataCenterName;
     }
 
-    @Override
-    public long getRackId() {
-        return rackId;
-    }
+  @Override
+  public String getRackId() {
+    return rackId;
+  }
 
-    @Override
-    public int compareTo(DataNodeId o) {
-        if (getClass() != o.getClass()) {
-            throw new IllegalStateException("Incompatible objects to compare");
-        }
-        AmbryDataNode other = (AmbryDataNode) o;
-        int compare = (plainTextPort.getPort() < other.plainTextPort.getPort()) ? -1
-                : ((plainTextPort.getPort() == other.plainTextPort.getPort()) ? 0 : 1);
-        if (compare == 0) {
-            compare = hostName.compareTo(other.hostName);
-        }
-        return compare;
+  @Override
+  public long getXid() {
+    return xid;
+  }
+
+  @Override
+  public int compareTo(DataNodeId o) {
+    if (getClass() != o.getClass()) {
+      throw new IllegalStateException("Incompatible objects to compare");
     }
+    AmbryDataNode other = (AmbryDataNode) o;
+    return AMBRY_DATA_NODE_COMPARATOR.compare(this, other);
+  }
 
     @Override
     public String toString() {

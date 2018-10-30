@@ -23,6 +23,9 @@ import com.github.ambry.rest.RestServiceErrorCode;
 import com.github.ambry.rest.RestServiceException;
 import com.github.ambry.utils.TestUtils;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.Test;
 
 import static com.github.ambry.utils.Utils.*;
@@ -51,22 +54,28 @@ public class FrontendUtilsTest {
     byte referenceDatacenterId = bytes[0];
     short referenceAccountId = getRandomShort(TestUtils.RANDOM);
     short referenceContainerId = getRandomShort(TestUtils.RANDOM);
-    PartitionId referencePartitionId = referenceClusterMap.getWritablePartitionIds().get(0);
+    PartitionId referencePartitionId =
+        referenceClusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
     boolean referenceIsEncrypted = TestUtils.RANDOM.nextBoolean();
-    BlobId blobId =
-        new BlobId(BlobId.BLOB_ID_V3, referenceType, referenceDatacenterId, referenceAccountId, referenceContainerId,
-            referencePartitionId, referenceIsEncrypted);
-    BlobId regeneratedBlobId = FrontendUtils.getBlobIdFromString(blobId.getID(), referenceClusterMap);
-    assertEquals("BlobId mismatch", blobId, regeneratedBlobId);
-    assertBlobIdFieldValues(regeneratedBlobId, referenceType, referenceDatacenterId, referenceAccountId,
-        referenceContainerId, referencePartitionId, referenceIsEncrypted);
+    List<Short> versions = Arrays.stream(BlobId.getAllValidVersions())
+        .filter(version -> version >= BlobId.BLOB_ID_V3)
+        .collect(Collectors.toList());
+    for (short version : versions) {
+      BlobId blobId =
+          new BlobId(version, referenceType, referenceDatacenterId, referenceAccountId, referenceContainerId,
+              referencePartitionId, referenceIsEncrypted, BlobId.BlobDataType.DATACHUNK);
+      BlobId regeneratedBlobId = FrontendUtils.getBlobIdFromString(blobId.getID(), referenceClusterMap);
+      assertEquals("BlobId mismatch", blobId, regeneratedBlobId);
+      assertBlobIdFieldValues(regeneratedBlobId, referenceType, referenceDatacenterId, referenceAccountId,
+          referenceContainerId, referencePartitionId, version >= BlobId.BLOB_ID_V4 && referenceIsEncrypted);
 
-    // bad path
-    try {
-      FrontendUtils.getBlobIdFromString(blobId.getID().substring(1), referenceClusterMap);
-      fail("Should have thrown exception for bad blobId ");
-    } catch (RestServiceException e) {
-      assertEquals("RestServiceErrorCode mismatch", RestServiceErrorCode.BadRequest, e.getErrorCode());
+      // bad path
+      try {
+        FrontendUtils.getBlobIdFromString(blobId.getID().substring(1), referenceClusterMap);
+        fail("Should have thrown exception for bad blobId ");
+      } catch (RestServiceException e) {
+        assertEquals("RestServiceErrorCode mismatch", RestServiceErrorCode.BadRequest, e.getErrorCode());
+      }
     }
   }
 
@@ -95,6 +104,6 @@ public class FrontendUtilsTest {
     assertEquals("Wrong datacenter id in blobId: " + blobId, datacenterId, blobId.getDatacenterId());
     assertEquals("Wrong account id in blobId: " + blobId, accountId, blobId.getAccountId());
     assertEquals("Wrong container id in blobId: " + blobId, containerId, blobId.getContainerId());
-    assertEquals("Wrong isEncrypted value in blobId: " + blobId, isEncrypted, blobId.isEncrypted());
+    assertEquals("Wrong isEncrypted value in blobId: " + blobId, isEncrypted, BlobId.isEncrypted(blobId.getID()));
   }
 }

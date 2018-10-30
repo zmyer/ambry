@@ -37,7 +37,7 @@ class HardwareLayout {
   private final long version;
   //数据中心集合
   private final ArrayList<Datacenter> datacenters;
-  //总的容量大小
+  private final Map<Byte, Datacenter> datacenterById;
   private final long rawCapacityInBytes;
   //数据节点数目
   private final long dataNodeCount;
@@ -66,9 +66,12 @@ class HardwareLayout {
 
     //读取数据中心集合
     this.datacenters = new ArrayList<Datacenter>(jsonObject.getJSONArray("datacenters").length());
+    this.datacenterById = new HashMap<>();
     for (int i = 0; i < jsonObject.getJSONArray("datacenters").length(); ++i) {
-      this.datacenters.add(i,
-          new Datacenter(this, jsonObject.getJSONArray("datacenters").getJSONObject(i), clusterMapConfig));
+      Datacenter datacenter =
+          new Datacenter(this, jsonObject.getJSONArray("datacenters").getJSONObject(i), clusterMapConfig);
+      this.datacenters.add(datacenter);
+      datacenterById.put(datacenter.getId(), datacenter);
     }
 
     //计算总的容量大小
@@ -152,7 +155,10 @@ class HardwareLayout {
     return dataNodeInHardStateCount.get(hardwareState);
   }
 
-  // TODO: 2018/3/21 by zmyer
+  ClusterMapConfig getClusterMapConfig() {
+    return clusterMapConfig;
+  }
+
   private Map<HardwareState, Long> calculateDataNodeInHardStateCount() {
     Map<HardwareState, Long> dataNodeInStateCount = new HashMap<HardwareState, Long>();
     for (HardwareState hardwareState : HardwareState.values()) {
@@ -235,6 +241,16 @@ class HardwareLayout {
       }
     }
     return null;
+  }
+
+  /**
+   * Finds Datacenter by id
+   *
+   * @param id id of datacenter to find
+   * @return Datacenter or null if not found.
+   */
+  public Datacenter findDatacenter(byte id) {
+    return datacenterById.get(id);
   }
 
   /**

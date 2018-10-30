@@ -21,6 +21,9 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -53,51 +56,51 @@ public class PlainTextTransmission extends Transmission {
         return true;
     }
 
-    /**
-     * Reads a sequence of bytes from the channel into the {@link NetworkReceive}
-     *
-     * @return true if the read is complete, false otherwise
-     * @throws IOException if some other I/O error occurs
-     */
-    @Override
-    public boolean read() throws IOException {
-        if (!hasReceive()) {
-            networkReceive = new NetworkReceive(getConnectionId(), new BoundedByteBufferReceive(), time);
-        }
-        long startTimeMs = SystemTime.getInstance().milliseconds();
-        long bytesRead = networkReceive.getReceivedBytes().readFrom(socketChannel);
-        long readTimeMs = SystemTime.getInstance().milliseconds() - startTimeMs;
-        logger.trace("Bytes read " + bytesRead + " from {} using key {} Time: {}",
-                socketChannel.socket().getRemoteSocketAddress(), getConnectionId(), readTimeMs);
-        if (bytesRead > 0) {
-            metrics.plaintextReceiveTimePerKB.update(readTimeMs * 1024 / bytesRead);
-        }
-        return networkReceive.getReceivedBytes().isReadComplete();
+  /**
+   * Reads a sequence of bytes from the channel into the {@link NetworkReceive}
+   *
+   * @return true if the read is complete, false otherwise
+   * @throws IOException if some other I/O error occurs
+   */
+  @Override
+  public boolean read() throws IOException {
+    if (!hasReceive()) {
+      networkReceive = new NetworkReceive(getConnectionId(), new BoundedByteBufferReceive(), time);
     }
+    long startTimeMs = SystemTime.getInstance().milliseconds();
+    long bytesRead = networkReceive.getReceivedBytes().readFrom(socketChannel);
+    long readTimeMs = SystemTime.getInstance().milliseconds() - startTimeMs;
+    logger.trace("Bytes read " + bytesRead + " from {} using key {} Time: {}",
+        socketChannel.socket().getRemoteSocketAddress(), getConnectionId(), readTimeMs);
+    if (bytesRead > 0) {
+      metrics.plaintextReceiveTimeInUsPerKB.update(TimeUnit.MILLISECONDS.toMicros(readTimeMs) * 1024 / bytesRead);
+    }
+    return networkReceive.getReceivedBytes().isReadComplete();
+  }
 
-    /**
-     * Writes a sequence of bytes to the channel from the payload in {@link NetworkSend}
-     *
-     * @return true if {@link Send} in {@link NetworkSend} is completely written to the channel, false otherwise
-     * @throws IOException If some other I/O error occurs
-     */
-    // TODO: 2018/3/27 by zmyer
-    @Override
-    public boolean write() throws IOException {
-        Send send = networkSend.getPayload();
-        if (send == null) {
-            throw new IllegalStateException("Registered for write interest but no response attached to key.");
-        }
-        long startTimeMs = SystemTime.getInstance().milliseconds();
-        long bytesWritten = send.writeTo(socketChannel);
-        long writeTimeMs = SystemTime.getInstance().milliseconds() - startTimeMs;
-        logger.trace("Bytes written {} to {} using key {} Time: {}", bytesWritten,
-                socketChannel.socket().getRemoteSocketAddress(), getConnectionId(), writeTimeMs);
-        if (bytesWritten > 0) {
-            metrics.plaintextSendTimePerKB.update(writeTimeMs * 1024 / bytesWritten);
-        }
-        return send.isSendComplete();
+  /**
+   * Writes a sequence of bytes to the channel from the payload in {@link NetworkSend}
+   *
+   * @return true if {@link Send} in {@link NetworkSend} is completely written to the channel, false otherwise
+   * @throws IOException If some other I/O error occurs
+   */
+  @Override
+  public boolean write() throws IOException {
+    Send send = networkSend.getPayload();
+    if (send == null) {
+      throw new IllegalStateException("Registered for write interest but no response attached to key.");
     }
+    long startTimeMs = SystemTime.getInstance().milliseconds();
+    long bytesWritten = send.writeTo(socketChannel);
+    long writeTimeMs = SystemTime.getInstance().milliseconds() - startTimeMs;
+    logger.trace("Bytes written {} to {} using key {} Time: {}", bytesWritten,
+        socketChannel.socket().getRemoteSocketAddress(), getConnectionId(), writeTimeMs);
+    if (bytesWritten > 0) {
+      metrics.plaintextSendTimeInUsPerKB.update(TimeUnit.MILLISECONDS.toMicros(writeTimeMs) * 1024 / bytesWritten);
+      metrics.plaintextSendTime.update(writeTimeMs);
+    }
+    return send.isSendComplete();
+  }
 
     /**
      * Close the connection for the socket channel

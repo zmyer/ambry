@@ -21,8 +21,5 @@ package com.github.ambry.protocol;
  */
 // TODO: 2018/4/20 by zmyer
 public enum AdminRequestOrResponseType {
-    TriggerCompaction,
-    RequestControl,
-    ReplicationControl,
-    CatchupStatus
+  TriggerCompaction, RequestControl, ReplicationControl, CatchupStatus, BlobStoreControl
 }

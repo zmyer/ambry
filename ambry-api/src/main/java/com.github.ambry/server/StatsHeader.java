@@ -15,13 +15,16 @@
 package com.github.ambry.server;
 
 import java.util.List;
+import org.codehaus.jackson.annotate.JsonAutoDetect;
+import org.codehaus.jackson.annotate.JsonPropertyOrder;
 
 
 /**
  * A model object that contains metadata information about some reported stats. For example, the kind of stats that is
  * being reported, timestamp and etc.
  */
-// TODO: 2018/4/20 by zmyer
+@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+@JsonPropertyOrder({"description", "timestamp", "storesContactedCount", "storesRespondedCount", "unreachableStores"})
 public class StatsHeader {
     public enum StatsDescription {
         QUOTA

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 LinkedIn Corp. All rights reserved.
+ * Copyright 2018 LinkedIn Corp. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,14 +35,9 @@ import java.util.ArrayList;
 /**
  * Factory to create SSLContext and SSLEngine
  */
-// TODO: 2018/4/20 by zmyer
-public class SSLFactory {
-    public enum Mode {
-        CLIENT,
-        SERVER
-    }
+public class JdkSslFactory implements SSLFactory {
 
-    protected static final Logger logger = LoggerFactory.getLogger(SSLFactory.class);
+  protected static final Logger logger = LoggerFactory.getLogger(JdkSslFactory.class);
 
     private String protocol;
     private String provider;
@@ -58,34 +53,32 @@ public class SSLFactory {
     private boolean needClientAuth;
     private boolean wantClientAuth;
 
-    /**
-     * Construct an {@link SSLFactory}.
-     * @param sslConfig the {@link SSLConfig} to use.
-     * @throws GeneralSecurityException
-     * @throws IOException
-     */
-    public SSLFactory(SSLConfig sslConfig) throws GeneralSecurityException, IOException {
+  /**
+   * Construct an {@link JdkSslFactory}.
+   * @param sslConfig the {@link SSLConfig} to use.
+   * @throws GeneralSecurityException
+   * @throws IOException
+   */
+  public JdkSslFactory(SSLConfig sslConfig) throws GeneralSecurityException, IOException {
 
-        this.protocol = sslConfig.sslContextProtocol;
-        if (sslConfig.sslContextProvider.length() > 0) {
-            this.provider = sslConfig.sslContextProvider;
-        }
+    this.protocol = sslConfig.sslContextProtocol;
+    if (!sslConfig.sslContextProvider.isEmpty()) {
+      this.provider = sslConfig.sslContextProvider;
+    }
 
-        ArrayList<String> cipherSuitesList = Utils.splitString(sslConfig.sslCipherSuites, ",");
-        if (cipherSuitesList != null && cipherSuitesList.size() > 0 && !(cipherSuitesList.size() == 1
-                && cipherSuitesList.get(0).equals(""))) {
-            this.cipherSuites = cipherSuitesList.toArray(new String[cipherSuitesList.size()]);
-        }
+    ArrayList<String> cipherSuitesList = Utils.splitString(sslConfig.sslCipherSuites, ",");
+    if (cipherSuitesList.size() > 0 && !(cipherSuitesList.size() == 1 && cipherSuitesList.get(0).isEmpty())) {
+      this.cipherSuites = cipherSuitesList.toArray(new String[cipherSuitesList.size()]);
+    }
 
-        ArrayList<String> protocolsList = Utils.splitString(sslConfig.sslEnabledProtocols, ",");
-        if (protocolsList != null && protocolsList.size() > 0) {
-            this.enabledProtocols = protocolsList.toArray(new String[protocolsList.size()]);
-        }
+    ArrayList<String> protocolsList = Utils.splitString(sslConfig.sslEnabledProtocols, ",");
+    if (protocolsList.size() > 0 && !(protocolsList.size() == 1 && protocolsList.get(0).isEmpty())) {
+      this.enabledProtocols = protocolsList.toArray(new String[protocolsList.size()]);
+    }
 
-        if (sslConfig.sslEndpointIdentificationAlgorithm.length() > 0
-                && !sslConfig.sslEndpointIdentificationAlgorithm.equals("")) {
-            this.endpointIdentification = sslConfig.sslEndpointIdentificationAlgorithm;
-        }
+    if (!sslConfig.sslEndpointIdentificationAlgorithm.isEmpty()) {
+      this.endpointIdentification = sslConfig.sslEndpointIdentificationAlgorithm;
+    }
 
         if (sslConfig.sslClientAuthentication.equals("required")) {
             this.needClientAuth = true;
@@ -93,13 +86,13 @@ public class SSLFactory {
             this.wantClientAuth = true;
         }
 
-        if (sslConfig.sslKeymanagerAlgorithm.length() > 0) {
-            this.kmfAlgorithm = sslConfig.sslKeymanagerAlgorithm;
-        }
+    if (!sslConfig.sslKeymanagerAlgorithm.isEmpty()) {
+      this.kmfAlgorithm = sslConfig.sslKeymanagerAlgorithm;
+    }
 
-        if (sslConfig.sslTrustmanagerAlgorithm.length() > 0) {
-            this.tmfAlgorithm = sslConfig.sslTrustmanagerAlgorithm;
-        }
+    if (!sslConfig.sslTrustmanagerAlgorithm.isEmpty()) {
+      this.tmfAlgorithm = sslConfig.sslTrustmanagerAlgorithm;
+    }
 
         createKeyStore(sslConfig.sslKeystoreType, sslConfig.sslKeystorePath, sslConfig.sslKeystorePassword,
                 sslConfig.sslKeyPassword);
@@ -143,22 +136,23 @@ public class SSLFactory {
         return sslContext;
     }
 
-    /**
-     * Create {@link SSLEngine} for given host name and port number.
-     * This engine manages the handshake process and encryption/decryption with this remote host.
-     * @param peerHost The remote host name
-     * @param peerPort The remote port number
-     * @param mode The local SSL mode, Client or Server
-     * @return SSLEngine
-     */
-    public SSLEngine createSSLEngine(String peerHost, int peerPort, Mode mode) {
-        SSLEngine sslEngine = sslContext.createSSLEngine(peerHost, peerPort);
-        if (cipherSuites != null) {
-            sslEngine.setEnabledCipherSuites(cipherSuites);
-        }
-        if (enabledProtocols != null) {
-            sslEngine.setEnabledProtocols(enabledProtocols);
-        }
+  /**
+   * Create {@link SSLEngine} for given host name and port number.
+   * This engine manages the handshake process and encryption/decryption with this remote host.
+   * @param peerHost The remote host name
+   * @param peerPort The remote port number
+   * @param mode The local SSL mode, Client or Server
+   * @return SSLEngine
+   */
+  @Override
+  public SSLEngine createSSLEngine(String peerHost, int peerPort, Mode mode) {
+    SSLEngine sslEngine = sslContext.createSSLEngine(peerHost, peerPort);
+    if (cipherSuites != null) {
+      sslEngine.setEnabledCipherSuites(cipherSuites);
+    }
+    if (enabledProtocols != null) {
+      sslEngine.setEnabledProtocols(enabledProtocols);
+    }
 
         if (mode == Mode.SERVER) {
             sslEngine.setUseClientMode(false);
@@ -176,14 +170,15 @@ public class SSLFactory {
         return sslEngine;
     }
 
-    /**
-     * Returns a configured {@link SSLContext}. This context supports creating {@link SSLEngine}s and for the loaded
-     * truststore and keystore. An {@link SSLEngine} must be created for each connection.
-     * @return SSLContext.
-     */
-    public SSLContext getSSLContext() {
-        return sslContext;
-    }
+  /**
+   * Returns a configured {@link SSLContext}. This context supports creating {@link SSLEngine}s and for the loaded
+   * truststore and keystore. An {@link SSLEngine} must be created for each connection.
+   * @return SSLContext.
+   */
+  @Override
+  public SSLContext getSSLContext() {
+    return sslContext;
+  }
 
     private void createKeyStore(String type, String path, String password, String keyPassword) {
         this.keystore = new SecurityStore(type, path, password);

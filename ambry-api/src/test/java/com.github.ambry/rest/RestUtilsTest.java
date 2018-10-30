@@ -22,6 +22,7 @@ import com.github.ambry.router.ByteRange;
 import com.github.ambry.router.GetBlobOptions;
 import com.github.ambry.utils.Crc32;
 import com.github.ambry.utils.Pair;
+import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import com.github.ambry.utils.UtilsTest;
 import java.io.UnsupportedEncodingException;
@@ -29,7 +30,9 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -126,7 +129,7 @@ public class RestUtilsTest {
     verifyBlobPropertiesConstructionFailure(headers, RestServiceErrorCode.InternalServerError);
 
     // no failures.
-    // ttl missing. Should be infinite time by default.
+    // ttl missing. Should be infinite time by default
     // ownerId missing.
     headers = new JSONObject();
     setAmbryHeadersForPut(headers, null, serviceId, Container.DEFAULT_PUBLIC_CONTAINER, contentType, null);
@@ -136,6 +139,11 @@ public class RestUtilsTest {
     headers = new JSONObject();
     setAmbryHeadersForPut(headers, null, serviceId, Container.DEFAULT_PUBLIC_CONTAINER, contentType, ownerId);
     headers.put(RestUtils.Headers.TTL, JSONObject.NULL);
+    verifyBlobPropertiesConstructionSuccess(headers);
+
+    // Post with valid ttl
+    headers = new JSONObject();
+    setAmbryHeadersForPut(headers, "100", serviceId, Container.DEFAULT_PUBLIC_CONTAINER, contentType, ownerId);
     verifyBlobPropertiesConstructionSuccess(headers);
 
     // ownerId null.
@@ -240,7 +248,7 @@ public class RestUtilsTest {
    */
   @Test
   public void getUserMetadataTest() throws Exception {
-    byte[] usermetadata = RestUtils.buildUsermetadata(new HashMap<String, Object>());
+    byte[] usermetadata = RestUtils.buildUserMetadata(new HashMap<>());
     assertArrayEquals("Unexpected user metadata", new byte[0], usermetadata);
   }
 
@@ -256,6 +264,9 @@ public class RestUtilsTest {
     Map<String, String> userMetadata = new HashMap<String, String>();
     userMetadata.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key1", "value1");
     userMetadata.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key2", "value2");
+    // changed cases
+    userMetadata.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.toUpperCase() + "KeY3", "value3");
+    userMetadata.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.toLowerCase() + "kEy4", "value4");
     setUserMetadataHeaders(headers, userMetadata);
     verifyUserMetadataConstructionSuccess(headers, userMetadata);
   }
@@ -272,7 +283,7 @@ public class RestUtilsTest {
     JSONObject headers = new JSONObject();
     headers.put(RestUtils.MultipartPost.USER_METADATA_PART, ByteBuffer.wrap(original));
     RestRequest restRequest = createRestRequest(RestMethod.POST, "/", headers);
-    byte[] rcvd = RestUtils.buildUsermetadata(restRequest.getArgs());
+    byte[] rcvd = RestUtils.buildUserMetadata(restRequest.getArgs());
     assertArrayEquals("Received user metadata does not match with original", original, rcvd);
   }
 
@@ -286,31 +297,39 @@ public class RestUtilsTest {
     setAmbryHeadersForPut(headers, Long.toString(RANDOM.nextInt(10000)), generateRandomString(10),
         Container.DEFAULT_PUBLIC_CONTAINER, "image/gif", generateRandomString(10));
     Map<String, String> userMetadata = new HashMap<String, String>();
-    String key1 = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key1";
-    userMetadata.put(key1, "value1");
+    List<String> keysToCheck = new ArrayList<>();
+    String key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key1";
+    userMetadata.put(key, "value1");
+    keysToCheck.add(key);
     // no valid prefix
     userMetadata.put("key2", "value2_1");
     // valid prefix as suffix
     userMetadata.put("key3" + RestUtils.Headers.USER_META_DATA_HEADER_PREFIX, "value3");
     // empty value
-    userMetadata.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key4", "");
+    key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key4";
+    userMetadata.put(key, "");
+    keysToCheck.add(key);
+    // different casing
+    key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.toUpperCase() + "KeY5";
+    userMetadata.put(key, "value5");
+    keysToCheck.add(key);
+    key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.toLowerCase() + "kEy6";
+    userMetadata.put(key, "value6");
+    keysToCheck.add(key);
     setUserMetadataHeaders(headers, userMetadata);
 
     RestRequest restRequest = createRestRequest(RestMethod.POST, "/", headers);
-    byte[] userMetadataByteArray = RestUtils.buildUsermetadata(restRequest.getArgs());
+    byte[] userMetadataByteArray = RestUtils.buildUserMetadata(restRequest.getArgs());
     Map<String, String> userMetadataMap = RestUtils.buildUserMetadata(userMetadataByteArray);
 
-    // key1, output should be same as input
-    String key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key1";
-    assertTrue(key + " not found in user metadata map ", userMetadataMap.containsKey(key));
-    assertEquals("Value for " + key + " didnt match input value ", userMetadata.get(key), userMetadataMap.get(key));
-
-    // key4 should match
-    key = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key4";
-    assertTrue(key + " not found in user metadata map ", userMetadataMap.containsKey(key));
-    assertEquals("Value for " + key + " didnt match input value ", userMetadata.get(key), userMetadataMap.get(key));
-
-    assertEquals("Size of map unexpected ", 2, userMetadataMap.size());
+    assertEquals("Size of map unexpected ", keysToCheck.size(), userMetadataMap.size());
+    for (String keyToCheck : keysToCheck) {
+      String keyInOutputMap = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + keyToCheck.substring(
+          RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.length());
+      assertTrue(keyInOutputMap + " not found in user metadata map", userMetadataMap.containsKey(keyInOutputMap));
+      assertEquals("Value for " + keyToCheck + " didnt match input value", userMetadata.get(keyToCheck),
+          userMetadataMap.get(keyInOutputMap));
+    }
   }
 
   /**
@@ -326,9 +345,9 @@ public class RestUtilsTest {
     setUserMetadataHeaders(headers, userMetadata);
 
     RestRequest restRequest = createRestRequest(RestMethod.POST, "/", headers);
-    byte[] userMetadataByteArray = RestUtils.buildUsermetadata(restRequest.getArgs());
+    byte[] userMetadataByteArray = RestUtils.buildUserMetadata(restRequest.getArgs());
     Map<String, String> userMetadataMap = RestUtils.buildUserMetadata(userMetadataByteArray);
-    assertNull("UserMetadata should have been null ", userMetadataMap);
+    assertEquals("UserMetadata should have no entries ", 0, userMetadataMap.size());
   }
 
   /**
@@ -664,7 +683,7 @@ public class RestUtilsTest {
   }
 
   /**
-   * Tests {@link RestUtils#getGetOption(RestRequest)}.
+   * Tests {@link RestUtils#getGetOption(RestRequest, GetOption)}.
    * @throws Exception
    */
   @Test
@@ -673,17 +692,22 @@ public class RestUtilsTest {
       JSONObject headers = new JSONObject();
       headers.put(RestUtils.Headers.GET_OPTION, option.toString().toLowerCase());
       RestRequest restRequest = createRestRequest(RestMethod.GET, "/", headers);
-      assertEquals("Option returned not as expected", option, RestUtils.getGetOption(restRequest));
+      assertEquals("Option returned not as expected", option, RestUtils.getGetOption(restRequest, null));
+      assertEquals("Option returned not as expected", option, RestUtils.getGetOption(restRequest, option));
+      assertEquals("Option returned not as expected", option, RestUtils.getGetOption(restRequest, GetOption.None));
     }
     // no value defined
     RestRequest restRequest = createRestRequest(RestMethod.GET, "/", null);
-    assertEquals("Option returned not as expected", GetOption.None, RestUtils.getGetOption(restRequest));
+    assertEquals("Option returned not as expected", GetOption.None, RestUtils.getGetOption(restRequest, null));
+    for (GetOption option : GetOption.values()) {
+      assertEquals("Option returned not as expected", option, RestUtils.getGetOption(restRequest, option));
+    }
     // bad value
     JSONObject headers = new JSONObject();
     headers.put(RestUtils.Headers.GET_OPTION, "non_existent_option");
     restRequest = createRestRequest(RestMethod.GET, "/", headers);
     try {
-      RestUtils.getGetOption(restRequest);
+      RestUtils.getGetOption(restRequest, GetOption.None);
       fail("Should have failed to get GetOption because value of header is invalid");
     } catch (RestServiceException e) {
       assertEquals("Unexpected RestServiceErrorCode", RestServiceErrorCode.InvalidArgs, e.getErrorCode());
@@ -746,6 +770,47 @@ public class RestUtilsTest {
     assertNull("There should no value for HeaderD", RestUtils.getLongHeader(args, "HeaderD", false));
   }
 
+  /**
+   * Tests for {@link RestUtils#setUserMetadataHeaders(byte[], RestResponseChannel)}
+   * @throws Exception
+   */
+  @Test
+  public void setUserMetadataHeadersTest() throws Exception {
+    // empty user metadata
+    MockRestResponseChannel responseChannel = new MockRestResponseChannel();
+    assertTrue("Should report that headers are set", RestUtils.setUserMetadataHeaders(new byte[0], responseChannel));
+    assertEquals("No headers should have been set", 0, responseChannel.getResponseHeaders().size());
+
+    JSONObject headers = new JSONObject();
+    setUserMetadataHeaders(headers, Collections.emptyMap());
+    RestRequest restRequest = createRestRequest(RestMethod.POST, "/", headers);
+    byte[] userMetadata = RestUtils.buildUserMetadata(restRequest.getArgs());
+    responseChannel = new MockRestResponseChannel();
+    assertTrue("Should report that headers are set", RestUtils.setUserMetadataHeaders(userMetadata, responseChannel));
+    assertEquals("No headers should have been set", 0, responseChannel.getResponseHeaders().size());
+
+    // user metadata that can be deserialized
+    Map<String, String> usermetadataMap = new HashMap<>();
+    for (int i = 0; i < 10; i++) {
+      usermetadataMap.put(RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + "key" + i, "value" + i);
+    }
+    setUserMetadataHeaders(headers, usermetadataMap);
+    restRequest = createRestRequest(RestMethod.POST, "/", headers);
+    userMetadata = RestUtils.buildUserMetadata(restRequest.getArgs());
+    responseChannel = new MockRestResponseChannel();
+    assertTrue("Should report that headers are set", RestUtils.setUserMetadataHeaders(userMetadata, responseChannel));
+    Map<String, Object> responseHeaders = responseChannel.getResponseHeaders();
+    assertEquals("There is a mismatch in the numebr of headers", usermetadataMap.size(), responseHeaders.size());
+    usermetadataMap.forEach((k, v) -> assertEquals("Value of " + k + " not as expected", v, responseHeaders.get(k)));
+
+    // user metadata that cannot be deserialized
+    responseChannel = new MockRestResponseChannel();
+    userMetadata = TestUtils.getRandomBytes(100);
+    assertFalse("Should report that headers are not set",
+        RestUtils.setUserMetadataHeaders(userMetadata, responseChannel));
+    assertEquals("No headers should have been set", 0, responseChannel.getResponseHeaders().size());
+  }
+
   // helpers.
   // general.
 
@@ -762,7 +827,7 @@ public class RestUtilsTest {
   private RestRequest createRestRequest(RestMethod restMethod, String uri, JSONObject headers)
       throws JSONException, UnsupportedEncodingException, URISyntaxException {
     JSONObject request = new JSONObject();
-    request.put(MockRestRequest.REST_METHOD_KEY, restMethod);
+    request.put(MockRestRequest.REST_METHOD_KEY, restMethod.name());
     request.put(MockRestRequest.URI_KEY, uri);
     if (headers != null) {
       request.put(MockRestRequest.HEADERS_KEY, headers);
@@ -865,15 +930,16 @@ public class RestUtilsTest {
   private void verifyUserMetadataConstructionSuccess(JSONObject headers, Map<String, String> inputUserMetadata)
       throws Exception {
     RestRequest restRequest = createRestRequest(RestMethod.POST, "/", headers);
-    byte[] userMetadata = RestUtils.buildUsermetadata(restRequest.getArgs());
+    byte[] userMetadata = RestUtils.buildUserMetadata(restRequest.getArgs());
     Map<String, String> userMetadataMap = RestUtils.buildUserMetadata(userMetadata);
     assertEquals("Total number of entries doesnt match ", inputUserMetadata.size(), userMetadataMap.size());
-    for (String key : userMetadataMap.keySet()) {
-      boolean keyFromInputMap = inputUserMetadata.containsKey(key);
-      assertTrue("Key " + key + " not found in input user metadata", keyFromInputMap);
-      assertTrue("Values didn't match for key " + key + ", value from input map value " + inputUserMetadata.get(key)
-              + ", and output map value " + userMetadataMap.get(key),
-          inputUserMetadata.get(key).equals(userMetadataMap.get(key)));
+    for (String key : inputUserMetadata.keySet()) {
+      String keyInOutputMap = RestUtils.Headers.USER_META_DATA_HEADER_PREFIX + key.substring(
+          RestUtils.Headers.USER_META_DATA_HEADER_PREFIX.length());
+      assertTrue("Key " + keyInOutputMap + " not found in input user metadata",
+          userMetadataMap.containsKey(keyInOutputMap));
+      assertEquals("Values didn't match for key " + key, inputUserMetadata.get(key),
+          userMetadataMap.get(keyInOutputMap));
     }
   }
 
@@ -1011,8 +1077,10 @@ public class RestUtilsTest {
    * @throws org.json.JSONException
    */
   public static void setUserMetadataHeaders(JSONObject headers, Map<String, String> userMetadata) throws JSONException {
-    for (String key : userMetadata.keySet()) {
-      headers.put(key, userMetadata.get(key));
+    if (userMetadata != null) {
+      for (String key : userMetadata.keySet()) {
+        headers.put(key, userMetadata.get(key));
+      }
     }
   }
 }

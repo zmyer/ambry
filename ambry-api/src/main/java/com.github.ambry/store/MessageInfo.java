@@ -14,6 +14,7 @@
 package com.github.ambry.store;
 
 import com.github.ambry.utils.Utils;
+import java.util.Objects;
 
 
 /**
@@ -22,94 +23,100 @@ import com.github.ambry.utils.Utils;
 // TODO: 2018/3/22 by zmyer
 public class MessageInfo {
 
-    private final StoreKey key;
-    private final long size;
-    private final long expirationTimeInMs;
-    private final boolean isDeleted;
-    private final Long crc;
-    private final short accountId;
-    private final short containerId;
-    private final long operationTimeMs;
+  private final StoreKey key;
+  private final long size;
+  private final long expirationTimeInMs;
+  private final boolean isDeleted;
+  private final boolean isTtlUpdated;
+  private final Long crc;
+  private final short accountId;
+  private final short containerId;
+  private final long operationTimeMs;
 
-    /**
-     * Construct an instance of MessageInfo.
-     * @param key the {@link StoreKey} associated with this message.
-     * @param size the size of this message in bytes.
-     * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
-     * @param accountId accountId of the blob
-     * @param containerId containerId of the blob
-     * @param operationTimeMs operation time in ms
-     */
-    public MessageInfo(StoreKey key, long size, long expirationTimeInMs, short accountId, short containerId,
-            long operationTimeMs) {
-        this(key, size, false, expirationTimeInMs, accountId, containerId, operationTimeMs);
-    }
+  /**
+   * Construct an instance of MessageInfo.
+   * @param key the {@link StoreKey} associated with this message.
+   * @param size the size of this message in bytes.
+   * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
+   * @param accountId accountId of the blob
+   * @param containerId containerId of the blob
+   * @param operationTimeMs operation time in ms
+   */
+  public MessageInfo(StoreKey key, long size, long expirationTimeInMs, short accountId, short containerId,
+      long operationTimeMs) {
+    this(key, size, false, false, expirationTimeInMs, accountId, containerId, operationTimeMs);
+  }
 
-    /**
-     * Construct an instance of MessageInfo.
-     * @param key the {@link StoreKey} associated with this message.
-     * @param size the size of this message in bytes.
-     * @param deleted {@code true} if the message is deleted, {@code false} otherwise
-     * @param accountId accountId of the blob
-     * @param containerId containerId of the blob
-     * @param operationTimeMs operation time in ms
-     */
-    public MessageInfo(StoreKey key, long size, boolean deleted, short accountId, short containerId,
-            long operationTimeMs) {
-        this(key, size, deleted, Utils.Infinite_Time, accountId, containerId, operationTimeMs);
-    }
+  /**
+   * Construct an instance of MessageInfo.
+   * @param key the {@link StoreKey} associated with this message.
+   * @param size the size of this message in bytes.
+   * @param deleted {@code true} if the message is deleted, {@code false} otherwise
+   * @param ttlUpdated {@code true} if the message's ttl has been updated, {@code false} otherwise
+   * @param accountId accountId of the blob
+   * @param containerId containerId of the blob
+   * @param operationTimeMs operation time in ms
+   */
+  public MessageInfo(StoreKey key, long size, boolean deleted, boolean ttlUpdated, short accountId, short containerId,
+      long operationTimeMs) {
+    this(key, size, deleted, ttlUpdated, Utils.Infinite_Time, accountId, containerId, operationTimeMs);
+  }
 
-    /**
-     * Construct an instance of MessageInfo.
-     * @param key the {@link StoreKey} associated with this message.
-     * @param size the size of this message in bytes.
-     * @param deleted {@code true} if the message is deleted, {@code false} otherwise
-     * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
-     * @param accountId accountId of the blob
-     * @param containerId containerId of the blob
-     * @param operationTimeMs operation time in ms
-     */
-    public MessageInfo(StoreKey key, long size, boolean deleted, long expirationTimeInMs, short accountId,
-            short containerId, long operationTimeMs) {
-        this(key, size, deleted, expirationTimeInMs, null, accountId, containerId, operationTimeMs);
-    }
+  /**
+   * Construct an instance of MessageInfo.
+   * @param key the {@link StoreKey} associated with this message.
+   * @param size the size of this message in bytes.
+   * @param deleted {@code true} if the message is deleted, {@code false} otherwise
+   * @param ttlUpdated {@code true} if the message's ttl has been updated, {@code false} otherwise
+   * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
+   * @param accountId accountId of the blob
+   * @param containerId containerId of the blob
+   * @param operationTimeMs operation time in ms
+   */
+  public MessageInfo(StoreKey key, long size, boolean deleted, boolean ttlUpdated, long expirationTimeInMs,
+      short accountId, short containerId, long operationTimeMs) {
+    this(key, size, deleted, ttlUpdated, expirationTimeInMs, null, accountId, containerId, operationTimeMs);
+  }
 
-    /**
-     * Construct an instance of MessageInfo.
-     * @param key the {@link StoreKey} associated with this message.
-     * @param size the size of this message in bytes.
-     * @param containerId containerId of the blob
-     * @param operationTimeMs operation time in ms
-     */
-    public MessageInfo(StoreKey key, long size, short accountId, short containerId, long operationTimeMs) {
-        this(key, size, Utils.Infinite_Time, accountId, containerId, operationTimeMs);
-    }
+  /**
+   * Construct an instance of MessageInfo.
+   * @param key the {@link StoreKey} associated with this message.
+   * @param size the size of this message in bytes.
+   * @param accountId accountId of the blob
+   * @param containerId containerId of the blob
+   * @param operationTimeMs operation time in ms
+   */
+  public MessageInfo(StoreKey key, long size, short accountId, short containerId, long operationTimeMs) {
+    this(key, size, Utils.Infinite_Time, accountId, containerId, operationTimeMs);
+  }
 
-    /**
-     * Construct an instance of MessageInfo.
-     * @param key the {@link StoreKey} associated with this message.
-     * @param size the size of this message in bytes.
-     * @param deleted {@code true} if the message is deleted, {@code false} otherwise
-     * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
-     * @param crc the crc associated with this message. If unavailable, pass in null.
-     * @param accountId accountId of the blob
-     * @param containerId containerId of the blob
-     * @param operationTimeMs operation time in ms
-     */
-    public MessageInfo(StoreKey key, long size, boolean deleted, long expirationTimeInMs, Long crc, short accountId,
-            short containerId, long operationTimeMs) {
-        if (operationTimeMs < Utils.Infinite_Time) {
-            throw new IllegalArgumentException("OperationTime cannot be negative " + operationTimeMs);
-        }
-        this.key = key;
-        this.size = size;
-        this.isDeleted = deleted;
-        this.expirationTimeInMs = expirationTimeInMs;
-        this.crc = crc;
-        this.accountId = accountId;
-        this.containerId = containerId;
-        this.operationTimeMs = operationTimeMs;
+  /**
+   * Construct an instance of MessageInfo.
+   * @param key the {@link StoreKey} associated with this message.
+   * @param size the size of this message in bytes.
+   * @param deleted {@code true} if the message is deleted, {@code false} otherwise
+   * @param ttlUpdated {@code true} if the message's ttl has been updated, {@code false} otherwise
+   * @param expirationTimeInMs the time at which the message will expire. A value of -1 means no expiration.
+   * @param crc the crc associated with this message. If unavailable, pass in null.
+   * @param accountId accountId of the blob
+   * @param containerId containerId of the blob
+   * @param operationTimeMs operation time in ms
+   */
+  public MessageInfo(StoreKey key, long size, boolean deleted, boolean ttlUpdated, long expirationTimeInMs, Long crc,
+      short accountId, short containerId, long operationTimeMs) {
+    if (operationTimeMs < Utils.Infinite_Time) {
+      throw new IllegalArgumentException("OperationTime cannot be negative " + operationTimeMs);
     }
+    this.key = key;
+    this.size = size;
+    this.isDeleted = deleted;
+    isTtlUpdated = ttlUpdated;
+    this.expirationTimeInMs = expirationTimeInMs;
+    this.crc = crc;
+    this.accountId = accountId;
+    this.containerId = containerId;
+    this.operationTimeMs = operationTimeMs;
+  }
 
     // TODO: 2018/3/22 by zmyer
     public StoreKey getStoreKey() {
@@ -132,9 +139,16 @@ public class MessageInfo {
         return isDeleted;
     }
 
-    public boolean isExpired() {
-        return getExpirationTimeInMs() != Utils.Infinite_Time && System.currentTimeMillis() > getExpirationTimeInMs();
-    }
+  /**
+   * @return {@code true} if the message's ttl has been updated, {@code false} otherwise
+   */
+  public boolean isTtlUpdated() {
+    return isTtlUpdated;
+  }
+
+  public boolean isExpired() {
+    return getExpirationTimeInMs() != Utils.Infinite_Time && System.currentTimeMillis() > getExpirationTimeInMs();
+  }
 
     /**
      * @return the crc associated with this message, if there is one; null otherwise.
@@ -155,34 +169,57 @@ public class MessageInfo {
         return operationTimeMs;
     }
 
-    @Override
-    public String toString() {
-        StringBuilder stringBuilder = new StringBuilder();
-        stringBuilder.append("[MessageInfo:")
-                .append("Key-")
-                .append(key)
-                .append(",")
-                .append("Size-")
-                .append(size)
-                .append(",")
-                .append("ExpirationTimeInMs-")
-                .append(expirationTimeInMs)
-                .append(",")
-                .append("IsDeleted-")
-                .append(isDeleted)
-                .append(",")
-                .append("Crc-")
-                .append(crc)
-                .append(",")
-                .append("AccountId-")
-                .append(accountId)
-                .append(",")
-                .append("ContainerId-")
-                .append(containerId)
-                .append(",")
-                .append("OperationTimeMs-")
-                .append(operationTimeMs)
-                .append("]");
-        return stringBuilder.toString();
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) {
+      return true;
     }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+    MessageInfo that = (MessageInfo) o;
+    return size == that.size && expirationTimeInMs == that.expirationTimeInMs && isDeleted == that.isDeleted
+        && isTtlUpdated == that.isTtlUpdated && accountId == that.accountId && containerId == that.containerId
+        && operationTimeMs == that.operationTimeMs && Objects.equals(key, that.key) && Objects.equals(crc, that.crc);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(key, size, expirationTimeInMs, isDeleted, isTtlUpdated, crc, accountId, containerId,
+        operationTimeMs);
+  }
+
+  @Override
+  public String toString() {
+    StringBuilder stringBuilder = new StringBuilder();
+    stringBuilder.append("[MessageInfo:")
+        .append("Key-")
+        .append(key)
+        .append(",")
+        .append("Size-")
+        .append(size)
+        .append(",")
+        .append("ExpirationTimeInMs-")
+        .append(expirationTimeInMs)
+        .append(",")
+        .append("IsDeleted-")
+        .append(isDeleted)
+        .append(",")
+        .append("IsTtlUpdated-")
+        .append(isTtlUpdated)
+        .append(",")
+        .append("Crc-")
+        .append(crc)
+        .append(",")
+        .append("AccountId-")
+        .append(accountId)
+        .append(",")
+        .append("ContainerId-")
+        .append(containerId)
+        .append(",")
+        .append("OperationTimeMs-")
+        .append(operationTimeMs)
+        .append("]");
+    return stringBuilder.toString();
+  }
 }

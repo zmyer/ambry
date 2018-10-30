@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,6 +33,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -50,11 +52,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 // TODO: 2018/3/22 by zmyer
 class BlobStoreCompactor {
-    static final String INDEX_SEGMENT_READ_JOB_NAME = "blob_store_compactor_index_segment_read";
-    static final String TARGET_INDEX_CLEAN_SHUTDOWN_FILE_NAME = "compactor_clean_shutdown";
-    static final String TEMP_LOG_SEGMENT_NAME_SUFFIX = BlobStore.SEPARATOR + "temp";
-    static final FilenameFilter TEMP_LOG_SEGMENTS_FILTER = new FilenameFilter() {
-        private final String SUFFIX = LogSegmentNameHelper.SUFFIX + TEMP_LOG_SEGMENT_NAME_SUFFIX;
+  static final String COMPACTION_CLEANUP_JOB_NAME = "blob_store_compactor_cleanup";
+  static final String INDEX_SEGMENT_READ_JOB_NAME = "blob_store_compactor_index_segment_read";
+  static final String TARGET_INDEX_CLEAN_SHUTDOWN_FILE_NAME = "compactor_clean_shutdown";
+  static final String TEMP_LOG_SEGMENT_NAME_SUFFIX = BlobStore.SEPARATOR + "temp";
+  static final FilenameFilter TEMP_LOG_SEGMENTS_FILTER = new FilenameFilter() {
+    private final String SUFFIX = LogSegmentNameHelper.SUFFIX + TEMP_LOG_SEGMENT_NAME_SUFFIX;
 
         @Override
         public boolean accept(File dir, String name) {
@@ -85,12 +88,13 @@ class BlobStoreCompactor {
     private volatile boolean isActive = false;
     private PersistentIndex srcIndex;
 
-    private Log tgtLog;
-    private PersistentIndex tgtIndex;
-    private long numSwapsUsed;
-    private StoreFindToken recoveryStartToken = null;
-    private CompactionLog compactionLog;
-    private volatile CountDownLatch runningLatch = new CountDownLatch(0);
+  private Log tgtLog;
+  private PersistentIndex tgtIndex;
+  private long numSwapsUsed;
+  private StoreFindToken recoveryStartToken = null;
+  private CompactionLog compactionLog;
+  private volatile CountDownLatch runningLatch = new CountDownLatch(0);
+  private ByteBuffer bundleReadBuffer;
 
     /**
      * Constructs the compactor component.
@@ -160,41 +164,42 @@ class BlobStoreCompactor {
         logger.trace("Closed BlobStoreCompactor for {}", storeId);
     }
 
-    /**
-     * Compacts the store by copying valid data from the log segments in {@code details} to swap spaces and switching
-     * the compacted segments out for the swap spaces. Returns once the compaction is complete.
-     * @param details the {@link CompactionDetails} for the compaction.
-     * @throws IllegalArgumentException if any of the provided segments doesn't exist in the log or if one or more offsets
-     * in the segments to compact are in the journal.
-     * @throws IllegalStateException if the compactor has not been initialized.
-     * @throws IOException if there were I/O errors creating the {@link CompactionLog}
-     * @throws StoreException if there were exceptions reading to writing to store components.
-     */
-    // TODO: 2018/3/22 by zmyer
-    void compact(CompactionDetails details) throws IOException, StoreException {
-        if (srcIndex == null) {
-            throw new IllegalStateException("Compactor has not been initialized");
-        } else if (compactionLog != null) {
-            throw new IllegalStateException("There is already a compaction in progress");
-        }
-        checkSanity(details);
-        logger.info("Compaction of {} started with details {}", storeId, details);
-        compactionLog = new CompactionLog(dataDir.getAbsolutePath(), storeId, time, details);
-        resumeCompaction();
+  /**
+   * Compacts the store by copying valid data from the log segments in {@code details} to swap spaces and switching
+   * the compacted segments out for the swap spaces. Returns once the compaction is complete.
+   * @param details the {@link CompactionDetails} for the compaction.
+   * @param bundleReadBuffer the preAllocated buffer for bundle read in compaction copy phase.
+   * @throws IllegalArgumentException if any of the provided segments doesn't exist in the log or if one or more offsets
+   * in the segments to compact are in the journal.
+   * @throws IllegalStateException if the compactor has not been initialized.
+   * @throws IOException if there were I/O errors creating the {@link CompactionLog}
+   * @throws StoreException if there were exceptions reading to writing to store components.
+   */
+  void compact(CompactionDetails details, ByteBuffer bundleReadBuffer) throws IOException, StoreException {
+    if (srcIndex == null) {
+      throw new IllegalStateException("Compactor has not been initialized");
+    } else if (compactionLog != null) {
+      throw new IllegalStateException("There is already a compaction in progress");
     }
+    checkSanity(details);
+    logger.info("Compaction of {} started with details {}", storeId, details);
+    compactionLog = new CompactionLog(dataDir.getAbsolutePath(), storeId, time, details);
+    resumeCompaction(bundleReadBuffer);
+  }
 
-    /**
-     * Resumes compaction from where it was left off.
-     * @throws IllegalStateException if the compactor has not been initialized or if there is no compaction to resume.
-     * @throws StoreException if there were exceptions reading to writing to store components.
-     */
-    // TODO: 2018/4/23 by zmyer
-    void resumeCompaction() throws StoreException {
-        if (srcIndex == null) {
-            throw new IllegalStateException("Compactor has not been initialized");
-        } else if (compactionLog == null) {
-            throw new IllegalStateException("There is no compaction to resume");
-        }
+  /**
+   * Resumes compaction from where it was left off.
+   * @throws IllegalStateException if the compactor has not been initialized or if there is no compaction to resume.
+   * @throws StoreException if there were exceptions reading to writing to store components.
+   * @param bundleReadBuffer the preAllocated buffer for bundle read in compaction copy phase.
+   */
+  void resumeCompaction(ByteBuffer bundleReadBuffer) throws StoreException {
+    this.bundleReadBuffer = bundleReadBuffer;
+    if (srcIndex == null) {
+      throw new IllegalStateException("Compactor has not been initialized");
+    } else if (compactionLog == null) {
+      throw new IllegalStateException("There is no compaction to resume");
+    }
     /*
     A single compaction job could be performed across multiple compaction cycles (if there aren't enough swap spaces to
     complete the job in one cycle). Therefore, we loop and perform PREPARE, COPY, COMMIT and CLEANUP until the
@@ -207,51 +212,49 @@ class BlobStoreCompactor {
     4. CLEANUP - Cleans up the old log segments and their index files
      */
 
-        logger.trace("resumeCompaction() started for {}", storeId);
-        runningLatch = new CountDownLatch(1);
-        compactionInProgress.set(true);
-        try {
-            while (isActive && !compactionLog.getCompactionPhase().equals(CompactionLog.Phase.DONE)) {
-                CompactionLog.Phase phase = compactionLog.getCompactionPhase();
-                logger.debug("Starting cycle to compact {} in {}", compactionLog.getCompactionDetails(), storeId);
-                switch (phase) {
-                case PREPARE:
-                    logger.debug("Compaction PREPARE started for {} in {}", compactionLog.getCompactionDetails(),
-                            storeId);
-                    compactionLog.markCopyStart();
-                    // fall through to COPY
-                case COPY:
-                    logger.debug("Compaction COPY started for {} in {}", compactionLog.getCompactionDetails(), storeId);
-                    copy();
-                    if (isActive) {
-                        compactionLog.markCommitStart();
-                        logger.debug("Compaction COMMIT started for {} in {}", compactionLog.getCompactionDetails(),
-                                storeId);
-                        commit(false);
-                        compactionLog.markCleanupStart();
-                        logger.debug("Compaction CLEANUP started for {} in {}", compactionLog.getCompactionDetails(),
-                                storeId);
-                        waitTillRefCountZero();
-                        logger.debug("Wait for ref count to go to 0 has been finished {} in {}",
-                                compactionLog.getCompactionDetails(), storeId);
-                        cleanup(false);
-                        logger.debug("Completing for {} in {}", compactionLog.getCompactionDetails(), storeId);
-                        compactionLog.markCycleComplete();
-                    }
-                    break;
-                default:
-                    throw new IllegalStateException("Illegal compaction phase: " + phase);
-                }
+    logger.trace("resumeCompaction() started for {}", storeId);
+    runningLatch = new CountDownLatch(1);
+    compactionInProgress.set(true);
+    try {
+      while (isActive && !compactionLog.getCompactionPhase().equals(CompactionLog.Phase.DONE)) {
+        CompactionLog.Phase phase = compactionLog.getCompactionPhase();
+        logger.debug("Starting cycle to compact {} in {}", compactionLog.getCompactionDetails(), storeId);
+        switch (phase) {
+          case PREPARE:
+            logger.debug("Compaction PREPARE started for {} in {}", compactionLog.getCompactionDetails(), storeId);
+            compactionLog.markCopyStart();
+            // fall through to COPY
+          case COPY:
+            logger.debug("Compaction COPY started for {} in {}", compactionLog.getCompactionDetails(), storeId);
+            copy();
+            if (isActive) {
+              compactionLog.markCommitStart();
+              logger.debug("Compaction COMMIT started for {} in {}", compactionLog.getCompactionDetails(), storeId);
+              commit(false);
+              compactionLog.markCleanupStart();
+              logger.debug("Compaction CLEANUP started for {} in {}", compactionLog.getCompactionDetails(), storeId);
+              waitTillRefCountZero();
+              logger.debug("Wait for ref count to go to 0 has been finished {} in {}",
+                  compactionLog.getCompactionDetails(), storeId);
+              cleanup(false);
+              logger.debug("Completing for {} in {}", compactionLog.getCompactionDetails(), storeId);
+              compactionLog.markCycleComplete();
             }
-            endCompaction();
-        } catch (InterruptedException | IOException e) {
-            throw new StoreException("Exception during compaction", e, StoreErrorCodes.Unknown_Error);
-        } finally {
-            compactionInProgress.set(false);
-            runningLatch.countDown();
-            logger.trace("resumeCompaction() ended for {}", storeId);
+            break;
+          default:
+            throw new IllegalStateException("Illegal compaction phase: " + phase);
         }
+      }
+      endCompaction();
+    } catch (InterruptedException | IOException e) {
+      throw new StoreException("Exception during compaction", e, StoreErrorCodes.Unknown_Error);
+    } finally {
+      compactionInProgress.set(false);
+      runningLatch.countDown();
+      logger.trace("resumeCompaction() ended for {}", storeId);
     }
+    this.bundleReadBuffer = null;
+  }
 
     /**
      * @return the number of temporary log segment files this compactor is currently using.
@@ -265,48 +268,47 @@ class BlobStoreCompactor {
         return tempSegments.length;
     }
 
-    /**
-     * If a compaction was in progress during a crash/shutdown, fixes the state so that the store is loaded correctly
-     * and compaction can resume smoothly on a call to {@link #resumeCompaction()}. Expected to be called before the
-     * {@link PersistentIndex} is instantiated in the {@link BlobStore}.
-     * @throws IOException if the {@link CompactionLog} could not be created or if commit or cleanup failed.
-     * @throws StoreException if the commit failed.
-     */
-    private void fixStateIfRequired() throws IOException, StoreException {
-        if (CompactionLog.isCompactionInProgress(dataDir.getAbsolutePath(), storeId)) {
-            compactionLog = new CompactionLog(dataDir.getAbsolutePath(), storeId, storeKeyFactory, time);
-            CompactionLog.Phase phase = compactionLog.getCompactionPhase();
-            logger.info("Fixing compaction state for {} (phase is {})", storeId, phase);
-            switch (phase) {
-            case COMMIT:
-                commit(true);
-                compactionLog.markCleanupStart();
-                logger.info("Finished compaction COMMIT for {} in {}", compactionLog.getCompactionDetails(), storeId);
-                // fall through to CLEANUP
-            case CLEANUP:
-                cleanup(true);
-                logger.info("Completing compaction cycle for {} in {}", compactionLog.getCompactionDetails(), storeId);
-                compactionLog.markCycleComplete();
-                srcMetrics.compactionFixStateCount.inc();
-                break;
-            case COPY:
-                srcMetrics.compactionFixStateCount.inc();
-                recoveryStartToken = compactionLog.getSafeToken();
-                logger.info("Compaction recovery start token for {} in {} set to {}",
-                        compactionLog.getCompactionDetails(),
-                        storeId, recoveryStartToken);
-                // fall through to the break.
-            case PREPARE:
-            case DONE:
-                break;
-            default:
-                throw new IllegalStateException("Unrecognized compaction phase: " + phase);
-            }
-            if (compactionLog.getCompactionPhase().equals(CompactionLog.Phase.DONE)) {
-                endCompaction();
-            }
-        }
+  /**
+   * If a compaction was in progress during a crash/shutdown, fixes the state so that the store is loaded correctly
+   * and compaction can resume smoothly on a call to {@link #resumeCompaction(ByteBuffer)}. Expected to be called before the
+   * {@link PersistentIndex} is instantiated in the {@link BlobStore}.
+   * @throws IOException if the {@link CompactionLog} could not be created or if commit or cleanup failed.
+   * @throws StoreException if the commit failed.
+   */
+  private void fixStateIfRequired() throws IOException, StoreException {
+    if (CompactionLog.isCompactionInProgress(dataDir.getAbsolutePath(), storeId)) {
+      compactionLog = new CompactionLog(dataDir.getAbsolutePath(), storeId, storeKeyFactory, time);
+      CompactionLog.Phase phase = compactionLog.getCompactionPhase();
+      logger.info("Fixing compaction state for {} (phase is {})", storeId, phase);
+      switch (phase) {
+        case COMMIT:
+          commit(true);
+          compactionLog.markCleanupStart();
+          logger.info("Finished compaction COMMIT for {} in {}", compactionLog.getCompactionDetails(), storeId);
+          // fall through to CLEANUP
+        case CLEANUP:
+          cleanup(true);
+          logger.info("Completing compaction cycle for {} in {}", compactionLog.getCompactionDetails(), storeId);
+          compactionLog.markCycleComplete();
+          srcMetrics.compactionFixStateCount.inc();
+          break;
+        case COPY:
+          srcMetrics.compactionFixStateCount.inc();
+          recoveryStartToken = compactionLog.getSafeToken();
+          logger.info("Compaction recovery start token for {} in {} set to {}", compactionLog.getCompactionDetails(),
+              storeId, recoveryStartToken);
+          // fall through to the break.
+        case PREPARE:
+        case DONE:
+          break;
+        default:
+          throw new IllegalStateException("Unrecognized compaction phase: " + phase);
+      }
+      if (compactionLog.getCompactionPhase().equals(CompactionLog.Phase.DONE)) {
+        endCompaction();
+      }
     }
+  }
 
     /**
      * Checks the sanity of the provided {@code details}
@@ -380,27 +382,27 @@ class BlobStoreCompactor {
             duplicateSearchSpan = null;
         }
 
-        numSwapsUsed = tgtIndex.getLogSegmentCount();
-        logger.debug("Swaps used to copy {} is {} for {}", compactionLog.getCompactionDetails(), numSwapsUsed, storeId);
-        if (isActive) {
-            // it is possible to double count based on the time at which shutdown occurs (if it occurs b/w this statement
-            // and before the subsequent commit can take effect)
-            long segmentCountDiff =
-                    compactionLog.getCompactionDetails().getLogSegmentsUnderCompaction().size() - numSwapsUsed;
-            long savedBytes = srcLog.getSegmentCapacity() * segmentCountDiff;
-            srcMetrics.compactionBytesReclaimedCount.inc(savedBytes);
-        }
-        tgtIndex.close();
-        tgtLog.close();
-        // persist the bloom of the "latest" index segment if it exists
-        if (numSwapsUsed > 0) {
-            tgtIndex.getIndexSegments().lastEntry().getValue().map(true);
-        } else {
-            // there were no valid entries copied, return any temp segments back to the pool
-            logger.trace("Cleaning up temp segments in {} because no swap spaces were used", storeId);
-            cleanupUnusedTempSegments();
-        }
+    numSwapsUsed = tgtIndex.getLogSegmentCount();
+    logger.debug("Swaps used to copy {} is {} for {}", compactionLog.getCompactionDetails(), numSwapsUsed, storeId);
+    if (isActive) {
+      // it is possible to double count based on the time at which shutdown occurs (if it occurs b/w this statement
+      // and before the subsequent commit can take effect)
+      long segmentCountDiff =
+          compactionLog.getCompactionDetails().getLogSegmentsUnderCompaction().size() - numSwapsUsed;
+      long savedBytes = srcLog.getSegmentCapacity() * segmentCountDiff;
+      srcMetrics.compactionBytesReclaimedCount.inc(savedBytes);
     }
+    tgtIndex.close();
+    tgtLog.close();
+    // persist the bloom of the "latest" index segment if it exists
+    if (numSwapsUsed > 0) {
+      tgtIndex.getIndexSegments().lastEntry().getValue().seal();
+    } else {
+      // there were no valid entries copied, return any temp segments back to the pool
+      logger.trace("Cleaning up temp segments in {} because no swap spaces were used", storeId);
+      cleanupUnusedTempSegments();
+    }
+  }
 
     /**
      * Commits the changes made during {@link CompactionLog.Phase#COPY}. Commit involves
@@ -552,25 +554,25 @@ class BlobStoreCompactor {
         return true;
     }
 
-    /**
-     * Copies data in the provided {@code indexSegmentToCopy} into the target log (swap spaces).
-     * @param logSegmentToCopy the {@link LogSegment} to copy from.
-     * @param indexSegmentToCopy the {@link IndexSegment} that contains the entries that need to be copied.
-     * @param duplicateSearchSpan the {@link FileSpan} in which to search for duplicates.
-     * @return {@code true} if all the records in the index segment were copied. {@code false} if some records were not
-     * copied either because there was no more capacity or because a shutdown was initiated.
-     * @throws IOException if there were I/O errors during copying.
-     * @throws StoreException if there are any problems reading or writing to store components.
-     */
-    private boolean copyDataByIndexSegment(LogSegment logSegmentToCopy, IndexSegment indexSegmentToCopy,
-            FileSpan duplicateSearchSpan) throws IOException, StoreException {
-        logger.debug("Copying data from {}", indexSegmentToCopy.getFile());
-        List<IndexEntry> allIndexEntries = new ArrayList<>();
-        // call into diskIOScheduler to make sure we can proceed (assuming it won't be 0).
-        diskIOScheduler.getSlice(INDEX_SEGMENT_READ_JOB_NAME, INDEX_SEGMENT_READ_JOB_NAME, 1);
-        // get all entries
-        indexSegmentToCopy.getIndexEntriesSince(null, new FindEntriesCondition(Long.MAX_VALUE), allIndexEntries,
-                new AtomicLong(0));
+  /**
+   * Copies data in the provided {@code indexSegmentToCopy} into the target log (swap spaces).
+   * @param logSegmentToCopy the {@link LogSegment} to copy from.
+   * @param indexSegmentToCopy the {@link IndexSegment} that contains the entries that need to be copied.
+   * @param duplicateSearchSpan the {@link FileSpan} in which to search for duplicates.
+   * @return {@code true} if all the records in the index segment were copied. {@code false} if some records were not
+   * copied either because there was no more capacity or because a shutdown was initiated.
+   * @throws IOException if there were I/O errors during copying.
+   * @throws StoreException if there are any problems reading or writing to store components.
+   */
+  private boolean copyDataByIndexSegment(LogSegment logSegmentToCopy, IndexSegment indexSegmentToCopy,
+      FileSpan duplicateSearchSpan) throws IOException, StoreException {
+    logger.debug("Copying data from {}", indexSegmentToCopy.getFile());
+    List<IndexEntry> allIndexEntries = new ArrayList<>();
+    // call into diskIOScheduler to make sure we can proceed (assuming it won't be 0).
+    diskIOScheduler.getSlice(INDEX_SEGMENT_READ_JOB_NAME, INDEX_SEGMENT_READ_JOB_NAME, 1);
+    // get all entries. We get one entry per key
+    indexSegmentToCopy.getIndexEntriesSince(null, new FindEntriesCondition(Long.MAX_VALUE), allIndexEntries,
+        new AtomicLong(0), true);
 
         // save a token for restart (the key gets ignored but is required to be non null for construction)
         StoreFindToken safeToken =
@@ -584,11 +586,10 @@ class BlobStoreCompactor {
                         indexSegmentToCopy.getStartOffset());
         logger.trace("Should check already copied for {}: {} ", indexSegmentToCopy.getFile(), checkAlreadyCopied);
 
-        // filter deleted/expired entries and get index entries for all the PUT and DELETE records
-        List<IndexEntry> indexEntriesToCopy =
-                getIndexEntriesToCopy(allIndexEntries, duplicateSearchSpan, indexSegmentToCopy.getStartOffset(),
-                        checkAlreadyCopied);
-        logger.debug("{} entries need to be copied in {}", indexEntriesToCopy.size(), indexSegmentToCopy.getFile());
+    // filter deleted/expired entries and get index entries for all the PUT and DELETE records
+    List<IndexEntry> indexEntriesToCopy =
+        getIndexEntriesToCopy(allIndexEntries, duplicateSearchSpan, indexSegmentToCopy, checkAlreadyCopied);
+    logger.debug("{} entries need to be copied in {}", indexEntriesToCopy.size(), indexSegmentToCopy.getFile());
 
         // Copy these over
         boolean copiedAll = copyRecords(logSegmentToCopy, indexEntriesToCopy,
@@ -598,229 +599,487 @@ class BlobStoreCompactor {
         return copiedAll;
     }
 
-    /**
-     * Gets all the index entries that need to be copied. The index entries that will be copied are:
-     * 1. Records that are not duplicates.
-     * 2. Records that are not expired or deleted.
-     * 3. Delete records.
-     * Records will be excluded because they are expired/deleted or because they are duplicates.
-     * @param allIndexEntries the {@link MessageInfo} of all the entries in the index segment.
-     * @param duplicateSearchSpan the {@link FileSpan} in which to search for duplicates
-     * @param indexSegmentStartOffset the start {@link Offset} of the index segment under consideration.
-     * @param checkAlreadyCopied {@code true} if a check for existence in the swap spaces has to be executed (due to
-     *                                       crash/shutdown), {@code false} otherwise.
-     * @return the list of valid {@link IndexEntry} sorted by their offset.
-     * @throws IllegalStateException if there is a mismatch b/w the index value expected and the index value obtained.
-     * @throws StoreException if there is any problem with using the index.
-     */
-    private List<IndexEntry> getIndexEntriesToCopy(List<IndexEntry> allIndexEntries, FileSpan duplicateSearchSpan,
-            Offset indexSegmentStartOffset, boolean checkAlreadyCopied) throws StoreException {
-        List<IndexEntry> indexEntriesToCopy = new ArrayList<>();
-        List<IndexEntry> copyCandidates = getValidIndexEntries(indexSegmentStartOffset, allIndexEntries);
-        for (IndexEntry copyCandidate : copyCandidates) {
-            IndexValue copyCandidateValue = copyCandidate.getValue();
-            // search for duplicates in srcIndex if required
-            if (duplicateSearchSpan != null) {
-                IndexValue possibleDuplicate = srcIndex.findKey(copyCandidate.getKey(), duplicateSearchSpan);
-                if (possibleDuplicate != null) {
-                    if (possibleDuplicate.isFlagSet(IndexValue.Flags.Delete_Index)) {
-                        // copyCandidate is surely a duplicate because srcIndex contains a DELETE index entry
-                        logger.trace("Found a duplicate IndexValue {} for {} in segment with start offset {} in {}",
-                                possibleDuplicate, copyCandidateValue, indexSegmentStartOffset, storeId);
-                        continue;
-                    } else if (!copyCandidateValue.isFlagSet(IndexValue.Flags.Delete_Index)) {
-                        // copyCandidate is a duplicate because it is a PUT entry and so is the possible duplicate.
-                        logger.trace("Found a duplicate IndexValue {} for {} in segment with start offset {} in {}",
-                                possibleDuplicate, copyCandidateValue, indexSegmentStartOffset, storeId);
-                        continue;
-                    }
-                }
-            }
-            // search for duplicates in tgtIndex if required
-            if (!checkAlreadyCopied || !alreadyExistsInTgt(copyCandidate.getKey(), copyCandidateValue)) {
-                logger.trace(
-                        "Adding index entry {} in index segment with start offset {} in {} because it is valid and does not already"
-                                + " exist", copyCandidate, indexSegmentStartOffset, storeId);
-                indexEntriesToCopy.add(copyCandidate);
-            }
-        }
-        // order by offset in log.
-        Collections.sort(indexEntriesToCopy, PersistentIndex.INDEX_ENTRIES_OFFSET_COMPARATOR);
-        logger.debug("Out of {} entries, {} are valid and {} will be copied in this round", allIndexEntries.size(),
-                copyCandidates.size(), indexEntriesToCopy.size());
-        logger.trace(
-                "For index segment with start offset {} in {} - Total index entries: {}. Valid index entries: {}. Entries to "
-                        + "copy: {}", indexSegmentStartOffset, storeId, allIndexEntries, copyCandidates,
-                indexEntriesToCopy);
-        return indexEntriesToCopy;
-    }
+  /**
+   * Gets all the index entries that need to be copied. The index entries that will be copied are:
+   * 1. Records that are not duplicates.
+   * 2. Records that are not expired or deleted.
+   * 3. Delete records.
+   * 4. TTL update records that cannot be cleaned yet (because their PUT records are not cleaned up).
+   * Records will be excluded because they are expired/deleted or because they are duplicates.
+   * @param allIndexEntries the {@link IndexEntry} of all the entries in the index segment. There should be only one
+   *                        entry per key where a DELETE is preferred over all other entries and PUT is preferred over
+   *                        a TTL update entry
+   * @param duplicateSearchSpan the {@link FileSpan} in which to search for duplicates
+   * @param indexSegment the {@link IndexSegment} that {@code allIndexEntries} are from.
+   * @param checkAlreadyCopied {@code true} if a check for existence in the swap spaces has to be executed (due to
+   *                                       crash/shutdown), {@code false} otherwise.
+   * @return the list of valid {@link IndexEntry} sorted by their offset.
+   * @throws IllegalStateException if there is a mismatch b/w the index value expected and the index value obtained.
+   * @throws StoreException if there is any problem with using the index.
+   */
+  private List<IndexEntry> getIndexEntriesToCopy(List<IndexEntry> allIndexEntries, FileSpan duplicateSearchSpan,
+      IndexSegment indexSegment, boolean checkAlreadyCopied) throws StoreException {
+    List<IndexEntry> copyCandidates = getValidIndexEntries(indexSegment, allIndexEntries);
+    int validEntriesSize = copyCandidates.size();
+    copyCandidates.removeIf(
+        copyCandidate -> isDuplicate(copyCandidate, duplicateSearchSpan, indexSegment.getStartOffset(),
+            checkAlreadyCopied));
+    // order by offset in log.
+    copyCandidates.sort(PersistentIndex.INDEX_ENTRIES_OFFSET_COMPARATOR);
+    logger.debug("Out of {} entries, {} are valid and {} will be copied in this round", allIndexEntries.size(),
+        validEntriesSize, copyCandidates.size());
+    logger.trace("For index segment with start offset {} in {} - Total index entries: {}. Entries to copy: {}",
+        indexSegment.getStartOffset(), storeId, allIndexEntries, copyCandidates);
+    return copyCandidates;
+  }
 
-    /**
-     * Gets all the valid index entries in the given list of index entries.
-     * @param indexSegmentStartOffset the start {@link Offset} of the {@link IndexSegment} that {@code allIndexEntries} is
-     *                                from.
-     * @param allIndexEntries the list of {@link IndexEntry} instances from which the valid entries have to be chosen.
-     * @return the list of valid entries picked from {@code allIndexEntries}.
-     * @throws StoreException if {@link BlobReadOptions} could not be obtained from the store for deleted blobs.
-     */
-    private List<IndexEntry> getValidIndexEntries(Offset indexSegmentStartOffset, List<IndexEntry> allIndexEntries)
-            throws StoreException {
-        // TODO: move this blob store stats
-        Offset startOffsetOfLastIndexSegmentForDeleteCheck = getStartOffsetOfLastIndexSegmentForDeleteCheck();
-        boolean deletesInEffect = startOffsetOfLastIndexSegmentForDeleteCheck != null
-                && indexSegmentStartOffset.compareTo(startOffsetOfLastIndexSegmentForDeleteCheck) <= 0;
-        logger.trace("Deletes in effect is {} for index segment with start offset {} in {}", deletesInEffect,
-                indexSegmentStartOffset, storeId);
-        List<IndexEntry> validEntries = new ArrayList<>();
-        for (IndexEntry indexEntry : allIndexEntries) {
-            IndexValue value = indexEntry.getValue();
-            if (value.isFlagSet(IndexValue.Flags.Delete_Index)) {
-                // DELETE entry. Always valid.
-                validEntries.add(indexEntry);
-                // if this delete cannot be counted and there is a corresponding unexpired PUT entry in the same index segment,
-                // we will need to add it.
-                // NOTE: In PersistentIndex.markAsDeleted(), the expiry time of the put value is copied into the delete value.
-                // So it is safe to check for isExpired() on the delete value.
-                if (!deletesInEffect && !srcIndex.isExpired(value)) {
-                    logger.trace(
-                            "Fetching the PUT entry of a deleted blob with entry {} in index segment with start offset {} in"
-                                    + " {} because it needs to be retained", indexEntry, indexSegmentStartOffset,
-                            storeId);
-                    long putRecordOffset = value.getOriginalMessageOffset();
-                    if (putRecordOffset != IndexValue.UNKNOWN_ORIGINAL_MESSAGE_OFFSET &&
-                            putRecordOffset != value.getOffset()
-                                    .getOffset() && indexSegmentStartOffset.getOffset() <= putRecordOffset) {
-                        try (BlobReadOptions options = srcIndex.getBlobReadInfo(indexEntry.getKey(),
-                                EnumSet.allOf(StoreGetOptions.class))) {
-                            Offset offset = new Offset(indexSegmentStartOffset.getName(), options.getOffset());
-                            MessageInfo info = options.getMessageInfo();
-                            IndexValue putValue =
-                                    new IndexValue(info.getSize(), offset, info.getExpirationTimeInMs(),
-                                            info.getOperationTimeMs(),
-                                            info.getAccountId(), info.getContainerId());
-                            validEntries.add(new IndexEntry(indexEntry.getKey(), putValue));
-                        } catch (StoreException e) {
-                            logger.error("Fetching PUT index entry of {} in {} failed", indexEntry.getKey(),
-                                    indexSegmentStartOffset);
-                        }
-                    }
-                }
-            } else if (!srcIndex.isExpired(value)) {
-                // unexpired PUT entry.
-                if (deletesInEffect) {
-                    FileSpan deleteSearchSpan =
-                            new FileSpan(indexSegmentStartOffset, startOffsetOfLastIndexSegmentForDeleteCheck);
-                    IndexValue searchedValue = srcIndex.findKey(indexEntry.getKey(), deleteSearchSpan);
-                    if (!searchedValue.isFlagSet(IndexValue.Flags.Delete_Index)) {
-                        // PUT entry that has not expired and is not considered deleted.
-                        validEntries.add(indexEntry);
-                    } else {
-                        logger.trace(
-                                "Skipping {} in index segment with start offset {} in {} because it is a deleted PUT",
-                                indexEntry, indexSegmentStartOffset, storeId);
-                    }
-                } else {
-                    // valid PUT entry
-                    validEntries.add(indexEntry);
-                }
+  /**
+   * Determines if {@code copyCandidate} is a duplicate.
+   * @param copyCandidate the {@link IndexEntry} to check
+   * @param duplicateSearchSpan the search span for duplicates in the source index
+   * @param indexSegmentStartOffset the start offset of the {@link IndexSegment} being processed
+   * @param checkAlreadyCopied if {@code true}, checks if {@code copyCandidate} has already been copied.
+   * @return {@code true} if {@code copyCandidate} is a duplicate of something that exists or has been copied
+   */
+  private boolean isDuplicate(IndexEntry copyCandidate, FileSpan duplicateSearchSpan, Offset indexSegmentStartOffset,
+      boolean checkAlreadyCopied) {
+    // Duplicates can exist because of two reasons
+    // 1. Duplicates in src: These can occur because compaction creates temporary duplicates
+    // Consider the following situation
+    // Segments 0_0, 1_0 and 2_0 are being compacted. All the data in 0_0 and half the data in 1_0 fit in 0_1 and the
+    // rest in 1_1. When 0_1 is full and is put into the "main" log, there will be some duplicated data in 0_1 and 1_0.
+    // If a shutdown occurs after this point, then the code has to make sure not to copy any of the data already copied
+    // 2. Duplicates in tgt: the checkpointing logic during copying works at the IndexSegment level
+    // This means that a crash/shutdown could occur in the middle of copying the data represented by an IndexSegment and
+    // the incremental progress inside an IndexSegment is not logged. After restart, compaction is resumed from the
+    // checkpoint and will have to detect data that it has already copied
+    try {
+      boolean isDuplicate = false;
+      IndexValue copyCandidateValue = copyCandidate.getValue();
+      if (duplicateSearchSpan != null && alreadyExists(srcIndex, duplicateSearchSpan, copyCandidate.getKey(),
+          copyCandidateValue)) {
+        // is a duplicate because it already is in the store
+        logger.trace("{} in segment with start offset {} in {} is a duplicate because it already exists in store",
+            copyCandidate, indexSegmentStartOffset, storeId);
+        isDuplicate = true;
+      } else if (checkAlreadyCopied && alreadyExists(tgtIndex, null, copyCandidate.getKey(), copyCandidateValue)) {
+        // is a duplicate because it has already been copied
+        logger.trace("{} in segment with start offset {} in {} is a duplicate because it has already been copied",
+            copyCandidate, indexSegmentStartOffset, storeId);
+        isDuplicate = true;
+      } else {
+        // not a duplicate
+        logger.trace("{} in index segment with start offset {} in {} is not a duplicate", copyCandidate,
+            indexSegmentStartOffset, storeId);
+      }
+      return isDuplicate;
+    } catch (StoreException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /**
+   * Gets all the valid index entries in the given list of index entries.
+   * @param indexSegment the {@link IndexSegment} that {@code allIndexEntries} are from.
+   * @param allIndexEntries the list of {@link IndexEntry} instances from which the valid entries have to be chosen.
+   *                        There should be only one entry per key where a DELETE is preferred over all other entries
+   *                        and PUT is preferred over a TTL update entry
+   * @return the list of valid entries generated from {@code allIndexEntries}. May contain entries not in
+   * {@code allIndexEntries}.
+   * @throws StoreException if {@link BlobReadOptions} could not be obtained from the store for deleted blobs.
+   */
+  private List<IndexEntry> getValidIndexEntries(IndexSegment indexSegment, List<IndexEntry> allIndexEntries)
+      throws StoreException {
+    // Assumed preference order from IndexSegment (current impl)
+    // (Legend: entry/entries in segment -> output from IndexSegment#getIndexEntriesSince())
+    // PUT entry only -> PUT entry
+    // TTL update entry only -> TTL update entry
+    // DELETE entry only -> DELETE entry
+    // PUT + DELETE -> DELETE
+    // TTL update + DELETE -> DELETE
+    // PUT + TTL update -> PUT (the one relevant to this comment)
+    // PUT + TTL update + DELETE -> DELETE
+    // TODO: move this blob store stats
+    Offset startOffsetOfLastIndexSegmentForDeleteCheck = getStartOffsetOfLastIndexSegmentForDeleteCheck();
+    // deletes are in effect if this index segment does not have any deletes that are less than
+    // StoreConfig#storeDeletedMessageRetentionDays days old. If there are such deletes, then they are not counted as
+    // deletes and the PUT records are still valid as far as compaction is concerned
+    boolean deletesInEffect = startOffsetOfLastIndexSegmentForDeleteCheck != null
+        && indexSegment.getStartOffset().compareTo(startOffsetOfLastIndexSegmentForDeleteCheck) <= 0;
+    logger.trace("Deletes in effect is {} for index segment with start offset {} in {}", deletesInEffect,
+        indexSegment.getStartOffset(), storeId);
+    List<IndexEntry> validEntries = new ArrayList<>();
+    for (IndexEntry indexEntry : allIndexEntries) {
+      IndexValue value = indexEntry.getValue();
+      if (value.isFlagSet(IndexValue.Flags.Delete_Index)) {
+        IndexValue putValue = getPutValueFromSrc(indexEntry.getKey(), value, indexSegment);
+        if (putValue != null) {
+          // In PersistentIndex.markAsDeleted(), the expiry time of the put/ttl update value is copied into the
+          // delete value. So it is safe to check for isExpired() on the delete value.
+          if (deletesInEffect || srcIndex.isExpired(value)) {
+            // still have to evaluate whether the TTL update has to be copied
+            NavigableSet<IndexValue> values = indexSegment.find(indexEntry.getKey());
+            IndexValue secondVal = values.lower(values.last());
+            if (secondVal != null && secondVal.isFlagSet(IndexValue.Flags.Ttl_Update_Index) && isTtlUpdateEntryValid(
+                indexEntry.getKey(), indexSegment.getStartOffset())) {
+              validEntries.add(new IndexEntry(indexEntry.getKey(), secondVal));
+            }
+            // DELETE entry. Always valid.
+            validEntries.add(indexEntry);
+          } else {
+            // if this delete cannot be counted and there is a corresponding unexpired PUT/TTL update entry in the same
+            // index segment, we will need to add it.
+            addAllEntriesForKeyInSegment(validEntries, indexSegment, indexEntry);
+          }
+        } else {
+          // DELETE entry. Always valid.
+          validEntries.add(indexEntry);
+        }
+      } else if (value.isFlagSet(IndexValue.Flags.Ttl_Update_Index)) {
+        // if IndexSegment::getIndexEntriesSince() returns a TTL update entry, it is because it is the ONLY entry i.e.
+        // no PUT or DELETE in the same index segment.
+        if (isTtlUpdateEntryValid(indexEntry.getKey(), indexSegment.getStartOffset())) {
+          validEntries.add(indexEntry);
+        }
+      } else {
+        IndexValue valueFromIdx = srcIndex.findKey(indexEntry.getKey());
+        // Doesn't matter whether we get the PUT or DELETE entry for the expiry test
+        if (!srcIndex.isExpired(valueFromIdx)) {
+          // unexpired PUT entry.
+          if (deletesInEffect) {
+            if (!hasDeleteEntryInSpan(indexEntry.getKey(), indexSegment.getStartOffset(),
+                startOffsetOfLastIndexSegmentForDeleteCheck)) {
+              // PUT entry that has not expired and is not considered deleted.
+              // Add all values in this index segment (to account for the presence of TTL updates)
+              addAllEntriesForKeyInSegment(validEntries, indexSegment, indexEntry);
             } else {
-                logger.trace("Skipping {} in index segment with start offset {} in {} because it is an expired PUT",
-                        indexEntry,
-                        indexSegmentStartOffset, storeId);
+              logger.trace("{} in index segment with start offset {} in {} is not valid because it is a deleted PUT",
+                  indexEntry, indexSegment.getStartOffset(), storeId);
             }
+          } else {
+            // valid PUT entry
+            // Add all values in this index segment (to account for the presence of TTL updates)
+            addAllEntriesForKeyInSegment(validEntries, indexSegment, indexEntry);
+          }
+        } else {
+          logger.trace("{} in index segment with start offset {} in {} is not valid because it is an expired PUT",
+              indexEntry, indexSegment.getStartOffset(), storeId);
         }
-        return validEntries;
+      }
     }
+    return validEntries;
+  }
 
-    /**
-     * Checks if a record already exists in the target log (swap spaces).
-     * @param key the {@link StoreKey} of the record.
-     * @param srcValue the {@link IndexValue} obtained from the application index.
-     * @return {@code true} if the record already exists in the target log, {@code false} otherwise.
-     * @throws StoreException if there is any problem with using the index.
-     */
-    private boolean alreadyExistsInTgt(StoreKey key, IndexValue srcValue) throws StoreException {
-        IndexValue tgtValue = tgtIndex.findKey(key);
-        return tgtValue != null && (tgtValue.isFlagSet(IndexValue.Flags.Delete_Index) || !srcValue.isFlagSet(
-                IndexValue.Flags.Delete_Index));
+  /**
+   * Gets the {@link IndexValue} for the PUT from the {@link #srcIndex} (if it exists)
+   * @param key the {@link StoreKey} whose PUT is required
+   * @param updateValue the update (TTL update/delete) {@link IndexValue} associated with the same {@code key}
+   * @param indexSegmentOfUpdateValue the {@link IndexSegment} that {@code updateValue} belongs to
+   * @return the {@link IndexValue} for the PUT in the {@link #srcIndex} (if it exists)
+   * @throws StoreException if there are problems with the index
+   */
+  private IndexValue getPutValueFromSrc(StoreKey key, IndexValue updateValue, IndexSegment indexSegmentOfUpdateValue)
+      throws StoreException {
+    IndexValue putValue = srcIndex.findKey(key, new FileSpan(srcIndex.getStartOffset(), updateValue.getOffset()),
+        EnumSet.of(PersistentIndex.IndexEntryType.PUT));
+    // in a non multi valued segment, if putValue is not found directly from the index, check if the PUT and DELETE
+    // are the same segment so that the PUT entry can be constructed from the DELETE entry
+    if (putValue == null && updateValue.isFlagSet(IndexValue.Flags.Delete_Index)) {
+      putValue = getPutValueFromDeleteEntry(key, updateValue, indexSegmentOfUpdateValue);
     }
+    return putValue;
+  }
 
-    /**
-     * Copies the given {@code srcIndexEntries} from the given log segment into the swap spaces.
-     * @param logSegmentToCopy the {@link LogSegment} to copy from.
-     * @param srcIndexEntries the {@link IndexEntry}s to copy.
-     * @param lastModifiedTimeSecs the last modified time of the source index segment.
-     * @return @code true} if all the records  were copied. {@code false} if some records were not copied either because
-     * there was no more capacity or because a shutdown was initiated.
-     * @throws IOException if there were I/O errors during copying.
-     * @throws StoreException if there are any problems reading or writing to store components.
-     */
-    private boolean copyRecords(LogSegment logSegmentToCopy, List<IndexEntry> srcIndexEntries,
-            long lastModifiedTimeSecs)
-            throws IOException, StoreException {
-        boolean copiedAll = true;
-        long totalCapacity = tgtLog.getCapacityInBytes();
-        long writtenLastTime = 0;
-        try (FileChannel fileChannel = Utils.openChannel(logSegmentToCopy.getView().getFirst(), false)) {
-            for (IndexEntry srcIndexEntry : srcIndexEntries) {
-                IndexValue srcValue = srcIndexEntry.getValue();
-                long usedCapacity = tgtIndex.getLogUsedCapacity();
-                if (isActive && (tgtLog.getCapacityInBytes() - usedCapacity >= srcValue.getSize())) {
-                    fileChannel.position(srcValue.getOffset().getOffset());
-                    Offset endOffsetOfLastMessage = tgtLog.getEndOffset();
-                    // call into diskIOScheduler to make sure we can proceed (assuming it won't be 0).
-                    diskIOScheduler.getSlice(DiskManager.CLEANUP_OPS_JOB_NAME, DiskManager.CLEANUP_OPS_JOB_NAME,
-                            writtenLastTime);
-                    tgtLog.appendFrom(fileChannel, srcValue.getSize());
-                    FileSpan fileSpan = tgtLog.getFileSpanForMessage(endOffsetOfLastMessage, srcValue.getSize());
-                    if (srcValue.isFlagSet(IndexValue.Flags.Delete_Index)) {
-                        IndexValue putValue = tgtIndex.findKey(srcIndexEntry.getKey());
-                        if (putValue != null) {
-                            tgtIndex.markAsDeleted(srcIndexEntry.getKey(), fileSpan, srcValue.getOperationTimeInMs());
-                        } else {
-                            IndexValue tgtValue =
-                                    new IndexValue(srcValue.getSize(), fileSpan.getStartOffset(),
-                                            srcValue.getExpiresAtMs(),
-                                            srcValue.getOperationTimeInMs(), srcValue.getAccountId(),
-                                            srcValue.getContainerId());
-                            tgtValue.setFlag(IndexValue.Flags.Delete_Index);
-                            tgtValue.clearOriginalMessageOffset();
-                            tgtIndex.addToIndex(new IndexEntry(srcIndexEntry.getKey(), tgtValue), fileSpan);
-                        }
-                    } else {
-                        IndexValue tgtValue =
-                                new IndexValue(srcValue.getSize(), fileSpan.getStartOffset(), srcValue.getExpiresAtMs(),
-                                        srcValue.getOperationTimeInMs(), srcValue.getAccountId(),
-                                        srcValue.getContainerId());
-                        tgtIndex.addToIndex(new IndexEntry(srcIndexEntry.getKey(), tgtValue), fileSpan);
-                    }
-                    long lastModifiedTimeSecsToSet =
-                            srcValue.getOperationTimeInMs() != Utils.Infinite_Time ? srcValue.getOperationTimeInMs() /
-                                    Time.MsPerSec
-                                    : lastModifiedTimeSecs;
-                    tgtIndex.getIndexSegments().lastEntry().getValue().setLastModifiedTimeSecs(
-                            lastModifiedTimeSecsToSet);
-                    writtenLastTime = srcValue.getSize();
-                    srcMetrics.compactionCopyRateInBytes.mark(srcValue.getSize());
-                } else if (!isActive) {
-                    logger.info("Stopping copying in {} because shutdown is in progress", storeId);
-                    copiedAll = false;
-                    break;
-                } else {
-                    // this is the extra segment, so it is ok to run out of space.
-                    logger.info(
-                            "There is no more capacity in the destination log in {}. Total capacity is {}. Used capacity is {}."
-                                    + " Segment that was being copied is {}", storeId, totalCapacity, usedCapacity,
-                            logSegmentToCopy.getName());
-                    copiedAll = false;
-                    break;
-                }
+  /**
+   * Gets the {@link IndexValue} for the PUT using info in the {@code deleteValue)
+   * @param key the {@link StoreKey} whose PUT is required
+   * @param deleteValue the delete {@link IndexValue} associated with the same {@code key}
+   * @param indexSegmentOfUpdateValue the {@link IndexSegment} that {@code deleteValue} belongs to
+   * @return the {@link IndexValue} for the PUT in the {@link #srcIndex} (if it exists)
+   */
+  private IndexValue getPutValueFromDeleteEntry(StoreKey key, IndexValue deleteValue,
+      IndexSegment indexSegmentOfUpdateValue) {
+    // TODO: find a way to test this?
+    IndexValue putValue = null;
+    long putRecordOffset = deleteValue.getOriginalMessageOffset();
+    if (putRecordOffset != IndexValue.UNKNOWN_ORIGINAL_MESSAGE_OFFSET && putRecordOffset != deleteValue.getOffset()
+        .getOffset() && indexSegmentOfUpdateValue.getStartOffset().getOffset() <= putRecordOffset) {
+      try (BlobReadOptions options = srcIndex.getBlobReadInfo(key, EnumSet.allOf(StoreGetOptions.class))) {
+        Offset offset = new Offset(indexSegmentOfUpdateValue.getStartOffset().getName(), options.getOffset());
+        MessageInfo info = options.getMessageInfo();
+        putValue = new IndexValue(info.getSize(), offset, info.getExpirationTimeInMs(), info.getOperationTimeMs(),
+            info.getAccountId(), info.getContainerId());
+      } catch (StoreException e) {
+        logger.error("Fetching PUT index entry of {} in {} failed", key, indexSegmentOfUpdateValue.getStartOffset());
+      }
+    }
+    return putValue;
+  }
+
+  /**
+   * Determines whether a TTL update entry is valid. A TTL update entry is valid as long as the associated PUT record
+   * is still present in the store (the validity of the PUT record does not matter - only its presence/absence does).
+   * @param key the {@link StoreKey} being examined
+   * @param indexSegmentStartOffset the start offset of the {@link IndexSegment} that the TTL update record is in
+   * @return {@code true} if the TTL update entry is valid
+   * @throws StoreException if there are problems reading the index
+   */
+  private boolean isTtlUpdateEntryValid(StoreKey key, Offset indexSegmentStartOffset) throws StoreException {
+    boolean valid = false;
+    //  A TTL update entry is "valid" if the corresponding PUT is still alive
+    // The PUT entry, if it exists, must be "before" this TTL update entry.
+    FileSpan srcSearchSpan = new FileSpan(srcIndex.getStartOffset(), indexSegmentStartOffset);
+    IndexValue srcValue = srcIndex.findKey(key, srcSearchSpan, EnumSet.of(PersistentIndex.IndexEntryType.PUT));
+    if (srcValue == null) {
+      // PUT is not in the source - therefore can't be in target. This TTL update can be cleaned up
+      logger.trace("TTL update of {} in segment with start offset {} in {} is not valid the corresponding PUT entry "
+          + "does not exist anymore", key, indexSegmentStartOffset, storeId);
+    } else {
+      // exists in source - now we need to check if it exists in the target
+      IndexValue tgtValue = tgtIndex.findKey(key, null, EnumSet.of(PersistentIndex.IndexEntryType.PUT));
+      if (tgtValue == null && isOffsetUnderCompaction(srcValue.getOffset())) {
+        // exists in src but not in tgt. This can happen either because
+        // 1. The FileSpan to which srcValue belongs is not under compaction (so there is no reason for tgt to have it)
+        // 2. srcValue will be compacted in this cycle (because it has been determined that the PUT is not valid. Since
+        // the PUT is going away in this cycle, it is safe to remove the TTL update also)
+        logger.trace(
+            "TTL update of {} in segment with start offset {} in {} is not valid because the corresponding PUT entry"
+                + " {} will be compacted in this cycle ({} are being compacted in this cycle)", key,
+            indexSegmentStartOffset, storeId, srcValue,
+            compactionLog.getCompactionDetails().getLogSegmentsUnderCompaction());
+      } else {
+        // PUT entry exists in both the src and tgt,
+        // OR PUT entry exists in source and the offset of the source entry is not under compaction in this cycle
+        // therefore this TTL update entry cannot be compacted
+        valid = true;
+      }
+    }
+    return valid;
+  }
+
+  /**
+   * @param offset the {@link Offset} to check
+   * @return {@code true} if the offset is being compacted in the current cycle.
+   */
+  private boolean isOffsetUnderCompaction(Offset offset) {
+    List<String> segmentsUnderCompaction = compactionLog.getCompactionDetails().getLogSegmentsUnderCompaction();
+    LogSegment first = srcLog.getSegment(segmentsUnderCompaction.get(0));
+    LogSegment last = srcLog.getSegment(segmentsUnderCompaction.get(segmentsUnderCompaction.size() - 1));
+    Offset start = new Offset(first.getName(), first.getStartOffset());
+    Offset end = new Offset(last.getName(), last.getEndOffset());
+    return new FileSpan(start, end).inSpan(offset);
+  }
+
+  /**
+   * Adds entries related to {@code entry} that are in the same {@code indexSegment} including {@code entry}
+   * @param entries the list of {@link IndexEntry} to add to.
+   * @param indexSegment the {@link IndexSegment} to fetch values from.
+   * @param entry the {@link IndexEntry} that is under processing
+   * @throws StoreException if there are problems using the index
+   */
+  private void addAllEntriesForKeyInSegment(List<IndexEntry> entries, IndexSegment indexSegment, IndexEntry entry)
+      throws StoreException {
+    logger.trace("Fetching related entries of a blob with entry {} in index segment with start offset {} in {} "
+        + "because they need to be retained", entry, indexSegment.getStartOffset(), storeId);
+    NavigableSet<IndexValue> values = indexSegment.find(entry.getKey());
+    if (values.size() > 1) {
+      // we are using a multivalued index segment. Any related values will be in this set
+      values.forEach(valueFromSeg -> entries.add(new IndexEntry(entry.getKey(), valueFromSeg)));
+    } else {
+      // in a non multi valued segment, there can only be PUTs and DELETEs in the same segment
+      entries.add(entry);
+      if (entry.getValue().isFlagSet(IndexValue.Flags.Delete_Index)) {
+        IndexValue putValue = getPutValueFromDeleteEntry(entry.getKey(), entry.getValue(), indexSegment);
+        if (putValue != null) {
+          entries.add(new IndexEntry(entry.getKey(), putValue));
+        }
+      }
+    }
+  }
+
+  /**
+   * @param key the {@link StoreKey} to check
+   * @param searchStartOffset the start offset of the search for delete entry
+   * @param searchEndOffset the end offset of the search for delete entry
+   * @return {@code true} if the key has a delete entry in the given search span.
+   * @throws StoreException if there are any problems using the index
+   */
+  private boolean hasDeleteEntryInSpan(StoreKey key, Offset searchStartOffset, Offset searchEndOffset)
+      throws StoreException {
+    FileSpan deleteSearchSpan = new FileSpan(searchStartOffset, searchEndOffset);
+    return srcIndex.findKey(key, deleteSearchSpan, EnumSet.of(PersistentIndex.IndexEntryType.DELETE)) != null;
+  }
+
+  /**
+   * Checks if a record already exists in {@code idx}.
+   * @param idx the {@link PersistentIndex} to search in
+   * @param searchSpan the {@link FileSpan} to search
+   * @param key the {@link StoreKey} of the record.
+   * @param srcValue the {@link IndexValue} whose existence needs to be checked.
+   * @return {@code true} if the record already exists in {@code idx}, {@code false} otherwise.
+   * @throws StoreException if there is any problem with using the index.
+   */
+  private boolean alreadyExists(PersistentIndex idx, FileSpan searchSpan, StoreKey key, IndexValue srcValue)
+      throws StoreException {
+    IndexValue value = idx.findKey(key, searchSpan, EnumSet.allOf(PersistentIndex.IndexEntryType.class));
+    boolean exists = false;
+    if (value != null) {
+      if (value.isFlagSet(IndexValue.Flags.Delete_Index)) {
+        exists = true;
+      } else if (value.isFlagSet(IndexValue.Flags.Ttl_Update_Index)) {
+        // if srcValue is not a delete, it is a duplicate.
+        exists = !srcValue.isFlagSet(IndexValue.Flags.Delete_Index);
+      } else {
+        // value is a PUT without a TTL update or a DELETE
+        exists = !srcValue.isFlagSet(IndexValue.Flags.Delete_Index) && !srcValue.isFlagSet(
+            IndexValue.Flags.Ttl_Update_Index);
+      }
+    }
+    return exists;
+  }
+
+  /**
+   * Calculate the farthest index that can be used for a bundle IO read based on start index and bundleReadBuffer capacity.
+   * @param sortedSrcIndexEntries all available entries, which are ordered by offset.
+   * @param start the starting index for the given list.
+   * @return the farthest index, inclusively, which can be used for a bundle read.
+   */
+  private int getBundleReadEndIndex(List<IndexEntry> sortedSrcIndexEntries, int start) {
+    long startOffset = sortedSrcIndexEntries.get(start).getValue().getOffset().getOffset();
+    int end;
+    for (end = start; end < sortedSrcIndexEntries.size(); end++) {
+      long currentSize =
+          sortedSrcIndexEntries.get(end).getValue().getOffset().getOffset() + sortedSrcIndexEntries.get(end)
+              .getValue()
+              .getSize() - startOffset;
+      if (currentSize > bundleReadBuffer.capacity()) {
+        break;
+      }
+    }
+    return end - 1;
+  }
+
+  /**
+   * Copies the given {@code srcIndexEntries} from the given log segment into the swap spaces.
+   * @param logSegmentToCopy the {@link LogSegment} to copy from.
+   * @param srcIndexEntries the {@link IndexEntry}s to copy.
+   * @param lastModifiedTimeSecs the last modified time of the source index segment.
+   * @return @code true} if all the records  were copied. {@code false} if some records were not copied either because
+   * there was no more capacity or because a shutdown was initiated.
+   * @throws IOException if there were I/O errors during copying.
+   * @throws StoreException if there are any problems reading or writing to store components.
+   */
+  private boolean copyRecords(LogSegment logSegmentToCopy, List<IndexEntry> srcIndexEntries, long lastModifiedTimeSecs)
+      throws IOException, StoreException {
+    boolean copiedAll = true;
+    long totalCapacity = tgtLog.getCapacityInBytes();
+    long writtenLastTime = 0;
+    try (FileChannel fileChannel = Utils.openChannel(logSegmentToCopy.getView().getFirst(), false)) {
+      // the index number of the list to start with.
+      int start = 0;
+      while (start < srcIndexEntries.size()) {
+        // try to do a bundle of read to reduce disk IO
+        ByteBuffer bufferToUse;
+        long startOffset = srcIndexEntries.get(start).getValue().getOffset().getOffset();
+        int end;
+        if (bundleReadBuffer == null || srcIndexEntries.get(start).getValue().getSize() > bundleReadBuffer.capacity()) {
+          end = start;
+          bufferToUse = ByteBuffer.allocate((int) srcIndexEntries.get(start).getValue().getSize());
+          srcMetrics.compactionBundleReadBufferNotFitIn.inc();
+          logger.trace("Record size greater than bundleReadBuffer capacity, key: {} size: {}",
+              srcIndexEntries.get(start).getKey(), srcIndexEntries.get(start).getValue().getSize());
+        } else {
+          end = getBundleReadEndIndex(srcIndexEntries, start);
+          bufferToUse = bundleReadBuffer;
+          bufferToUse.position(0);
+          bufferToUse.limit((int) (
+              srcIndexEntries.get(end).getValue().getOffset().getOffset() + srcIndexEntries.get(end)
+                  .getValue()
+                  .getSize() - startOffset));
+          srcMetrics.compactionBundleReadBufferUsed.inc();
+        }
+        // do IO read
+        int ioCount = Utils.readFileToByteBuffer(fileChannel, startOffset, bufferToUse);
+        srcMetrics.compactionBundleReadBufferIoCount.inc(ioCount);
+
+        // copy from buffer to tgtLog
+        for (int i = start; i <= end; i++) {
+          IndexEntry srcIndexEntry = srcIndexEntries.get(i);
+          IndexValue srcValue = srcIndexEntry.getValue();
+          long usedCapacity = tgtIndex.getLogUsedCapacity();
+          if (isActive && (tgtLog.getCapacityInBytes() - usedCapacity >= srcValue.getSize())) {
+            Offset endOffsetOfLastMessage = tgtLog.getEndOffset();
+            // call into diskIOScheduler to make sure we can proceed (assuming it won't be 0).
+            diskIOScheduler.getSlice(COMPACTION_CLEANUP_JOB_NAME, COMPACTION_CLEANUP_JOB_NAME, writtenLastTime);
+            long bufferPosition = srcValue.getOffset().getOffset() - startOffset;
+            bufferToUse.limit((int) (bufferPosition + srcIndexEntry.getValue().getSize()));
+            bufferToUse.position((int) (bufferPosition));
+            tgtLog.appendFrom(bufferToUse);
+            FileSpan fileSpan = tgtLog.getFileSpanForMessage(endOffsetOfLastMessage, srcValue.getSize());
+            IndexValue valueFromTgtIdx = tgtIndex.findKey(srcIndexEntry.getKey());
+            if (srcValue.isFlagSet(IndexValue.Flags.Delete_Index)) {
+              if (valueFromTgtIdx != null) {
+                tgtIndex.markAsDeleted(srcIndexEntry.getKey(), fileSpan, srcValue.getOperationTimeInMs());
+              } else {
+                IndexValue tgtValue = new IndexValue(srcValue.getSize(), fileSpan.getStartOffset(), srcValue.getFlags(),
+                    srcValue.getExpiresAtMs(), srcValue.getOperationTimeInMs(), srcValue.getAccountId(),
+                    srcValue.getContainerId());
+                tgtValue.setFlag(IndexValue.Flags.Delete_Index);
+                tgtValue.clearOriginalMessageOffset();
+                tgtIndex.addToIndex(new IndexEntry(srcIndexEntry.getKey(), tgtValue), fileSpan);
+              }
+            } else if (srcValue.isFlagSet(IndexValue.Flags.Ttl_Update_Index)) {
+              if (valueFromTgtIdx != null) {
+                tgtIndex.markAsPermanent(srcIndexEntry.getKey(), fileSpan, srcValue.getOperationTimeInMs());
+              } else {
+                IndexValue tgtValue = new IndexValue(srcValue.getSize(), fileSpan.getStartOffset(), srcValue.getFlags(),
+                    srcValue.getExpiresAtMs(), srcValue.getOperationTimeInMs(), srcValue.getAccountId(),
+                    srcValue.getContainerId());
+                tgtValue.setFlag(IndexValue.Flags.Ttl_Update_Index);
+                tgtValue.clearOriginalMessageOffset();
+                tgtIndex.addToIndex(new IndexEntry(srcIndexEntry.getKey(), tgtValue), fileSpan);
+              }
+            } else if (valueFromTgtIdx != null) {
+              throw new StoreException("Cannot insert duplicate PUT entry for " + srcIndexEntry.getKey(),
+                  StoreErrorCodes.Unknown_Error);
+            } else {
+              IndexValue tgtValue =
+                  new IndexValue(srcValue.getSize(), fileSpan.getStartOffset(), srcValue.getExpiresAtMs(),
+                      srcValue.getOperationTimeInMs(), srcValue.getAccountId(), srcValue.getContainerId());
+              tgtIndex.addToIndex(new IndexEntry(srcIndexEntry.getKey(), tgtValue), fileSpan);
             }
-        } finally {
-            logSegmentToCopy.closeView();
+            long lastModifiedTimeSecsToSet =
+                srcValue.getOperationTimeInMs() != Utils.Infinite_Time ? srcValue.getOperationTimeInMs() / Time.MsPerSec
+                    : lastModifiedTimeSecs;
+            tgtIndex.getIndexSegments().lastEntry().getValue().setLastModifiedTimeSecs(lastModifiedTimeSecsToSet);
+            writtenLastTime = srcValue.getSize();
+            srcMetrics.compactionCopyRateInBytes.mark(srcValue.getSize());
+          } else if (!isActive) {
+            logger.info("Stopping copying in {} because shutdown is in progress", storeId);
+            copiedAll = false;
+            break;
+          } else {
+            // this is the extra segment, so it is ok to run out of space.
+            logger.info(
+                "There is no more capacity in the destination log in {}. Total capacity is {}. Used capacity is {}."
+                    + " Segment that was being copied is {}", storeId, totalCapacity, usedCapacity,
+                logSegmentToCopy.getName());
+            copiedAll = false;
+            break;
+          }
         }
-        return copiedAll;
+        if (!copiedAll) {
+          // break outer while loop
+          break;
+        }
+        tgtLog.flush();
+        start = end + 1;
+      }
+    } finally {
+      logSegmentToCopy.closeView();
     }
+    return copiedAll;
+  }
 
     /**
      * Cleans up any unused temporary segments. Can happen only if there were no entries to be copied and all the segments

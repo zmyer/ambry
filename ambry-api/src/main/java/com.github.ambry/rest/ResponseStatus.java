@@ -65,6 +65,11 @@ public enum ResponseStatus {
   NotFound,
 
   /**
+   * 405 Method Not Allowed - Method in request is not allowed on the resource
+   */
+  MethodNotAllowed,
+
+  /**
    * 407 - Proxy authentication required
    */
   ProxyAuthenticationRequired,
@@ -73,6 +78,11 @@ public enum ResponseStatus {
    * 410 Gone - Resource has been deleted or has expired.
    */
   Gone,
+
+  /**
+   * 412 Precondition Failed - The conditions given in the request header fields evaluated to false
+   */
+  PreconditionFailed,
 
   /**
    * 413 Request Entity Too Large - The request is larger than what the server is willing to accept
@@ -127,6 +137,8 @@ public enum ResponseStatus {
         return Forbidden;
       case Unauthorized:
         return Unauthorized;
+      case NotAllowed:
+        return MethodNotAllowed;
       case ResourceScanInProgress:
         return ProxyAuthenticationRequired;
       case RangeNotSatisfiable:
@@ -135,6 +147,8 @@ public enum ResponseStatus {
         return ServiceUnavailable;
       case InsufficientCapacity:
         return InsufficientCapacity;
+      case PreconditionFailed:
+        return PreconditionFailed;
       case IdConverterServiceError:
       case InternalServerError:
       case RequestChannelClosed:

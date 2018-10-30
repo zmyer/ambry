@@ -17,7 +17,6 @@ package com.github.ambry.account;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import com.github.ambry.utils.UtilsTest;
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -103,7 +102,7 @@ public class InMemAccountService implements AccountService {
   }
 
   @Override
-  public void close() throws IOException {
+  public void close() {
     // no op
   }
 
@@ -150,6 +149,20 @@ public class InMemAccountService implements AccountService {
   }
 
   /**
+   * Adds {@code replicationPolicy} to {@code container}.
+   * @param container the {@link Container} to add the replication policy to.
+   * @param replicationPolicy the replication policy to add to {@code container}.
+   * @return the new container object with the appropriate replication policy if the operation suceeded. {@code null}
+   * otherwise
+   */
+  public Container addReplicationPolicyToContainer(Container container, String replicationPolicy) {
+    Container newContainer = new ContainerBuilder(container).setReplicationPolicy(replicationPolicy).build();
+    Account account = getAccountById(container.getParentAccountId());
+    Account newAccount = new AccountBuilder(account).addOrUpdateContainer(newContainer).build();
+    return updateAccounts(Collections.singleton(newAccount)) ? newContainer : null;
+  }
+
+  /**
    * Creates and returns a random {@link Container} for {@code accountId}.
    * @param accountId the account id for the container
    * @return returns a random {@link Container} for {@code accountId}
@@ -164,7 +177,11 @@ public class InMemAccountService implements AccountService {
     boolean refContainerCaching = TestUtils.RANDOM.nextBoolean();
     boolean refContainerMediaScanDisabled = TestUtils.RANDOM.nextBoolean();
     return new ContainerBuilder(refContainerId, refContainerName, refContainerStatus, refContainerDescription,
-        refContainerEncryption, refContainerPreviousEncryption, refContainerCaching, refContainerMediaScanDisabled,
-        accountId).build();
+        accountId).setEncrypted(refContainerEncryption)
+        .setPreviouslyEncrypted(refContainerPreviousEncryption)
+        .setCacheable(refContainerCaching)
+        .setMediaScanDisabled(refContainerMediaScanDisabled)
+        .setTtlRequired(false)
+        .build();
   }
 }

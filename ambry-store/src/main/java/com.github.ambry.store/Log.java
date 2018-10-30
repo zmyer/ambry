@@ -161,33 +161,37 @@ class Log implements Write {
         activeSegment.appendFrom(channel, size);
     }
 
-    /**
-     * Sets the active segment in the log.
-     * </p>
-     * Frees all segments that follow the active segment. Therefore, this should be
-     * used only after the active segment is conclusively determined.
-     * @param name the name of the log segment that is to be marked active.
-     * @throws IllegalArgumentException if there no segment with name {@code name}.
-     * @throws IOException if there is any I/O error freeing segments.
-     */
-    // TODO: 2018/4/27 by zmyer
-    void setActiveSegment(String name) throws IOException {
-        if (!segmentsByName.containsKey(name)) {
-            throw new IllegalArgumentException("There is no log segment with name: " + name);
-        }
-        //根据segment名称查找对应的segment对象
-        ConcurrentNavigableMap<String, LogSegment> extraSegments = segmentsByName.tailMap(name, false);
-        Iterator<Map.Entry<String, LogSegment>> iterator = extraSegments.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<String, LogSegment> entry = iterator.next();
-            logger.info("Freeing extra segment with name [{}] ", entry.getValue().getName());
-            free(entry.getValue());
-            remainingUnallocatedSegments.getAndIncrement();
-            iterator.remove();
-        }
-        logger.info("Setting active segment to [{}]", name);
-        activeSegment = segmentsByName.get(name);
+  /**
+   * Sets the active segment in the log.
+   * </p>
+   * Frees all segments that follow the active segment. Therefore, this should be
+   * used only after the active segment is conclusively determined.
+   * @param name the name of the log segment that is to be marked active.
+   * @throws IllegalArgumentException if there no segment with name {@code name}.
+   * @throws IOException if there is any I/O error freeing segments.
+   */
+  void setActiveSegment(String name) throws IOException {
+    if (!segmentsByName.containsKey(name)) {
+      throw new IllegalArgumentException("There is no log segment with name: " + name);
     }
+    ConcurrentNavigableMap<String, LogSegment> extraSegments = segmentsByName.tailMap(name, false);
+    Iterator<Map.Entry<String, LogSegment>> iterator = extraSegments.entrySet().iterator();
+    while (iterator.hasNext()) {
+      Map.Entry<String, LogSegment> entry = iterator.next();
+      logger.info("Freeing extra segment with name [{}] ", entry.getValue().getName());
+      free(entry.getValue());
+      remainingUnallocatedSegments.getAndIncrement();
+      iterator.remove();
+    }
+    logger.info("Setting active segment to [{}]", name);
+    LogSegment newActiveSegment = segmentsByName.get(name);
+    if (newActiveSegment != activeSegment) {
+      // If activeSegment needs to be changed, then drop buffer for old activeSegment and init buffer for new activeSegment.
+      activeSegment.dropBufferForAppend();
+      activeSegment = newActiveSegment;
+      activeSegment.initBufferForAppend();
+    }
+  }
 
     /**
      * @return the capacity of a single segment.
@@ -385,33 +389,28 @@ class Log implements Write {
         return !segmentsByName.firstKey().isEmpty();
     }
 
-    /**
-     * Initializes the log.
-     * @param segmentsToLoad the {@link LogSegment} instances to include as a part of the log. These are not in any order
-     * @param segmentCapacityInBytes the capacity of a single {@link LogSegment}.
-     * @throws IOException if there is any I/O error during initialization.
-     */
-    // TODO: 2018/4/23 by zmyer
-    private void initialize(List<LogSegment> segmentsToLoad, long segmentCapacityInBytes) throws IOException {
-        if (segmentsToLoad.size() == 0) {
-            // bootstrapping log.
-            //如果segment集合为空，则需要创建第一个segment
-            segmentsToLoad = Collections.singletonList(checkArgsAndGetFirstSegment(segmentCapacityInBytes));
-        }
-        //读取第一个segment对象
-        LogSegment anySegment = segmentsToLoad.get(0);
-        //计算需要的segment的数量
-        long totalSegments = anySegment.getName().isEmpty() ? 1 : capacityInBytes / anySegment.getCapacityInBytes();
-        for (LogSegment segment : segmentsToLoad) {
-            // putting the segments in the map orders them
-            //将segment对象插入到集合中
-            segmentsByName.put(segment.getName(), segment);
-        }
-        //更新目前还未使用的segment数量
-        remainingUnallocatedSegments.set(totalSegments - segmentsByName.size());
-        //设置目前活跃的segment
-        activeSegment = segmentsByName.lastEntry().getValue();
+  /**
+   * Initializes the log.
+   * @param segmentsToLoad the {@link LogSegment} instances to include as a part of the log. These are not in any order
+   * @param segmentCapacityInBytes the capacity of a single {@link LogSegment}.
+   * @throws IOException if there is any I/O error during initialization.
+   */
+  private void initialize(List<LogSegment> segmentsToLoad, long segmentCapacityInBytes) throws IOException {
+    if (segmentsToLoad.size() == 0) {
+      // bootstrapping log.
+      segmentsToLoad = Collections.singletonList(checkArgsAndGetFirstSegment(segmentCapacityInBytes));
     }
+
+    LogSegment anySegment = segmentsToLoad.get(0);
+    long totalSegments = anySegment.getName().isEmpty() ? 1 : capacityInBytes / anySegment.getCapacityInBytes();
+    for (LogSegment segment : segmentsToLoad) {
+      // putting the segments in the map orders them
+      segmentsByName.put(segment.getName(), segment);
+    }
+    remainingUnallocatedSegments.set(totalSegments - segmentsByName.size());
+    activeSegment = segmentsByName.lastEntry().getValue();
+    activeSegment.initBufferForAppend();
+  }
 
     /**
      * Allocates a file named {@code filename} and of capacity {@code size}.
@@ -445,30 +444,27 @@ class Log implements Write {
         diskSpaceAllocator.free(segmentFile, logSegment.getCapacityInBytes());
     }
 
-    /**
-     * Rolls the active log segment over if required. If rollover is required, a new segment is allocated.
-     * @param writeSize the size of the incoming write.
-     * @throws IllegalArgumentException if the {@code writeSize} is greater than a single segment's size
-     * @throws IllegalStateException if there is no more capacity in the log.
-     * @throws IOException if any I/O error occurred as part of ensuring capacity.
-     *
-     */
-    // TODO: 2018/4/27 by zmyer
-    private void rollOverIfRequired(long writeSize) throws IOException {
-        if (activeSegment.getCapacityInBytes() - activeSegment.getEndOffset() < writeSize) {
-            //如果空闲的空间无法满足需要写入的字节数，则需要扩容
-            ensureCapacity(writeSize);
-            // this cannot be null since capacity has either been ensured or has thrown.
-            //根据提供的segment名称，查找具体的segment对象
-            LogSegment nextActiveSegment = segmentsByName.higherEntry(activeSegment.getName()).getValue();
-            logger.info(
-                    "Rolling over writes to {} from {} on write of data of size {}. End offset was {} and capacity is {}",
-                    nextActiveSegment.getName(), activeSegment.getName(), writeSize, activeSegment.getEndOffset(),
-                    activeSegment.getCapacityInBytes());
-            //设置活跃的segment对象
-            activeSegment = nextActiveSegment;
-        }
+  /**
+   * Rolls the active log segment over if required. If rollover is required, a new segment is allocated.
+   * @param writeSize the size of the incoming write.
+   * @throws IllegalArgumentException if the {@code writeSize} is greater than a single segment's size
+   * @throws IllegalStateException if there is no more capacity in the log.
+   * @throws IOException if any I/O error occurred as part of ensuring capacity.
+   *
+   */
+  private void rollOverIfRequired(long writeSize) throws IOException {
+    if (activeSegment.getCapacityInBytes() - activeSegment.getEndOffset() < writeSize) {
+      ensureCapacity(writeSize);
+      // this cannot be null since capacity has either been ensured or has thrown.
+      LogSegment nextActiveSegment = segmentsByName.higherEntry(activeSegment.getName()).getValue();
+      logger.info("Rolling over writes to {} from {} on write of data of size {}. End offset was {} and capacity is {}",
+          nextActiveSegment.getName(), activeSegment.getName(), writeSize, activeSegment.getEndOffset(),
+          activeSegment.getCapacityInBytes());
+      activeSegment.dropBufferForAppend();
+      nextActiveSegment.initBufferForAppend();
+      activeSegment = nextActiveSegment;
     }
+  }
 
     /**
      * Ensures that there is enough capacity for a write of size {@code writeSize} in the log. As a part of ensuring
@@ -527,26 +523,25 @@ class Log implements Write {
         return nameAndFilename;
     }
 
-    /**
-     * Adds a {@link LogSegment} instance to the log.
-     * @param segment the {@link LogSegment} instance to add.
-     * @param increaseUsedSegmentCount {@code true} if the number of segments used has to be incremented, {@code false}
-     *                                             otherwise.
-     * @throws IllegalArgumentException if the {@code segment} being added is past the active segment
-     */
-    // TODO: 2018/4/27 by zmyer
-    void addSegment(LogSegment segment, boolean increaseUsedSegmentCount) {
-        if (LogSegmentNameHelper.COMPARATOR.compare(segment.getName(), activeSegment.getName()) >= 0) {
-            throw new IllegalArgumentException(
-                    "Cannot add segments past the current active segment. Active segment is [" + activeSegment.getName()
-                            + "]. Tried to add [" + segment.getName() + "]");
-        }
-        if (increaseUsedSegmentCount) {
-            remainingUnallocatedSegments.decrementAndGet();
-        }
-        //将segment对象插入到集合中
-        segmentsByName.put(segment.getName(), segment);
+  /**
+   * Adds a {@link LogSegment} instance to the log.
+   * @param segment the {@link LogSegment} instance to add.
+   * @param increaseUsedSegmentCount {@code true} if the number of segments used has to be incremented, {@code false}
+   *                                             otherwise.
+   * @throws IllegalArgumentException if the {@code segment} being added is past the active segment
+   */
+  void addSegment(LogSegment segment, boolean increaseUsedSegmentCount) {
+    if (LogSegmentNameHelper.COMPARATOR.compare(segment.getName(), activeSegment.getName()) >= 0) {
+      throw new IllegalArgumentException(
+          "Cannot add segments past the current active segment. Active segment is [" + activeSegment.getName()
+              + "]. Tried to add [" + segment.getName() + "]");
     }
+    segment.dropBufferForAppend();
+    if (increaseUsedSegmentCount) {
+      remainingUnallocatedSegments.decrementAndGet();
+    }
+    segmentsByName.put(segment.getName(), segment);
+  }
 
     /**
      * Drops an existing {@link LogSegment} instance from the log.

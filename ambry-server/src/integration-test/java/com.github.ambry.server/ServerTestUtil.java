@@ -14,16 +14,23 @@
 package com.github.ambry.server;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.account.AccountService;
+import com.github.ambry.account.InMemAccountService;
+import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.DataNodeId;
+import com.github.ambry.clustermap.HardwareState;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.MockDataNodeId;
+import com.github.ambry.clustermap.MockDiskId;
 import com.github.ambry.clustermap.MockPartitionId;
+import com.github.ambry.clustermap.MockReplicaId;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.BlobIdFactory;
 import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.commons.CommonTestUtils;
+import com.github.ambry.commons.CopyingAsyncWritableChannel;
 import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.ClusterMapConfig;
@@ -37,12 +44,19 @@ import com.github.ambry.messageformat.BlobType;
 import com.github.ambry.messageformat.MessageFormatException;
 import com.github.ambry.messageformat.MessageFormatFlags;
 import com.github.ambry.messageformat.MessageFormatRecord;
+import com.github.ambry.messageformat.UpdateRecord;
 import com.github.ambry.network.BlockingChannel;
 import com.github.ambry.network.BlockingChannelConnectionPool;
+import com.github.ambry.network.ConnectedChannel;
 import com.github.ambry.network.ConnectionPool;
 import com.github.ambry.network.Port;
 import com.github.ambry.network.PortType;
 import com.github.ambry.network.SSLBlockingChannel;
+import com.github.ambry.notification.UpdateType;
+import com.github.ambry.protocol.AdminRequest;
+import com.github.ambry.protocol.AdminRequestOrResponseType;
+import com.github.ambry.protocol.AdminResponse;
+import com.github.ambry.protocol.BlobStoreControlAdminRequest;
 import com.github.ambry.protocol.DeleteRequest;
 import com.github.ambry.protocol.DeleteResponse;
 import com.github.ambry.protocol.GetOption;
@@ -51,18 +65,22 @@ import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.PartitionRequestInfo;
 import com.github.ambry.protocol.PutRequest;
 import com.github.ambry.protocol.PutResponse;
+import com.github.ambry.protocol.TtlUpdateRequest;
+import com.github.ambry.protocol.TtlUpdateResponse;
 import com.github.ambry.router.Callback;
-import com.github.ambry.router.CopyingAsyncWritableChannel;
 import com.github.ambry.router.GetBlobOptionsBuilder;
 import com.github.ambry.router.GetBlobResult;
 import com.github.ambry.router.NonBlockingRouterFactory;
+import com.github.ambry.router.PutBlobOptionsBuilder;
 import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
 import com.github.ambry.store.FindTokenFactory;
+import com.github.ambry.store.MessageInfo;
 import com.github.ambry.store.Offset;
 import com.github.ambry.store.StoreFindToken;
 import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.utils.CrcInputStream;
+import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
@@ -71,15 +89,18 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -93,11 +114,10 @@ import org.junit.Assert;
 import static org.junit.Assert.*;
 
 
-public final class ServerTestUtil {
+final class ServerTestUtil {
 
-  protected static void endToEndTest(Port targetPort, String routerDatacenter, String sslEnabledDatacenters,
-      MockCluster cluster, SSLConfig clientSSLConfig, SSLSocketFactory clientSSLSocketFactory, Properties routerProps,
-      boolean testEncryption) throws InterruptedException, IOException, InstantiationException {
+  static void endToEndTest(Port targetPort, String routerDatacenter, MockCluster cluster, SSLConfig clientSSLConfig,
+      SSLSocketFactory clientSSLSocketFactory, Properties routerProps, boolean testEncryption) {
     try {
       MockClusterMap clusterMap = cluster.getClusterMap();
       BlobIdFactory blobIdFactory = new BlobIdFactory(clusterMap);
@@ -107,22 +127,29 @@ public final class ServerTestUtil {
       short accountId = Utils.getRandomShort(TestUtils.RANDOM);
       short containerId = Utils.getRandomShort(TestUtils.RANDOM);
 
-      BlobProperties properties = new BlobProperties(31870, "serviceid1", accountId, containerId, false);
+      BlobProperties properties = new BlobProperties(31870, "serviceid1", accountId, containerId, testEncryption);
       TestUtils.RANDOM.nextBytes(usermetadata);
       TestUtils.RANDOM.nextBytes(data);
       if (testEncryption) {
         TestUtils.RANDOM.nextBytes(encryptionKey);
       }
-      List<PartitionId> partitionIds = clusterMap.getWritablePartitionIds();
+      List<PartitionId> partitionIds = clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS);
       short blobIdVersion = CommonTestUtils.getCurrentBlobIdVersion();
       BlobId blobId1 = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
-          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false);
+          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false,
+          BlobId.BlobDataType.DATACHUNK);
       BlobId blobId2 = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
-          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false);
+          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false,
+          BlobId.BlobDataType.DATACHUNK);
       BlobId blobId3 = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
-          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false);
+          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false,
+          BlobId.BlobDataType.DATACHUNK);
       BlobId blobId4 = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
-          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false);
+          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false,
+          BlobId.BlobDataType.DATACHUNK);
+      BlobId blobId5 = new BlobId(blobIdVersion, BlobId.BlobIdType.NATIVE, clusterMap.getLocalDatacenterId(),
+          properties.getAccountId(), properties.getContainerId(), partitionIds.get(0), false,
+          BlobId.BlobDataType.DATACHUNK);
       // put blob 1
       PutRequest putRequest =
           new PutRequest(1, "client1", blobId1, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
@@ -135,10 +162,15 @@ public final class ServerTestUtil {
       PutResponse response = PutResponse.readFrom(new DataInputStream(putResponseStream));
       assertEquals(ServerErrorCode.No_Error, response.getError());
 
-      // put blob 2
+      // put blob 2 with an expiry time and apply TTL update later
+      BlobProperties propertiesForTtlUpdate =
+          new BlobProperties(31870, "serviceid1", "ownerid", "image/png", false, TestUtils.TTL_SECS, accountId,
+              containerId, testEncryption);
+      long ttlUpdateBlobExpiryTimeMs = getExpiryTimeMs(propertiesForTtlUpdate);
       PutRequest putRequest2 =
-          new PutRequest(1, "client1", blobId2, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
-              properties.getBlobSize(), BlobType.DataBlob, testEncryption ? ByteBuffer.wrap(encryptionKey) : null);
+          new PutRequest(1, "client1", blobId2, propertiesForTtlUpdate, ByteBuffer.wrap(usermetadata),
+              ByteBuffer.wrap(data), properties.getBlobSize(), BlobType.DataBlob,
+              testEncryption ? ByteBuffer.wrap(encryptionKey) : null);
       channel.send(putRequest2);
       putResponseStream = channel.receive().getInputStream();
       PutResponse response2 = PutResponse.readFrom(new DataInputStream(putResponseStream));
@@ -155,7 +187,7 @@ public final class ServerTestUtil {
 
       // put blob 4 that is expired
       BlobProperties propertiesExpired =
-          new BlobProperties(31870, "serviceid1", "ownerid", "jpeg", false, 0, accountId, containerId, false);
+          new BlobProperties(31870, "serviceid1", "ownerid", "jpeg", false, 0, accountId, containerId, testEncryption);
       PutRequest putRequest4 =
           new PutRequest(1, "client1", blobId4, propertiesExpired, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
               properties.getBlobSize(), BlobType.DataBlob, testEncryption ? ByteBuffer.wrap(encryptionKey) : null);
@@ -166,7 +198,8 @@ public final class ServerTestUtil {
 
       // get blob properties
       ArrayList<BlobId> ids = new ArrayList<BlobId>();
-      MockPartitionId partition = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      MockPartitionId partition =
+          (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       ids.add(blobId1);
       ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
       PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(partition, ids);
@@ -188,7 +221,7 @@ public final class ServerTestUtil {
 
       // get blob properties with expired flag set
       ids = new ArrayList<BlobId>();
-      partition = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      partition = (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       ids.add(blobId1);
       partitionRequestInfoList = new ArrayList<>();
       partitionRequestInfo = new PartitionRequestInfo(partition, ids);
@@ -211,7 +244,8 @@ public final class ServerTestUtil {
       // get blob properties for expired blob
       // 1. With no flag
       ArrayList<BlobId> idsExpired = new ArrayList<>();
-      MockPartitionId partitionExpired = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      MockPartitionId partitionExpired =
+          (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       idsExpired.add(blobId4);
       ArrayList<PartitionRequestInfo> partitionRequestInfoListExpired = new ArrayList<>();
       PartitionRequestInfo partitionRequestInfoExpired = new PartitionRequestInfo(partitionExpired, idsExpired);
@@ -226,7 +260,8 @@ public final class ServerTestUtil {
 
       // 2. With Include_Expired flag
       idsExpired = new ArrayList<>();
-      partitionExpired = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      partitionExpired =
+          (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       idsExpired.add(blobId4);
       partitionRequestInfoListExpired = new ArrayList<>();
       partitionRequestInfoExpired = new PartitionRequestInfo(partitionExpired, idsExpired);
@@ -323,18 +358,25 @@ public final class ServerTestUtil {
         Properties routerProperties = getRouterProps(routerDatacenter);
         routerProperties.putAll(routerProps);
         VerifiableProperties routerVerifiableProps = new VerifiableProperties(routerProperties);
-        Router router = new NonBlockingRouterFactory(routerVerifiableProps, clusterMap, new MockNotificationSystem(9),
-            getSSLFactoryIfRequired(routerVerifiableProps)).getRouter();
+        AccountService accountService = new InMemAccountService(false, true);
+        Router router =
+            new NonBlockingRouterFactory(routerVerifiableProps, clusterMap, new MockNotificationSystem(clusterMap),
+                getSSLFactoryIfRequired(routerVerifiableProps), accountService).getRouter();
         checkBlobId(router, blobId1, data);
         router.close();
       }
 
+      checkTtlUpdateStatus(channel, clusterMap, blobIdFactory, blobId2, data, false, ttlUpdateBlobExpiryTimeMs);
+      updateBlobTtl(channel, blobId2);
+      checkTtlUpdateStatus(channel, clusterMap, blobIdFactory, blobId2, data, true, Utils.Infinite_Time);
+
       // fetch blob that does not exist
       // get blob properties
       ids = new ArrayList<BlobId>();
-      partition = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      partition = (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       ids.add(new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
-          clusterMap.getLocalDatacenterId(), properties.getAccountId(), properties.getContainerId(), partition, false));
+          clusterMap.getLocalDatacenterId(), properties.getAccountId(), properties.getContainerId(), partition, false,
+          BlobId.BlobDataType.DATACHUNK));
       partitionRequestInfoList.clear();
       partitionRequestInfo = new PartitionRequestInfo(partition, ids);
       partitionRequestInfoList.add(partitionRequestInfo);
@@ -344,10 +386,112 @@ public final class ServerTestUtil {
       stream = channel.receive().getInputStream();
       GetResponse resp5 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
       assertEquals(ServerErrorCode.Blob_Not_Found, resp5.getPartitionResponseInfoList().get(0).getErrorCode());
+
+      // stop the store via AdminRequest
+      System.out.println("Begin to stop a BlobStore");
+      AdminRequest adminRequest =
+          new AdminRequest(AdminRequestOrResponseType.BlobStoreControl, partitionIds.get(0), 1, "clientid2");
+      BlobStoreControlAdminRequest controlRequest = new BlobStoreControlAdminRequest((short) 0, false, adminRequest);
+      channel.send(controlRequest);
+      stream = channel.receive().getInputStream();
+      AdminResponse adminResponse = AdminResponse.readFrom(new DataInputStream(stream));
+      assertEquals("Stop store admin request should succeed", ServerErrorCode.No_Error, adminResponse.getError());
+
+      // put a blob on a stopped store, which should fail
+      putRequest =
+          new PutRequest(1, "client1", blobId5, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
+              properties.getBlobSize(), BlobType.DataBlob, testEncryption ? ByteBuffer.wrap(encryptionKey) : null);
+      channel.send(putRequest);
+      putResponseStream = channel.receive().getInputStream();
+      response = PutResponse.readFrom(new DataInputStream(putResponseStream));
+      assertEquals("Put blob on stopped store should fail", ServerErrorCode.Replica_Unavailable, response.getError());
+
+      // get a blob properties on a stopped store, which should fail
+      ids = new ArrayList<BlobId>();
+      partition = (MockPartitionId) blobId1.getPartition();
+      ids.add(blobId1);
+      partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
+      partitionRequestInfo = new PartitionRequestInfo(partition, ids);
+      partitionRequestInfoList.add(partitionRequestInfo);
+      getRequest1 =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
+      channel.send(getRequest1);
+      stream = channel.receive().getInputStream();
+      resp1 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      assertEquals("Get blob properties on stopped store should fail", ServerErrorCode.Replica_Unavailable,
+          resp1.getPartitionResponseInfoList().get(0).getErrorCode());
+
+      // delete a blob on a stopped store, which should fail
+      DeleteRequest deleteRequest = new DeleteRequest(1, "deleteClient", blobId1, System.currentTimeMillis());
+      channel.send(deleteRequest);
+      stream = channel.receive().getInputStream();
+      DeleteResponse deleteResponse = DeleteResponse.readFrom(new DataInputStream(stream));
+      assertEquals("Delete blob on stopped store should fail", ServerErrorCode.Replica_Unavailable,
+          deleteResponse.getError());
+
+      // start the store via AdminRequest
+      System.out.println("Begin to restart the BlobStore");
+      adminRequest = new AdminRequest(AdminRequestOrResponseType.BlobStoreControl, partitionIds.get(0), 1, "clientid2");
+      controlRequest = new BlobStoreControlAdminRequest((short) 0, true, adminRequest);
+      channel.send(controlRequest);
+      stream = channel.receive().getInputStream();
+      adminResponse = AdminResponse.readFrom(new DataInputStream(stream));
+      assertEquals("Start store admin request should succeed", ServerErrorCode.No_Error, adminResponse.getError());
+      List<? extends ReplicaId> replicaIds = partitionIds.get(0).getReplicaIds();
+      for (ReplicaId replicaId : replicaIds) {
+        // forcibly mark replicas and disks as up.
+        MockReplicaId mockReplicaId = (MockReplicaId) replicaId;
+        mockReplicaId.markReplicaDownStatus(false);
+        ((MockDiskId) mockReplicaId.getDiskId()).setDiskState(HardwareState.AVAILABLE, false);
+      }
+
+      // put a blob on a restarted store , which should succeed
+      PutRequest putRequest5 =
+          new PutRequest(1, "client1", blobId5, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
+              properties.getBlobSize(), BlobType.DataBlob, testEncryption ? ByteBuffer.wrap(encryptionKey) : null);
+      channel.send(putRequest5);
+      putResponseStream = channel.receive().getInputStream();
+      PutResponse response5 = PutResponse.readFrom(new DataInputStream(putResponseStream));
+      assertEquals("Put blob on restarted store should succeed", ServerErrorCode.No_Error, response5.getError());
+
+      // get a blob on a restarted store , which should succeed
+      ids = new ArrayList<BlobId>();
+      PartitionId partitionId = clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
+      ids.add(blobId1);
+      partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
+      partitionRequestInfo = new PartitionRequestInfo(partitionId, ids);
+      partitionRequestInfoList.add(partitionRequestInfo);
+      getRequest1 = new GetRequest(1, "clientid1", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+      channel.send(getRequest1);
+      stream = channel.receive().getInputStream();
+      resp1 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      responseStream = resp1.getInputStream();
+      blobAll = MessageFormatRecord.deserializeBlobAll(responseStream, blobIdFactory);
+      actualBlobData = new byte[(int) blobAll.getBlobData().getSize()];
+      blobAll.getBlobData().getStream().getByteBuffer().get(actualBlobData);
+      Assert.assertArrayEquals("Content mismatch", data, actualBlobData);
+
+      // delete a blob on a restarted store , which should succeed
+      deleteRequest = new DeleteRequest(1, "deleteClient", blobId1, System.currentTimeMillis());
+      channel.send(deleteRequest);
+      stream = channel.receive().getInputStream();
+      deleteResponse = DeleteResponse.readFrom(new DataInputStream(stream));
+      assertEquals("Delete blob on restarted store should succeed", ServerErrorCode.No_Error,
+          deleteResponse.getError());
+
       channel.disconnect();
     } catch (Exception e) {
       e.printStackTrace();
       Assert.fail();
+    } finally {
+      List<? extends ReplicaId> replicaIds = cluster.getClusterMap()
+          .getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS)
+          .get(0)
+          .getReplicaIds();
+      for (ReplicaId replicaId : replicaIds) {
+        MockReplicaId mockReplicaId = (MockReplicaId) replicaId;
+        ((MockDiskId) mockReplicaId.getDiskId()).setDiskState(HardwareState.AVAILABLE, true);
+      }
     }
   }
 
@@ -394,592 +538,614 @@ public final class ServerTestUtil {
     assertEquals(expectedErrorCode, response.getError());
   }
 
-  protected static void endToEndReplicationWithMultiNodeMultiPartitionTest(int interestedDataNodePortNumber,
-      Port dataNode1Port, Port dataNode2Port, Port dataNode3Port, MockCluster cluster, SSLConfig clientSSLConfig1,
+  static void endToEndReplicationWithMultiNodeMultiPartitionTest(int interestedDataNodePortNumber, Port dataNode1Port,
+      Port dataNode2Port, Port dataNode3Port, MockCluster cluster, SSLConfig clientSSLConfig1,
       SSLConfig clientSSLConfig2, SSLConfig clientSSLConfig3, SSLSocketFactory clientSSLSocketFactory1,
       SSLSocketFactory clientSSLSocketFactory2, SSLSocketFactory clientSSLSocketFactory3,
-      MockNotificationSystem notificationSystem, boolean testEncryption)
-      throws InterruptedException, IOException, InstantiationException {
+      MockNotificationSystem notificationSystem, boolean testEncryption) throws Exception {
     // interestedDataNodePortNumber is used to locate the datanode and hence has to be PlainTextPort
-    try {
-      MockClusterMap clusterMap = cluster.getClusterMap();
-      BlobIdFactory blobIdFactory = new BlobIdFactory(clusterMap);
-      List<AmbryServer> serverList = cluster.getServers();
-      byte[] usermetadata = new byte[100];
-      byte[] data = new byte[100];
-      byte[] encryptionKey = null;
-      short accountId = Utils.getRandomShort(TestUtils.RANDOM);
-      short containerId = Utils.getRandomShort(TestUtils.RANDOM);
-      BlobProperties properties = new BlobProperties(100, "serviceid1", accountId, containerId, false);
-      TestUtils.RANDOM.nextBytes(usermetadata);
-      TestUtils.RANDOM.nextBytes(data);
-      if (testEncryption) {
-        encryptionKey = new byte[100];
-        TestUtils.RANDOM.nextBytes(encryptionKey);
+    MockClusterMap clusterMap = cluster.getClusterMap();
+    BlobIdFactory blobIdFactory = new BlobIdFactory(clusterMap);
+    List<AmbryServer> serverList = cluster.getServers();
+    byte[] usermetadata = new byte[100];
+    byte[] data = new byte[100];
+    byte[] encryptionKey = null;
+    short accountId = Utils.getRandomShort(TestUtils.RANDOM);
+    short containerId = Utils.getRandomShort(TestUtils.RANDOM);
+    BlobProperties properties =
+        new BlobProperties(100, "serviceid1", null, null, false, TestUtils.TTL_SECS, accountId, containerId, false);
+    long expectedExpiryTimeMs = getExpiryTimeMs(properties);
+    TestUtils.RANDOM.nextBytes(usermetadata);
+    TestUtils.RANDOM.nextBytes(data);
+    if (testEncryption) {
+      encryptionKey = new byte[100];
+      TestUtils.RANDOM.nextBytes(encryptionKey);
+    }
+
+    // connect to all the servers
+    BlockingChannel channel1 =
+        getBlockingChannelBasedOnPortType(dataNode1Port, "localhost", clientSSLSocketFactory1, clientSSLConfig1);
+    BlockingChannel channel2 =
+        getBlockingChannelBasedOnPortType(dataNode2Port, "localhost", clientSSLSocketFactory2, clientSSLConfig2);
+    BlockingChannel channel3 =
+        getBlockingChannelBasedOnPortType(dataNode3Port, "localhost", clientSSLSocketFactory3, clientSSLConfig3);
+
+    // put all the blobs to random servers
+    channel1.connect();
+    channel2.connect();
+    channel3.connect();
+
+    int noOfParallelThreads = 3;
+    CountDownLatch latch = new CountDownLatch(noOfParallelThreads);
+    List<DirectSender> runnables = new ArrayList<DirectSender>(noOfParallelThreads);
+    BlockingChannel channel = null;
+    for (int i = 0; i < noOfParallelThreads; i++) {
+      if (i % noOfParallelThreads == 0) {
+        channel = channel1;
+      } else if (i % noOfParallelThreads == 1) {
+        channel = channel2;
+      } else if (i % noOfParallelThreads == 2) {
+        channel = channel3;
+      }
+      DirectSender runnable =
+          new DirectSender(cluster, channel, 50, data, usermetadata, properties, encryptionKey, latch);
+      runnables.add(runnable);
+      Thread threadToRun = new Thread(runnable);
+      threadToRun.start();
+    }
+    assertTrue("Did not put all blobs in 2 minutes", latch.await(2, TimeUnit.MINUTES));
+
+    // wait till replication can complete
+    List<BlobId> blobIds = new ArrayList<BlobId>();
+    for (int i = 0; i < runnables.size(); i++) {
+      blobIds.addAll(runnables.get(i).getBlobIds());
+    }
+    for (BlobId blobId : blobIds) {
+      notificationSystem.awaitBlobCreations(blobId.getID());
+    }
+
+    // Now that the blob is created and replicated, test the cases where a put request arrives for the same blob id
+    // later than replication.
+    testLatePutRequest(blobIds.get(0), properties, usermetadata, data, encryptionKey, channel1, channel2, channel3,
+        ServerErrorCode.No_Error);
+    // Test the case where a put arrives with the same id as one in the server, but the blob is not identical.
+    BlobProperties differentProperties =
+        new BlobProperties(properties.getBlobSize(), properties.getServiceId(), accountId, containerId, testEncryption);
+    testLatePutRequest(blobIds.get(0), differentProperties, usermetadata, data, encryptionKey, channel1, channel2,
+        channel3, ServerErrorCode.Blob_Already_Exists);
+    byte[] differentUsermetadata = Arrays.copyOf(usermetadata, usermetadata.length);
+    differentUsermetadata[0] = (byte) ~differentUsermetadata[0];
+    testLatePutRequest(blobIds.get(0), properties, differentUsermetadata, data, encryptionKey, channel1, channel2,
+        channel3, ServerErrorCode.Blob_Already_Exists);
+    byte[] differentData = Arrays.copyOf(data, data.length);
+    differentData[0] = (byte) ~differentData[0];
+    testLatePutRequest(blobIds.get(0), properties, usermetadata, differentData, encryptionKey, channel1, channel2,
+        channel3, ServerErrorCode.Blob_Already_Exists);
+
+    // verify blob properties, metadata and blob across all nodes
+    for (int i = 0; i < 3; i++) {
+      channel = null;
+      if (i == 0) {
+        channel = channel1;
+      } else if (i == 1) {
+        channel = channel2;
+      } else if (i == 2) {
+        channel = channel3;
       }
 
-      // connect to all the servers
-      BlockingChannel channel1 =
-          getBlockingChannelBasedOnPortType(dataNode1Port, "localhost", clientSSLSocketFactory1, clientSSLConfig1);
-      BlockingChannel channel2 =
-          getBlockingChannelBasedOnPortType(dataNode2Port, "localhost", clientSSLSocketFactory2, clientSSLConfig2);
-      BlockingChannel channel3 =
-          getBlockingChannelBasedOnPortType(dataNode3Port, "localhost", clientSSLSocketFactory3, clientSSLConfig3);
-
-      // put all the blobs to random servers
-      channel1.connect();
-      channel2.connect();
-      channel3.connect();
-
-      int noOfParallelThreads = 3;
-      CountDownLatch latch = new CountDownLatch(noOfParallelThreads);
-      List<DirectSender> runnables = new ArrayList<DirectSender>(noOfParallelThreads);
-      BlockingChannel channel = null;
-      for (int i = 0; i < noOfParallelThreads; i++) {
-        if (i % noOfParallelThreads == 0) {
-          channel = channel1;
-        } else if (i % noOfParallelThreads == 1) {
-          channel = channel2;
-        } else if (i % noOfParallelThreads == 2) {
-          channel = channel3;
-        }
-        DirectSender runnable =
-            new DirectSender(cluster, channel, 50, data, usermetadata, properties, encryptionKey, latch);
-        runnables.add(runnable);
-        Thread threadToRun = new Thread(runnable);
-        threadToRun.start();
-      }
-      assertTrue("Did not put all blobs in 2 minutes", latch.await(2, TimeUnit.MINUTES));
-
-      // wait till replication can complete
-      List<BlobId> blobIds = new ArrayList<BlobId>();
-      for (int i = 0; i < runnables.size(); i++) {
-        blobIds.addAll(runnables.get(i).getBlobIds());
-      }
-      for (BlobId blobId : blobIds) {
-        notificationSystem.awaitBlobCreations(blobId.getID());
-      }
-
-      // Now that the blob is created and replicated, test the cases where a put request arrives for the same blob id
-      // later than replication.
-      testLatePutRequest(blobIds.get(0), properties, usermetadata, data, encryptionKey, channel1, channel2, channel3,
-          ServerErrorCode.No_Error);
-      // Test the case where a put arrives with the same id as one in the server, but the blob is not identical.
-      BlobProperties differentProperties =
-          new BlobProperties(properties.getBlobSize(), properties.getServiceId(), accountId, containerId,
-              testEncryption);
-      testLatePutRequest(blobIds.get(0), differentProperties, usermetadata, data, encryptionKey, channel1, channel2,
-          channel3, ServerErrorCode.Blob_Already_Exists);
-      byte[] differentUsermetadata = Arrays.copyOf(usermetadata, usermetadata.length);
-      differentUsermetadata[0] = (byte) ~differentUsermetadata[0];
-      testLatePutRequest(blobIds.get(0), properties, differentUsermetadata, data, encryptionKey, channel1, channel2,
-          channel3, ServerErrorCode.Blob_Already_Exists);
-      byte[] differentData = Arrays.copyOf(data, data.length);
-      differentData[0] = (byte) ~differentData[0];
-      testLatePutRequest(blobIds.get(0), properties, usermetadata, differentData, encryptionKey, channel1, channel2,
-          channel3, ServerErrorCode.Blob_Already_Exists);
-
-      // verify blob properties, metadata and blob across all nodes
-      for (int i = 0; i < 3; i++) {
-        channel = null;
-        if (i == 0) {
-          channel = channel1;
-        } else if (i == 1) {
-          channel = channel2;
-        } else if (i == 2) {
-          channel = channel3;
-        }
-
-        ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
-        for (int j = 0; j < blobIds.size(); j++) {
-          ArrayList<BlobId> ids = new ArrayList<BlobId>();
-          ids.add(blobIds.get(j));
-          partitionRequestInfoList.clear();
-          PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
-          partitionRequestInfoList.add(partitionRequestInfo);
-          GetRequest getRequest =
-              new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList,
-                  GetOption.None);
-          channel.send(getRequest);
-          InputStream stream = channel.receive().getInputStream();
-          GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-          try {
-            BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
-            assertEquals(100, propertyOutput.getBlobSize());
-            assertEquals("serviceid1", propertyOutput.getServiceId());
-            assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
-            assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-
-          // get user metadata
-          getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList,
-              GetOption.None);
-          channel.send(getRequest);
-          stream = channel.receive().getInputStream();
-          resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-          try {
-            ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
-            Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            e.printStackTrace();
-            Assert.fail();
-          }
-
-          // get blob
-          getRequest =
-              new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
-          channel.send(getRequest);
-          stream = channel.receive().getInputStream();
-          resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-          try {
-            BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
-            byte[] blobout = new byte[(int) blobData.getSize()];
-            int readsize = 0;
-            while (readsize < blobData.getSize()) {
-              readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            e.printStackTrace();
-            Assert.fail();
-          }
-
-          // get blob all
-          getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
-          channel.send(getRequest);
-          stream = channel.receive().getInputStream();
-          resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-          try {
-            BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
-            byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
-            int readsize = 0;
-            while (readsize < blobAll.getBlobData().getSize()) {
-              readsize += blobAll.getBlobData()
-                  .getStream()
-                  .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
-              Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
-            } else {
-              Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
-            }
-          } catch (MessageFormatException e) {
-            e.printStackTrace();
-            Assert.fail();
-          }
-        }
-      }
-
-      // delete random blobs, wait for replication and ensure it is deleted in all nodes
-
-      Set<BlobId> blobsDeleted = new HashSet<BlobId>();
-      Set<BlobId> blobsChecked = new HashSet<BlobId>();
-      for (int i = 0; i < blobIds.size(); i++) {
-        int j = new Random().nextInt(3);
-        if (j == 0) {
-          j = new Random().nextInt(3);
-          if (j == 0) {
-            channel = channel1;
-          } else if (j == 1) {
-            channel = channel2;
-          } else if (j == 2) {
-            channel = channel3;
-          }
-          DeleteRequest deleteRequest = new DeleteRequest(1, "reptest", blobIds.get(i), System.currentTimeMillis());
-          channel.send(deleteRequest);
-          InputStream deleteResponseStream = channel.receive().getInputStream();
-          DeleteResponse deleteResponse = DeleteResponse.readFrom(new DataInputStream(deleteResponseStream));
-          assertEquals(ServerErrorCode.No_Error, deleteResponse.getError());
-          blobsDeleted.add(blobIds.get(i));
-        }
-      }
-
-      Iterator<BlobId> iterator = blobsDeleted.iterator();
       ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
-      while (iterator.hasNext()) {
-        BlobId deletedId = iterator.next();
-        notificationSystem.awaitBlobDeletions(deletedId.getID());
-        for (int j = 0; j < 3; j++) {
-          if (j == 0) {
-            channel = channel1;
-          } else if (j == 1) {
-            channel = channel2;
-          } else if (j == 2) {
-            channel = channel3;
-          }
+      for (int j = 0; j < blobIds.size(); j++) {
+        ArrayList<BlobId> ids = new ArrayList<BlobId>();
+        ids.add(blobIds.get(j));
+        partitionRequestInfoList.clear();
+        PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
+        partitionRequestInfoList.add(partitionRequestInfo);
+        GetRequest getRequest =
+            new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
+        channel.send(getRequest);
+        InputStream stream = channel.receive().getInputStream();
+        GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+        try {
+          BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
+          assertEquals(100, propertyOutput.getBlobSize());
+          assertEquals("serviceid1", propertyOutput.getServiceId());
+          assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
+          assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
+          assertEquals("Expiration time mismatch (props)", expectedExpiryTimeMs, getExpiryTimeMs(propertyOutput));
+          assertEquals("Expiration time mismatch (MessageInfo)", expectedExpiryTimeMs,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
 
-          ArrayList<BlobId> ids = new ArrayList<BlobId>();
-          ids.add(deletedId);
-          partitionRequestInfoList.clear();
-          PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(deletedId.getPartition(), ids);
-          partitionRequestInfoList.add(partitionRequestInfo);
-          GetRequest getRequest =
-              new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
-          channel.send(getRequest);
-          InputStream stream = channel.receive().getInputStream();
-          GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-          assertEquals(ServerErrorCode.Blob_Deleted, resp.getPartitionResponseInfoList().get(0).getErrorCode());
+        // get user metadata
+        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList,
+            GetOption.None);
+        channel.send(getRequest);
+        stream = channel.receive().getInputStream();
+        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+        try {
+          ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
+          Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+          assertEquals("Expiration time mismatch (MessageInfo)", expectedExpiryTimeMs,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          e.printStackTrace();
+          Assert.fail();
+        }
+
+        // get blob
+        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
+        channel.send(getRequest);
+        stream = channel.receive().getInputStream();
+        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+        try {
+          BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
+          byte[] blobout = new byte[(int) blobData.getSize()];
+          int readsize = 0;
+          while (readsize < blobData.getSize()) {
+            readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+          assertEquals("Expiration time mismatch (MessageInfo)", expectedExpiryTimeMs,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          e.printStackTrace();
+          Assert.fail();
+        }
+
+        // get blob all
+        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+        channel.send(getRequest);
+        stream = channel.receive().getInputStream();
+        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+        try {
+          BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
+          assertEquals("Expiration time mismatch (props)", expectedExpiryTimeMs,
+              getExpiryTimeMs(blobAll.getBlobInfo().getBlobProperties()));
+          assertEquals("Expiration time mismatch (MessageInfo)", expectedExpiryTimeMs,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+          byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
+          int readsize = 0;
+          while (readsize < blobAll.getBlobData().getSize()) {
+            readsize += blobAll.getBlobData()
+                .getStream()
+                .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
+            Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
+          } else {
+            Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
+          }
+        } catch (MessageFormatException e) {
+          e.printStackTrace();
+          Assert.fail();
+        }
+      }
+    }
+
+    // ttl update all blobs and wait for replication
+    Map<BlockingChannel, List<BlobId>> channelToBlobIds = new HashMap<>();
+    for (int i = 0; i < blobIds.size(); i++) {
+      final BlobId blobId = blobIds.get(i);
+      if (i % 3 == 0) {
+        channelToBlobIds.computeIfAbsent(channel1, updateChannel -> new ArrayList<>()).add(blobId);
+      } else if (i % 3 == 1) {
+        channelToBlobIds.computeIfAbsent(channel2, updateChannel -> new ArrayList<>()).add(blobId);
+      } else {
+        channelToBlobIds.computeIfAbsent(channel3, updateChannel -> new ArrayList<>()).add(blobId);
+      }
+    }
+
+    channelToBlobIds.entrySet().stream().map(entry -> CompletableFuture.supplyAsync(() -> {
+      try {
+        for (BlobId blobId : entry.getValue()) {
+          updateBlobTtl(entry.getKey(), blobId);
+        }
+        return null;
+      } catch (Throwable e) {
+        throw new RuntimeException("Exception updating ttl for: " + entry, e);
+      }
+    })).forEach(CompletableFuture::join);
+
+    // check that the TTL update has propagated
+    blobIds.forEach(blobId -> notificationSystem.awaitBlobUpdates(blobId.getID(), UpdateType.TTL_UPDATE));
+    // check all servers
+    for (BlockingChannel channelToUse : new BlockingChannel[]{channel1, channel2, channel3}) {
+      for (BlobId blobId : blobIds) {
+        checkTtlUpdateStatus(channelToUse, clusterMap, blobIdFactory, blobId, data, true, Utils.Infinite_Time);
+      }
+    }
+
+    // delete random blobs, wait for replication and ensure it is deleted in all nodes
+
+    Set<BlobId> blobsDeleted = new HashSet<BlobId>();
+    Set<BlobId> blobsChecked = new HashSet<BlobId>();
+    for (int i = 0; i < blobIds.size(); i++) {
+      int j = new Random().nextInt(3);
+      if (j == 0) {
+        j = new Random().nextInt(3);
+        if (j == 0) {
+          channel = channel1;
+        } else if (j == 1) {
+          channel = channel2;
+        } else if (j == 2) {
+          channel = channel3;
+        }
+        DeleteRequest deleteRequest = new DeleteRequest(1, "reptest", blobIds.get(i), System.currentTimeMillis());
+        channel.send(deleteRequest);
+        InputStream deleteResponseStream = channel.receive().getInputStream();
+        DeleteResponse deleteResponse = DeleteResponse.readFrom(new DataInputStream(deleteResponseStream));
+        assertEquals(ServerErrorCode.No_Error, deleteResponse.getError());
+        blobsDeleted.add(blobIds.get(i));
+      }
+    }
+
+    Iterator<BlobId> iterator = blobsDeleted.iterator();
+    ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
+    while (iterator.hasNext()) {
+      BlobId deletedId = iterator.next();
+      notificationSystem.awaitBlobDeletions(deletedId.getID());
+      for (int j = 0; j < 3; j++) {
+        if (j == 0) {
+          channel = channel1;
+        } else if (j == 1) {
+          channel = channel2;
+        } else if (j == 2) {
+          channel = channel3;
+        }
+
+        ArrayList<BlobId> ids = new ArrayList<BlobId>();
+        ids.add(deletedId);
+        partitionRequestInfoList.clear();
+        PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(deletedId.getPartition(), ids);
+        partitionRequestInfoList.add(partitionRequestInfo);
+        GetRequest getRequest =
+            new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
+        channel.send(getRequest);
+        InputStream stream = channel.receive().getInputStream();
+        GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+        assertEquals(ServerErrorCode.Blob_Deleted, resp.getPartitionResponseInfoList().get(0).getErrorCode());
+      }
+    }
+
+    // take a server down, clean up a mount path, start and ensure replication fixes it
+    serverList.get(0).shutdown();
+    serverList.get(0).awaitShutdown();
+
+    MockDataNodeId dataNode = (MockDataNodeId) clusterMap.getDataNodeId("localhost", interestedDataNodePortNumber);
+    System.out.println("Cleaning mount path " + dataNode.getMountPaths().get(0));
+    for (ReplicaId replicaId : clusterMap.getReplicaIds(dataNode)) {
+      if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(0)) == 0) {
+        System.out.println("Cleaning partition " + replicaId.getPartitionId());
+      }
+    }
+    deleteFolderContent(new File(dataNode.getMountPaths().get(0)), false);
+    for (int i = 0; i < blobIds.size(); i++) {
+      for (ReplicaId replicaId : blobIds.get(i).getPartition().getReplicaIds()) {
+        if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(0)) == 0) {
+          if (blobsDeleted.contains(blobIds.get(i))) {
+            notificationSystem.decrementDeletedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
+                dataNode.getPort());
+          } else {
+            notificationSystem.decrementCreatedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
+                dataNode.getPort());
+            notificationSystem.decrementUpdatedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
+                dataNode.getPort(), UpdateType.TTL_UPDATE);
+          }
+        }
+      }
+    }
+    serverList.get(0).startup();
+
+    channel1.disconnect();
+    channel1.connect();
+
+    for (int j = 0; j < blobIds.size(); j++) {
+      if (blobsDeleted.contains(blobIds.get(j))) {
+        notificationSystem.awaitBlobDeletions(blobIds.get(j).getID());
+      } else {
+        notificationSystem.awaitBlobCreations(blobIds.get(j).getID());
+        notificationSystem.awaitBlobUpdates(blobIds.get(j).getID(), UpdateType.TTL_UPDATE);
+      }
+      ArrayList<BlobId> ids = new ArrayList<BlobId>();
+      ids.add(blobIds.get(j));
+      partitionRequestInfoList.clear();
+      PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
+      partitionRequestInfoList.add(partitionRequestInfo);
+      GetRequest getRequest =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      InputStream stream = channel1.receive().getInputStream();
+      GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
+      } else {
+        try {
+          BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
+          assertEquals(100, propertyOutput.getBlobSize());
+          assertEquals("serviceid1", propertyOutput.getServiceId());
+          assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
+          assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
+          assertEquals("Expiration time mismatch in MessageInfo", Utils.Infinite_Time,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          Assert.fail();
         }
       }
 
-      // take a server down, clean up a mount path, start and ensure replication fixes it
-      serverList.get(0).shutdown();
-      serverList.get(0).awaitShutdown();
+      // get user metadata
+      getRequest =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
+      } else {
+        try {
+          ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
+          Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+          assertEquals("Expiration time mismatch in MessageInfo", Utils.Infinite_Time,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
 
-      MockDataNodeId dataNode = (MockDataNodeId) clusterMap.getDataNodeId("localhost", interestedDataNodePortNumber);
-      System.out.println("Cleaning mount path " + dataNode.getMountPaths().get(0));
+      // get blob
+      getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
+      } else {
+        try {
+          BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
+          byte[] blobout = new byte[(int) blobData.getSize()];
+          int readsize = 0;
+          while (readsize < blobData.getSize()) {
+            readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+          assertEquals("Expiration time mismatch in MessageInfo", Utils.Infinite_Time,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+
+      // get blob all
+      getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
+        blobsDeleted.remove(blobIds.get(j));
+        blobsChecked.add(blobIds.get(j));
+      } else {
+        try {
+          BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
+          byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
+          int readsize = 0;
+          while (readsize < blobAll.getBlobData().getSize()) {
+            readsize += blobAll.getBlobData()
+                .getStream()
+                .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
+            Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
+          } else {
+            Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
+          }
+          assertEquals("Expiration time mismatch in MessageInfo", Utils.Infinite_Time,
+              resp.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0).getExpirationTimeInMs());
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+    }
+    assertEquals(0, blobsDeleted.size());
+    // take a server down, clean all contents, start and ensure replication fixes it
+    serverList.get(0).shutdown();
+    serverList.get(0).awaitShutdown();
+
+    dataNode = (MockDataNodeId) clusterMap.getDataNodeId("localhost", interestedDataNodePortNumber);
+    for (int i = 0; i < dataNode.getMountPaths().size(); i++) {
+      System.out.println("Cleaning mount path " + dataNode.getMountPaths().get(i));
       for (ReplicaId replicaId : clusterMap.getReplicaIds(dataNode)) {
-        if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(0)) == 0) {
+        if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(i)) == 0) {
           System.out.println("Cleaning partition " + replicaId.getPartitionId());
         }
       }
-      deleteFolderContent(new File(dataNode.getMountPaths().get(0)), false);
-      for (int i = 0; i < blobIds.size(); i++) {
-        for (ReplicaId replicaId : blobIds.get(i).getPartition().getReplicaIds()) {
-          if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(0)) == 0) {
-            if (blobsDeleted.contains(blobIds.get(i))) {
-              notificationSystem.decrementDeletedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
-                  dataNode.getPort());
-            } else {
-              notificationSystem.decrementCreatedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
-                  dataNode.getPort());
-            }
-          }
-        }
-      }
-      serverList.get(0).startup();
-
-      channel1.disconnect();
-      channel1.connect();
-
-      for (int j = 0; j < blobIds.size(); j++) {
-        if (blobsDeleted.contains(blobIds.get(j))) {
-          notificationSystem.awaitBlobDeletions(blobIds.get(j).getID());
-        } else {
-          notificationSystem.awaitBlobCreations(blobIds.get(j).getID());
-        }
-        ArrayList<BlobId> ids = new ArrayList<BlobId>();
-        ids.add(blobIds.get(j));
-        partitionRequestInfoList.clear();
-        PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
-        partitionRequestInfoList.add(partitionRequestInfo);
-        GetRequest getRequest =
-            new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        InputStream stream = channel1.receive().getInputStream();
-        GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
-        } else {
-          try {
-            BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
-            assertEquals(100, propertyOutput.getBlobSize());
-            assertEquals("serviceid1", propertyOutput.getServiceId());
-            assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
-            assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get user metadata
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList,
-            GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
-        } else {
-          try {
-            ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
-            Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get blob
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
-        } else {
-          try {
-            BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
-            byte[] blobout = new byte[(int) blobData.getSize()];
-            int readsize = 0;
-            while (readsize < blobData.getSize()) {
-              readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get blob all
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsDeleted.contains(blobIds.get(j)));
-          blobsDeleted.remove(blobIds.get(j));
-          blobsChecked.add(blobIds.get(j));
-        } else {
-          try {
-            BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
-            byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
-            int readsize = 0;
-            while (readsize < blobAll.getBlobData().getSize()) {
-              readsize += blobAll.getBlobData()
-                  .getStream()
-                  .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
-              Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
-            } else {
-              Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-      }
-      assertEquals(0, blobsDeleted.size());
-      // take a server down, clean all contents, start and ensure replication fixes it
-      serverList.get(0).shutdown();
-      serverList.get(0).awaitShutdown();
-
-      dataNode = (MockDataNodeId) clusterMap.getDataNodeId("localhost", interestedDataNodePortNumber);
-      for (int i = 0; i < dataNode.getMountPaths().size(); i++) {
-        System.out.println("Cleaning mount path " + dataNode.getMountPaths().get(i));
-        for (ReplicaId replicaId : clusterMap.getReplicaIds(dataNode)) {
-          if (replicaId.getMountPath().compareToIgnoreCase(dataNode.getMountPaths().get(i)) == 0) {
-            System.out.println("Cleaning partition " + replicaId.getPartitionId());
-          }
-        }
-        deleteFolderContent(new File(dataNode.getMountPaths().get(i)), false);
-      }
-      for (int i = 0; i < blobIds.size(); i++) {
-        if (blobsChecked.contains(blobIds.get(i))) {
-          notificationSystem.decrementDeletedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
-              dataNode.getPort());
-        } else {
-          notificationSystem.decrementCreatedReplica(blobIds.get(i).getID(), dataNode.getHostname(),
-              dataNode.getPort());
-        }
-      }
-      serverList.get(0).startup();
-
-      channel1.disconnect();
-      channel1.connect();
-
-      for (int j = 0; j < blobIds.size(); j++) {
-        if (blobsChecked.contains(blobIds.get(j))) {
-          notificationSystem.awaitBlobDeletions(blobIds.get(j).getID());
-        } else {
-          notificationSystem.awaitBlobCreations(blobIds.get(j).getID());
-        }
-        ArrayList<BlobId> ids = new ArrayList<BlobId>();
-        ids.add(blobIds.get(j));
-        partitionRequestInfoList.clear();
-        PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
-        partitionRequestInfoList.add(partitionRequestInfo);
-        GetRequest getRequest =
-            new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        InputStream stream = channel1.receive().getInputStream();
-        GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
-        } else {
-          try {
-            BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
-            assertEquals(100, propertyOutput.getBlobSize());
-            assertEquals("serviceid1", propertyOutput.getServiceId());
-            assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
-            assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get user metadata
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList,
-            GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
-        } else {
-          try {
-            ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
-            Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get blob
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
-        } else {
-          try {
-            BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
-            byte[] blobout = new byte[(int) blobData.getSize()];
-            int readsize = 0;
-            while (readsize < blobData.getSize()) {
-              readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              assertNotNull("MessageMetadata should not have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-              assertArrayEquals("EncryptionKey mismatch", encryptionKey, resp.getPartitionResponseInfoList()
-                  .get(0)
-                  .getMessageMetadataList()
-                  .get(0)
-                  .getEncryptionKey()
-                  .array());
-            } else {
-              assertNull("MessageMetadata should have been null",
-                  resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-
-        // get blob all
-        getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
-        channel1.send(getRequest);
-        stream = channel1.receive().getInputStream();
-        resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
-        if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
-            || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
-          Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
-          blobsChecked.remove(blobIds.get(j));
-        } else {
-          try {
-            BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
-            byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
-            int readsize = 0;
-            while (readsize < blobAll.getBlobData().getSize()) {
-              readsize += blobAll.getBlobData()
-                  .getStream()
-                  .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
-            }
-            Assert.assertArrayEquals(data, blobout);
-            if (testEncryption) {
-              Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
-              Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
-            } else {
-              Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
-            }
-          } catch (MessageFormatException e) {
-            Assert.fail();
-          }
-        }
-      }
-      assertEquals(0, blobsChecked.size());
-
-      channel1.disconnect();
-      channel2.disconnect();
-      channel3.disconnect();
-    } catch (Exception e) {
-      e.printStackTrace();
-      Assert.fail();
+      deleteFolderContent(new File(dataNode.getMountPaths().get(i)), false);
     }
+    for (int i = 0; i < blobIds.size(); i++) {
+      if (blobsChecked.contains(blobIds.get(i))) {
+        notificationSystem.decrementDeletedReplica(blobIds.get(i).getID(), dataNode.getHostname(), dataNode.getPort());
+      } else {
+        notificationSystem.decrementCreatedReplica(blobIds.get(i).getID(), dataNode.getHostname(), dataNode.getPort());
+      }
+    }
+    serverList.get(0).startup();
+
+    channel1.disconnect();
+    channel1.connect();
+
+    for (int j = 0; j < blobIds.size(); j++) {
+      if (blobsChecked.contains(blobIds.get(j))) {
+        notificationSystem.awaitBlobDeletions(blobIds.get(j).getID());
+      } else {
+        notificationSystem.awaitBlobCreations(blobIds.get(j).getID());
+      }
+      ArrayList<BlobId> ids = new ArrayList<BlobId>();
+      ids.add(blobIds.get(j));
+      partitionRequestInfoList.clear();
+      PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(blobIds.get(j).getPartition(), ids);
+      partitionRequestInfoList.add(partitionRequestInfo);
+      GetRequest getRequest =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      InputStream stream = channel1.receive().getInputStream();
+      GetResponse resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
+      } else {
+        try {
+          BlobProperties propertyOutput = MessageFormatRecord.deserializeBlobProperties(resp.getInputStream());
+          assertEquals(100, propertyOutput.getBlobSize());
+          assertEquals("serviceid1", propertyOutput.getServiceId());
+          assertEquals("AccountId mismatch", accountId, propertyOutput.getAccountId());
+          assertEquals("ContainerId mismatch", containerId, propertyOutput.getContainerId());
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+
+      // get user metadata
+      getRequest =
+          new GetRequest(1, "clientid2", MessageFormatFlags.BlobUserMetadata, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
+      } else {
+        try {
+          ByteBuffer userMetadataOutput = MessageFormatRecord.deserializeUserMetadata(resp.getInputStream());
+          Assert.assertArrayEquals(usermetadata, userMetadataOutput.array());
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+
+      // get blob
+      getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.Blob, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
+      } else {
+        try {
+          BlobData blobData = MessageFormatRecord.deserializeBlob(resp.getInputStream());
+          byte[] blobout = new byte[(int) blobData.getSize()];
+          int readsize = 0;
+          while (readsize < blobData.getSize()) {
+            readsize += blobData.getStream().read(blobout, readsize, (int) blobData.getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            assertNotNull("MessageMetadata should not have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+            assertArrayEquals("EncryptionKey mismatch", encryptionKey,
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0).getEncryptionKey().array());
+          } else {
+            assertNull("MessageMetadata should have been null",
+                resp.getPartitionResponseInfoList().get(0).getMessageMetadataList().get(0));
+          }
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+
+      // get blob all
+      getRequest = new GetRequest(1, "clientid2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+      channel1.send(getRequest);
+      stream = channel1.receive().getInputStream();
+      resp = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+      if (resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Deleted
+          || resp.getPartitionResponseInfoList().get(0).getErrorCode() == ServerErrorCode.Blob_Not_Found) {
+        Assert.assertTrue(blobsChecked.contains(blobIds.get(j)));
+        blobsChecked.remove(blobIds.get(j));
+      } else {
+        try {
+          BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(resp.getInputStream(), blobIdFactory);
+          byte[] blobout = new byte[(int) blobAll.getBlobData().getSize()];
+          int readsize = 0;
+          while (readsize < blobAll.getBlobData().getSize()) {
+            readsize += blobAll.getBlobData()
+                .getStream()
+                .read(blobout, readsize, (int) blobAll.getBlobData().getSize() - readsize);
+          }
+          Assert.assertArrayEquals(data, blobout);
+          if (testEncryption) {
+            Assert.assertNotNull("EncryptionKey should not ne null", blobAll.getBlobEncryptionKey());
+            Assert.assertArrayEquals("EncryptionKey mismatch", encryptionKey, blobAll.getBlobEncryptionKey().array());
+          } else {
+            Assert.assertNull("EncryptionKey should have been null", blobAll.getBlobEncryptionKey());
+          }
+        } catch (MessageFormatException e) {
+          Assert.fail();
+        }
+      }
+    }
+    assertEquals(0, blobsChecked.size());
+
+    channel1.disconnect();
+    channel2.disconnect();
+    channel3.disconnect();
   }
 
-  protected static void endToEndReplicationWithMultiNodeMultiPartitionMultiDCTest(String sourceDatacenter,
+  static void endToEndReplicationWithMultiNodeMultiPartitionMultiDCTest(String sourceDatacenter,
       String sslEnabledDatacenters, PortType portType, MockCluster cluster, MockNotificationSystem notificationSystem,
       Properties routerProps) throws Exception {
     Properties props = new Properties();
@@ -993,8 +1159,9 @@ public final class ServerTestUtil {
     props.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
     props.putAll(routerProps);
     VerifiableProperties verifiableProperties = new VerifiableProperties(props);
+    AccountService accountService = new InMemAccountService(false, true);
     Router router = new NonBlockingRouterFactory(verifiableProperties, cluster.getClusterMap(), notificationSystem,
-        getSSLFactoryIfRequired(verifiableProperties)).getRouter();
+        getSSLFactoryIfRequired(verifiableProperties), accountService).getRouter();
     int numberOfRequestsToSend = 15;
     int numberOfVerifierThreads = 3;
     final LinkedBlockingQueue<Payload> payloadQueue = new LinkedBlockingQueue<Payload>();
@@ -1006,7 +1173,7 @@ public final class ServerTestUtil {
     for (int i = 0; i < numberOfRequestsToSend; i++) {
       int size = new Random().nextInt(5000);
       final BlobProperties properties =
-          new BlobProperties(size, "service1", "owner id check", "image/jpeg", false, Utils.Infinite_Time, accountId,
+          new BlobProperties(size, "service1", "owner id check", "image/jpeg", false, TestUtils.TTL_SECS, accountId,
               containerId, false);
       final byte[] metadata = new byte[new Random().nextInt(1000)];
       final byte[] blob = new byte[size];
@@ -1014,7 +1181,7 @@ public final class ServerTestUtil {
       TestUtils.RANDOM.nextBytes(blob);
       Future<String> future =
           router.putBlob(properties, metadata, new ByteBufferReadableStreamChannel(ByteBuffer.wrap(blob)),
-              new Callback<String>() {
+              new PutBlobOptionsBuilder().build(), new Callback<String>() {
                 @Override
                 public void onCompletion(String result, Exception exception) {
                   if (exception == null) {
@@ -1028,12 +1195,17 @@ public final class ServerTestUtil {
       putFutures.add(future);
     }
     for (Future<String> future : putFutures) {
-      future.get(1, TimeUnit.SECONDS);
+      future.get(20, TimeUnit.SECONDS);
     }
     assertTrue("Did not receive all callbacks in time", callbackLatch.await(1, TimeUnit.SECONDS));
     if (exceptionRef.get() != null) {
       throw exceptionRef.get();
     }
+    // put away for future use
+    Payload payload1 = payloadQueue.peek();
+    MockClusterMap clusterMap = cluster.getClusterMap();
+    BlobId blobId1 = new BlobId(payload1.blobId, clusterMap);
+
     assertEquals("Did not put expected number of blobs", numberOfRequestsToSend, payloadQueue.size());
     Properties sslProps = new Properties();
     sslProps.putAll(routerProps);
@@ -1041,10 +1213,11 @@ public final class ServerTestUtil {
     sslProps.setProperty("clustermap.cluster.name", "test");
     sslProps.setProperty("clustermap.datacenter.name", sourceDatacenter);
     sslProps.setProperty("clustermap.host.name", "localhost");
+    sslProps.setProperty("connectionpool.read.timeout.ms", "15000");
     VerifiableProperties vProps = new VerifiableProperties(sslProps);
     ConnectionPool connectionPool =
-        new BlockingChannelConnectionPool(new ConnectionPoolConfig(new VerifiableProperties(new Properties())),
-            new SSLConfig(vProps), new ClusterMapConfig(vProps), new MetricRegistry());
+        new BlockingChannelConnectionPool(new ConnectionPoolConfig(vProps), new SSLConfig(vProps),
+            new ClusterMapConfig(vProps), new MetricRegistry());
     CountDownLatch verifierLatch = new CountDownLatch(numberOfVerifierThreads);
     AtomicInteger totalRequests = new AtomicInteger(numberOfRequestsToSend);
     AtomicInteger verifiedRequests = new AtomicInteger(0);
@@ -1056,17 +1229,119 @@ public final class ServerTestUtil {
       thread.start();
     }
     assertTrue("Did not verify in 2 minutes", verifierLatch.await(2, TimeUnit.MINUTES));
-
     assertEquals(totalRequests.get(), verifiedRequests.get());
+
+    BlobIdFactory blobIdFactory = new BlobIdFactory(clusterMap);
+    MockDataNodeId dataNodeId = clusterMap.getDataNodes().get(0);
+    Port port = new Port(portType == PortType.PLAINTEXT ? dataNodeId.getPort() : dataNodeId.getSSLPort(), portType);
+    ConnectedChannel channel = connectionPool.checkOutConnection("localhost", port, 10000);
+    PartitionId partitionId = blobId1.getPartition();
+
+    // stop the store via AdminRequest
+    System.out.println("Begin to stop a BlobStore");
+    AdminRequest adminRequest =
+        new AdminRequest(AdminRequestOrResponseType.BlobStoreControl, partitionId, 1, "clientid2");
+    BlobStoreControlAdminRequest controlRequest = new BlobStoreControlAdminRequest((short) 0, false, adminRequest);
+    channel.send(controlRequest);
+    InputStream stream = channel.receive().getInputStream();
+    AdminResponse adminResponse = AdminResponse.readFrom(new DataInputStream(stream));
+    assertEquals("Stop store admin request should succeed", ServerErrorCode.No_Error, adminResponse.getError());
+
+    // put a blob on a stopped store, which should fail
+    byte[] usermetadata = new byte[1000];
+    byte[] data = new byte[3187];
+    BlobProperties properties = new BlobProperties(3187, "serviceid1", accountId, containerId, false);
+    BlobId blobId2 = new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
+        clusterMap.getLocalDatacenterId(), accountId, containerId, partitionId, false, BlobId.BlobDataType.DATACHUNK);
+    PutRequest putRequest2 =
+        new PutRequest(1, "clientId2", blobId2, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
+            properties.getBlobSize(), BlobType.DataBlob, null);
+    channel.send(putRequest2);
+    InputStream putResponseStream = channel.receive().getInputStream();
+    PutResponse response2 = PutResponse.readFrom(new DataInputStream(putResponseStream));
+    assertEquals("Put blob on stopped store should fail", ServerErrorCode.Replica_Unavailable, response2.getError());
+
+    // get a blob properties on a stopped store, which should fail
+    ArrayList<BlobId> ids = new ArrayList<BlobId>();
+    ids.add(blobId1);
+    ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
+    PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(partitionId, ids);
+    partitionRequestInfoList.add(partitionRequestInfo);
+    GetRequest getRequest1 =
+        new GetRequest(1, "clientId1", MessageFormatFlags.BlobProperties, partitionRequestInfoList, GetOption.None);
+    channel.send(getRequest1);
+    stream = channel.receive().getInputStream();
+    GetResponse resp1 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+    assertEquals("Get blob properties on stopped store should fail", ServerErrorCode.Replica_Unavailable,
+        resp1.getPartitionResponseInfoList().get(0).getErrorCode());
+
+    // delete a blob on a stopped store, which should fail
+    DeleteRequest deleteRequest = new DeleteRequest(1, "clientId1", blobId1, System.currentTimeMillis());
+    channel.send(deleteRequest);
+    stream = channel.receive().getInputStream();
+    DeleteResponse deleteResponse = DeleteResponse.readFrom(new DataInputStream(stream));
+    assertEquals("Delete blob on stopped store should fail", ServerErrorCode.Replica_Unavailable,
+        deleteResponse.getError());
+
+    // start the store via AdminRequest
+    System.out.println("Begin to restart the BlobStore");
+    adminRequest = new AdminRequest(AdminRequestOrResponseType.BlobStoreControl, partitionId, 1, "clientId");
+    controlRequest = new BlobStoreControlAdminRequest((short) 0, true, adminRequest);
+    channel.send(controlRequest);
+    stream = channel.receive().getInputStream();
+    adminResponse = AdminResponse.readFrom(new DataInputStream(stream));
+    assertEquals("Start store admin request should succeed", ServerErrorCode.No_Error, adminResponse.getError());
+    List<? extends ReplicaId> replicaIds = partitionId.getReplicaIds();
+    for (ReplicaId replicaId : replicaIds) {
+      // forcibly mark replicas and disks as up.
+      MockReplicaId mockReplicaId = (MockReplicaId) replicaId;
+      mockReplicaId.markReplicaDownStatus(false);
+      ((MockDiskId) mockReplicaId.getDiskId()).setDiskState(HardwareState.AVAILABLE, false);
+    }
+
+    // put a blob on a restarted store , which should succeed
+    putRequest2 =
+        new PutRequest(1, "clientId2", blobId2, properties, ByteBuffer.wrap(usermetadata), ByteBuffer.wrap(data),
+            properties.getBlobSize(), BlobType.DataBlob, null);
+    channel.send(putRequest2);
+    putResponseStream = channel.receive().getInputStream();
+    response2 = PutResponse.readFrom(new DataInputStream(putResponseStream));
+    assertEquals("Put blob on restarted store should succeed", ServerErrorCode.No_Error, response2.getError());
+    // verify the put blob has been replicated successfully.
+    notificationSystem.awaitBlobCreations(blobId2.getID());
+
+    // get a blob on a restarted store , which should succeed
+    ids = new ArrayList<BlobId>();
+    ids.add(blobId2);
+    partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
+    partitionRequestInfo = new PartitionRequestInfo(partitionId, ids);
+    partitionRequestInfoList.add(partitionRequestInfo);
+    GetRequest getRequest2 =
+        new GetRequest(1, "clientId2", MessageFormatFlags.All, partitionRequestInfoList, GetOption.None);
+    channel.send(getRequest2);
+    stream = channel.receive().getInputStream();
+    GetResponse resp2 = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+    InputStream responseStream = resp2.getInputStream();
+    BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(responseStream, blobIdFactory);
+    byte[] actualBlobData = new byte[(int) blobAll.getBlobData().getSize()];
+    blobAll.getBlobData().getStream().getByteBuffer().get(actualBlobData);
+    Assert.assertArrayEquals("Content mismatch", data, actualBlobData);
+
+    // delete a blob on a restarted store , which should succeed
+    deleteRequest = new DeleteRequest(1, "clientId2", blobId2, System.currentTimeMillis());
+    channel.send(deleteRequest);
+    stream = channel.receive().getInputStream();
+    deleteResponse = DeleteResponse.readFrom(new DataInputStream(stream));
+    assertEquals("Delete blob on restarted store should succeed", ServerErrorCode.No_Error, deleteResponse.getError());
+
     router.close();
     connectionPool.shutdown();
   }
 
-  protected static void endToEndReplicationWithMultiNodeSinglePartitionTest(String routerDatacenter,
-      String sslEnabledDatacenters, int interestedDataNodePortNumber, Port dataNode1Port, Port dataNode2Port,
-      Port dataNode3Port, MockCluster cluster, SSLConfig clientSSLConfig1, SSLSocketFactory clientSSLSocketFactory1,
-      MockNotificationSystem notificationSystem, Properties routerProps, boolean testEncryption)
-      throws InterruptedException, IOException, InstantiationException {
+  static void endToEndReplicationWithMultiNodeSinglePartitionTest(String routerDatacenter,
+      int interestedDataNodePortNumber, Port dataNode1Port, Port dataNode2Port, Port dataNode3Port, MockCluster cluster,
+      SSLConfig clientSSLConfig1, SSLSocketFactory clientSSLSocketFactory1, MockNotificationSystem notificationSystem,
+      Properties routerProps, boolean testEncryption) {
     // interestedDataNodePortNumber is used to locate the datanode and hence has to be PlainText port
     try {
       int expectedTokenSize = 0;
@@ -1078,14 +1353,17 @@ public final class ServerTestUtil {
       ArrayList<byte[]> encryptionKeyList = new ArrayList<>();
       byte[] usermetadata = new byte[1000];
       TestUtils.RANDOM.nextBytes(usermetadata);
-      PartitionId partition = clusterMap.getWritablePartitionIds().get(0);
+      PartitionId partition = clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
 
       for (int i = 0; i < 11; i++) {
         short accountId = Utils.getRandomShort(TestUtils.RANDOM);
         short containerId = Utils.getRandomShort(TestUtils.RANDOM);
-        propertyList.add(new BlobProperties(1000, "serviceid1", accountId, containerId, testEncryption));
+        propertyList.add(
+            new BlobProperties(1000, "serviceid1", null, null, false, TestUtils.TTL_SECS, accountId, containerId,
+                testEncryption));
         blobIdList.add(new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
-            clusterMap.getLocalDatacenterId(), accountId, containerId, partition, false));
+            clusterMap.getLocalDatacenterId(), accountId, containerId, partition, false,
+            BlobId.BlobDataType.DATACHUNK));
         dataList.add(TestUtils.getRandomBytes(1000));
         if (testEncryption) {
           encryptionKeyList.add(TestUtils.getRandomBytes(128));
@@ -1185,9 +1463,18 @@ public final class ServerTestUtil {
       notificationSystem.awaitBlobCreations(blobIdList.get(4).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(5).getID());
 
+      checkTtlUpdateStatus(channel3, clusterMap, blobIdFactory, blobIdList.get(5), dataList.get(5), false,
+          getExpiryTimeMs(propertyList.get(5)));
+      updateBlobTtl(channel3, blobIdList.get(5));
+      expectedTokenSize += getUpdateRecordSize(blobIdList.get(5), UpdateRecord.Type.TTL_UPDATE);
+      checkTtlUpdateStatus(channel3, clusterMap, blobIdFactory, blobIdList.get(5), dataList.get(5), true,
+          Utils.Infinite_Time);
+      notificationSystem.awaitBlobUpdates(blobIdList.get(5).getID(), UpdateType.TTL_UPDATE);
+
       // get blob properties
       ArrayList<BlobId> ids = new ArrayList<BlobId>();
-      MockPartitionId mockPartitionId = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      MockPartitionId mockPartitionId =
+          (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       ids.add(blobIdList.get(2));
       ArrayList<PartitionRequestInfo> partitionRequestInfoList = new ArrayList<PartitionRequestInfo>();
       PartitionRequestInfo partitionRequestInfo = new PartitionRequestInfo(mockPartitionId, ids);
@@ -1298,8 +1585,9 @@ public final class ServerTestUtil {
         Properties routerProperties = getRouterProps(routerDatacenter);
         routerProperties.putAll(routerProps);
         VerifiableProperties routerVerifiableProperties = new VerifiableProperties(routerProperties);
+        AccountService accountService = new InMemAccountService(false, true);
         Router router = new NonBlockingRouterFactory(routerVerifiableProperties, clusterMap, notificationSystem,
-            getSSLFactoryIfRequired(routerVerifiableProperties)).getRouter();
+            getSSLFactoryIfRequired(routerVerifiableProperties), accountService).getRouter();
         checkBlobId(router, blobIdList.get(0), dataList.get(0));
         checkBlobId(router, blobIdList.get(1), dataList.get(1));
         checkBlobId(router, blobIdList.get(2), dataList.get(2));
@@ -1312,10 +1600,11 @@ public final class ServerTestUtil {
       // fetch blob that does not exist
       // get blob properties
       ids = new ArrayList<BlobId>();
-      mockPartitionId = (MockPartitionId) clusterMap.getWritablePartitionIds().get(0);
+      mockPartitionId =
+          (MockPartitionId) clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
       ids.add(new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
           clusterMap.getLocalDatacenterId(), propertyList.get(0).getAccountId(), propertyList.get(0).getContainerId(),
-          mockPartitionId, false));
+          mockPartitionId, false, BlobId.BlobDataType.DATACHUNK));
       partitionRequestInfoList.clear();
       partitionRequestInfo = new PartitionRequestInfo(mockPartitionId, ids);
       partitionRequestInfoList.add(partitionRequestInfo);
@@ -1351,15 +1640,6 @@ public final class ServerTestUtil {
 
       // get the data node to inspect replication tokens on
       DataNodeId dataNodeId = clusterMap.getDataNodeId("localhost", interestedDataNodePortNumber);
-      // read the replica file and check correctness
-      // The token offset value of 13098 was derived as followed:
-      // - Up to this point we have done 6 puts and 1 delete
-
-      // - Each put takes up 2183 bytes in the log (1000 data, 1000 user metadata, 183 ambry metadata)
-      // - Each delete takes up 97 bytes in the log
-      // - The offset stored in the token will be the position of the last entry in the log (the delete, in this case)
-      // - Thus, it will be at the end of the 6 puts: 6 * 2183 = 13098
-
       checkReplicaTokens(clusterMap, dataNodeId, expectedTokenSize - getDeleteRecordSize(blobIdList.get(0)), "0");
 
       // Shut down server 1
@@ -1427,6 +1707,13 @@ public final class ServerTestUtil {
       response2 = PutResponse.readFrom(new DataInputStream(putResponseStream));
       assertEquals(ServerErrorCode.No_Error, response2.getError());
 
+      checkTtlUpdateStatus(channel2, clusterMap, blobIdFactory, blobIdList.get(10), dataList.get(10), false,
+          getExpiryTimeMs(propertyList.get(10)));
+      updateBlobTtl(channel2, blobIdList.get(10));
+      expectedTokenSize += getUpdateRecordSize(blobIdList.get(10), UpdateRecord.Type.TTL_UPDATE);
+      checkTtlUpdateStatus(channel2, clusterMap, blobIdFactory, blobIdList.get(10), dataList.get(10), true,
+          Utils.Infinite_Time);
+
       cluster.getServers().get(0).startup();
       // wait for server to recover
       notificationSystem.awaitBlobCreations(blobIdList.get(6).getID());
@@ -1434,6 +1721,7 @@ public final class ServerTestUtil {
       notificationSystem.awaitBlobCreations(blobIdList.get(8).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(9).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(10).getID());
+      notificationSystem.awaitBlobUpdates(blobIdList.get(10).getID(), UpdateType.TTL_UPDATE);
       channel1.disconnect();
       channel1.connect();
 
@@ -1453,6 +1741,10 @@ public final class ServerTestUtil {
       } catch (MessageFormatException e) {
         Assert.fail();
       }
+
+      // check that the ttl update went through
+      checkTtlUpdateStatus(channel1, clusterMap, blobIdFactory, blobIdList.get(10), dataList.get(10), true,
+          Utils.Infinite_Time);
 
       // Shutdown server 1. Remove all its data from all mount path. Recover server 1 and ensure node is built
       cluster.getServers().get(0).shutdown();
@@ -1472,6 +1764,8 @@ public final class ServerTestUtil {
           dataNodeId.getPort());
       notificationSystem.decrementCreatedReplica(blobIdList.get(5).getID(), dataNodeId.getHostname(),
           dataNodeId.getPort());
+      notificationSystem.decrementUpdatedReplica(blobIdList.get(5).getID(), dataNodeId.getHostname(),
+          dataNodeId.getPort(), UpdateType.TTL_UPDATE);
       notificationSystem.decrementCreatedReplica(blobIdList.get(6).getID(), dataNodeId.getHostname(),
           dataNodeId.getPort());
       notificationSystem.decrementCreatedReplica(blobIdList.get(7).getID(), dataNodeId.getHostname(),
@@ -1482,6 +1776,8 @@ public final class ServerTestUtil {
           dataNodeId.getPort());
       notificationSystem.decrementCreatedReplica(blobIdList.get(10).getID(), dataNodeId.getHostname(),
           dataNodeId.getPort());
+      notificationSystem.decrementUpdatedReplica(blobIdList.get(10).getID(), dataNodeId.getHostname(),
+          dataNodeId.getPort(), UpdateType.TTL_UPDATE);
 
       cluster.getServers().get(0).startup();
       notificationSystem.awaitBlobCreations(blobIdList.get(1).getID());
@@ -1489,11 +1785,13 @@ public final class ServerTestUtil {
       notificationSystem.awaitBlobCreations(blobIdList.get(3).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(4).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(5).getID());
+      notificationSystem.awaitBlobUpdates(blobIdList.get(5).getID(), UpdateType.TTL_UPDATE);
       notificationSystem.awaitBlobCreations(blobIdList.get(6).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(7).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(8).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(9).getID());
       notificationSystem.awaitBlobCreations(blobIdList.get(10).getID());
+      notificationSystem.awaitBlobUpdates(blobIdList.get(10).getID(), UpdateType.TTL_UPDATE);
 
       channel1.disconnect();
       channel1.connect();
@@ -1514,6 +1812,12 @@ public final class ServerTestUtil {
       } catch (MessageFormatException e) {
         Assert.fail();
       }
+
+      // check that the ttl updates are present
+      checkTtlUpdateStatus(channel1, clusterMap, blobIdFactory, blobIdList.get(5), dataList.get(5), true,
+          Utils.Infinite_Time);
+      checkTtlUpdateStatus(channel1, clusterMap, blobIdFactory, blobIdList.get(10), dataList.get(10), true,
+          Utils.Infinite_Time);
 
       channel1.disconnect();
       channel2.disconnect();
@@ -1544,11 +1848,21 @@ public final class ServerTestUtil {
   /**
    * Fetches the delete record size in log
    * @param blobId {@link BlobId} associated with the delete
-   * @return the size of the put record in the log
+   * @return the size of the delete record in the log
    */
   private static long getDeleteRecordSize(BlobId blobId) {
     return MessageFormatRecord.MessageHeader_Format_V2.getHeaderSize() + blobId.sizeInBytes()
-        + MessageFormatRecord.Delete_Format_V2.getDeleteRecordSize();
+        + MessageFormatRecord.Update_Format_V2.getRecordSize();
+  }
+
+  /**
+   * @param blobId the blob ID being updated
+   * @param updateType the type of update
+   * @return the size of the update record in the log
+   */
+  private static long getUpdateRecordSize(BlobId blobId, UpdateRecord.Type updateType) {
+    return MessageFormatRecord.MessageHeader_Format_V2.getHeaderSize() + blobId.sizeInBytes()
+        + MessageFormatRecord.Update_Format_V3.getRecordSize(updateType);
   }
 
   /**
@@ -1651,13 +1965,15 @@ public final class ServerTestUtil {
   }
 
   private static void checkBlobId(Router router, BlobId blobId, byte[] data) throws Exception {
-    GetBlobResult result = router.getBlob(blobId.getID(), new GetBlobOptionsBuilder().build()).get(1, TimeUnit.SECONDS);
+    GetBlobResult result =
+        router.getBlob(blobId.getID(), new GetBlobOptionsBuilder().build()).get(20, TimeUnit.SECONDS);
     ReadableStreamChannel blob = result.getBlobDataChannel();
     assertEquals("Size does not match that of data", data.length,
         result.getBlobInfo().getBlobProperties().getBlobSize());
     CopyingAsyncWritableChannel channel = new CopyingAsyncWritableChannel();
     blob.readInto(channel, null).get(1, TimeUnit.SECONDS);
-    Assert.assertArrayEquals(data, channel.getData());
+    Assert.assertArrayEquals(data,
+        Utils.readBytesFromStream(channel.getContentAsInputStream(), (int) channel.getBytesWritten()));
   }
 
   private static void checkBlobContent(MockClusterMap clusterMap, BlobId blobId, BlockingChannel channel,
@@ -1725,13 +2041,89 @@ public final class ServerTestUtil {
   }
 
   /**
+   * Updates the TTL of the given {@code blobId}
+   * @param channel the {@link ConnectedChannel} to make the {@link GetRequest} on.
+   * @param blobId the ID of the blob to TTL update
+   * @throws IOException
+   */
+  static void updateBlobTtl(ConnectedChannel channel, BlobId blobId) throws IOException {
+    TtlUpdateRequest ttlUpdateRequest =
+        new TtlUpdateRequest(1, "updateBlobTtl", blobId, Utils.Infinite_Time, SystemTime.getInstance().milliseconds());
+    channel.send(ttlUpdateRequest);
+    InputStream stream = channel.receive().getInputStream();
+    TtlUpdateResponse ttlUpdateResponse = TtlUpdateResponse.readFrom(new DataInputStream(stream));
+    assertEquals("Unexpected ServerErrorCode for TtlUpdateRequest", ServerErrorCode.No_Error,
+        ttlUpdateResponse.getError());
+  }
+
+  /**
+   * Checks the TTL update status of the given {@code blobId} based on the args provided
+   * @param channel the {@link ConnectedChannel} to make the {@link GetRequest} on.
+   * @param clusterMap the {@link ClusterMap} to use
+   * @param storeKeyFactory the {@link StoreKeyFactory} to use
+   * @param blobId the ID of the blob to check
+   * @param expectedBlobData the expected blob data
+   * @param ttlUpdated {@code true} if the blob has been ttl updated
+   * @param expectedExpiryTimeMs the expected expiry time (in ms)
+   * @throws IOException
+   * @throws MessageFormatException
+   */
+  static void checkTtlUpdateStatus(ConnectedChannel channel, ClusterMap clusterMap, StoreKeyFactory storeKeyFactory,
+      BlobId blobId, byte[] expectedBlobData, boolean ttlUpdated, long expectedExpiryTimeMs)
+      throws IOException, MessageFormatException {
+    PartitionRequestInfo requestInfo =
+        new PartitionRequestInfo(blobId.getPartition(), Collections.singletonList(blobId));
+    List<PartitionRequestInfo> requestInfos = Collections.singletonList(requestInfo);
+
+    // blob properties
+    GetRequest request =
+        new GetRequest(1, "checkTtlUpdateStatus", MessageFormatFlags.BlobProperties, requestInfos, GetOption.None);
+    channel.send(request);
+    InputStream stream = channel.receive().getInputStream();
+    GetResponse response = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+    BlobProperties blobProperties = MessageFormatRecord.deserializeBlobProperties(response.getInputStream());
+    if (!ttlUpdated) {
+      assertEquals("TTL does not match", expectedExpiryTimeMs, getExpiryTimeMs(blobProperties));
+    }
+    MessageInfo messageInfo = response.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0);
+    assertEquals("Blob ID not as expected", blobId, messageInfo.getStoreKey());
+    assertEquals("TTL update state not as expected", ttlUpdated, messageInfo.isTtlUpdated());
+    assertEquals("Expiry time is not as expected", expectedExpiryTimeMs, messageInfo.getExpirationTimeInMs());
+
+    // blob all
+    request = new GetRequest(1, "checkTtlUpdateStatus", MessageFormatFlags.All, requestInfos, GetOption.None);
+    channel.send(request);
+    stream = channel.receive().getInputStream();
+    response = GetResponse.readFrom(new DataInputStream(stream), clusterMap);
+    InputStream responseStream = response.getInputStream();
+    BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(responseStream, storeKeyFactory);
+    byte[] actualBlobData = new byte[(int) blobAll.getBlobData().getSize()];
+    blobAll.getBlobData().getStream().getByteBuffer().get(actualBlobData);
+    assertArrayEquals("Content mismatch", expectedBlobData, actualBlobData);
+    messageInfo = response.getPartitionResponseInfoList().get(0).getMessageInfoList().get(0);
+    assertEquals("Blob ID not as expected", blobId, messageInfo.getStoreKey());
+    assertEquals("TTL update state not as expected", ttlUpdated, messageInfo.isTtlUpdated());
+    assertEquals("Expiry time is not as expected", expectedExpiryTimeMs, messageInfo.getExpirationTimeInMs());
+  }
+
+  /**
+   * Gets the expiry time (in ms) as stored by the {@link com.github.ambry.store.BlobStore}.
+   * @param blobProperties the properties of the blob
+   * @return the expiry time (in ms)
+   */
+  static long getExpiryTimeMs(BlobProperties blobProperties) {
+    return Utils.getTimeInMsToTheNearestSec(
+        Utils.addSecondsToEpochTime(blobProperties.getCreationTimeInMs(), blobProperties.getTimeToLiveInSeconds()));
+  }
+
+  /**
    * Returns BlockingChannel or SSLBlockingChannel depending on whether the port type is PlainText or SSL
    * for the given targetPort
    * @param targetPort upon which connection has to be established
    * @param hostName upon which connection has to be established
    * @return BlockingChannel
    */
-  protected static BlockingChannel getBlockingChannelBasedOnPortType(Port targetPort, String hostName,
+  static BlockingChannel getBlockingChannelBasedOnPortType(Port targetPort, String hostName,
       SSLSocketFactory sslSocketFactory, SSLConfig sslConfig) {
     BlockingChannel channel = null;
     if (targetPort.getPortType() == PortType.PLAINTEXT) {
@@ -1747,12 +2139,10 @@ public final class ServerTestUtil {
    * Create an {@link SSLFactory} if there are SSL enabled datacenters in the properties
    * @param verifiableProperties the {@link VerifiableProperties} to use.
    * @return an {@link SSLFactory}, or {@code null}, if no {@link SSLFactory} is required.
-   * @throws GeneralSecurityException
-   * @throws IOException
+   * @throws Exception
    */
-  static SSLFactory getSSLFactoryIfRequired(VerifiableProperties verifiableProperties)
-      throws GeneralSecurityException, IOException {
+  static SSLFactory getSSLFactoryIfRequired(VerifiableProperties verifiableProperties) throws Exception {
     boolean requiresSSL = new ClusterMapConfig(verifiableProperties).clusterMapSslEnabledDatacenters.length() > 0;
-    return requiresSSL ? new SSLFactory(new SSLConfig(verifiableProperties)) : null;
+    return requiresSSL ? SSLFactory.getNewInstance(new SSLConfig(verifiableProperties)) : null;
   }
 }

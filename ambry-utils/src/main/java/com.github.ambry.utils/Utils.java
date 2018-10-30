@@ -51,6 +51,12 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -311,130 +317,154 @@ public class Utils {
         }
     }
 
-    /**
-     * Instantiate a class instance from a given className.
-     * @param className
-     * @param <T>
-     * @return
-     * @throws ClassNotFoundException
-     * @throws InstantiationException
-     * @throws IllegalAccessException
-     */
-    public static <T> T getObj(String className)
-            throws ClassNotFoundException, InstantiationException, IllegalAccessException {
-        return (T) Class.forName(className).newInstance();
+  /**
+   * Read {@link FileChannel} from a given offset to fill up a {@link ByteBuffer}. Total bytes read should be buffer's
+   * remaining size(limit - position).
+   * @param fileChannel from which data to be read from
+   * @param offset starting offset of the fileChanel to be read from
+   * @param buffer the destination of the read
+   * @return actual io count of fileChannel.read()
+   * @throws IOException
+   */
+  public static int readFileToByteBuffer(FileChannel fileChannel, long offset, ByteBuffer buffer) throws IOException {
+    int ioCount = 0;
+    int read = 0;
+    int expectedRead = buffer.remaining();
+    while (buffer.hasRemaining()) {
+      int sizeRead = fileChannel.read(buffer, offset);
+      if (sizeRead == 0 || sizeRead == -1) {
+        throw new IOException(
+            "Total size read " + read + " is less than the size to be read " + expectedRead + ". sizeRead is "
+                + sizeRead);
+      }
+      read += sizeRead;
+      offset += sizeRead;
+      ioCount++;
     }
+    return ioCount;
+  }
 
-    /**
-     * Instantiate a class instance from a given className with an arg
-     * @param className
-     * @param arg
-     * @param <T>
-     * @return
-     * @throws ClassNotFoundException
-     * @throws InstantiationException
-     * @throws IllegalAccessException
-     * @throws NoSuchMethodException
-     * @throws InvocationTargetException
-     */
-    // TODO: 2018/3/19 by zmyer
-    public static <T> T getObj(String className, Object arg)
-            throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
-            InvocationTargetException {
-        for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
-            Class<?>[] paramTypes = ctor.getParameterTypes();
-            if (paramTypes.length == 1 && checkAssignable(paramTypes[0], arg)) {
-                return (T) ctor.newInstance(arg);
-            }
-        }
-        return null;
-    }
+  /**
+   * Instantiate a class instance from a given className.
+   * @param className
+   * @param <T>
+   * @return
+   * @throws ClassNotFoundException
+   * @throws InstantiationException
+   * @throws IllegalAccessException
+   */
+  public static <T> T getObj(String className)
+      throws ClassNotFoundException, InstantiationException, IllegalAccessException {
+    return (T) Class.forName(className).newInstance();
+  }
 
-    /**
-     * Instantiate a class instance from a given className with two args
-     * @param className
-     * @param arg1
-     * @param arg2
-     * @param <T>
-     * @return
-     * @throws ClassNotFoundException
-     * @throws InstantiationException
-     * @throws IllegalAccessException
-     * @throws NoSuchMethodException
-     * @throws InvocationTargetException
-     */
-    public static <T> T getObj(String className, Object arg1, Object arg2)
-            throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
-            InvocationTargetException {
-        for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
-            Class<?>[] paramTypes = ctor.getParameterTypes();
-            if (paramTypes.length == 2 && checkAssignable(paramTypes[0], arg1) && checkAssignable(paramTypes[1],
-                    arg2)) {
-                return (T) ctor.newInstance(arg1, arg2);
-            }
-        }
-        return null;
+  /**
+   * Instantiate a class instance from a given className with an arg
+   * @param className
+   * @param arg
+   * @param <T>
+   * @return
+   * @throws ClassNotFoundException
+   * @throws InstantiationException
+   * @throws IllegalAccessException
+   * @throws NoSuchMethodException
+   * @throws InvocationTargetException
+   */
+  public static <T> T getObj(String className, Object arg)
+      throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
+             InvocationTargetException {
+    for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
+      Class<?>[] paramTypes = ctor.getParameterTypes();
+      if (paramTypes.length == 1 && checkAssignable(paramTypes[0], arg)) {
+        return (T) ctor.newInstance(arg);
+      }
     }
+    throw buildNoConstructorException(className, arg);
+  }
 
-    /**
-     * Instantiate a class instance from a given className with three args
-     * @param className
-     * @param arg1
-     * @param arg2
-     * @param arg3
-     * @param <T>
-     * @return
-     * @throws ClassNotFoundException
-     * @throws InstantiationException
-     * @throws IllegalAccessException
-     * @throws NoSuchMethodException
-     * @throws InvocationTargetException
-     */
-    // TODO: 2018/3/21 by zmyer
-    public static <T> T getObj(String className, Object arg1, Object arg2, Object arg3)
-            throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
-            InvocationTargetException {
-        for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
-            Class<?>[] paramTypes = ctor.getParameterTypes();
-            if (paramTypes.length == 3 && checkAssignable(paramTypes[0], arg1) && checkAssignable(paramTypes[1], arg2)
-                    && checkAssignable(paramTypes[2], arg3)) {
-                return (T) ctor.newInstance(arg1, arg2, arg3);
-            }
-        }
-        return null;
+  /**
+   * Instantiate a class instance from a given className with two args
+   * @param className
+   * @param arg1
+   * @param arg2
+   * @param <T>
+   * @return
+   * @throws ClassNotFoundException
+   * @throws InstantiationException
+   * @throws IllegalAccessException
+   * @throws NoSuchMethodException
+   * @throws InvocationTargetException
+   */
+  public static <T> T getObj(String className, Object arg1, Object arg2)
+      throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
+             InvocationTargetException {
+    for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
+      Class<?>[] paramTypes = ctor.getParameterTypes();
+      if (paramTypes.length == 2 && checkAssignable(paramTypes[0], arg1) && checkAssignable(paramTypes[1], arg2)) {
+        return (T) ctor.newInstance(arg1, arg2);
+      }
     }
+    throw buildNoConstructorException(className, arg1, arg2);
+  }
 
-    /**
-     * Instantiate a class instance from a given className with variable number of args
-     * @param className
-     * @param objects
-     * @param <T>
-     * @return
-     * @throws ClassNotFoundException
-     * @throws InstantiationException
-     * @throws IllegalAccessException
-     * @throws NoSuchMethodException
-     * @throws InvocationTargetException
-     */
-    public static <T> T getObj(String className, Object... objects)
-            throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
-            InvocationTargetException {
-        for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
-            Class<?>[] paramTypes = ctor.getParameterTypes();
-            if (paramTypes.length == objects.length) {
-                int i = 0;
-                for (; i < objects.length; i++) {
-                    if (!checkAssignable(paramTypes[i], objects[i])) {
-                        break;
-                    }
-                }
-                if (i == objects.length) {
-                    return (T) ctor.newInstance(objects);
-                }
-            }
-        }
-        return null;
+  /**
+   * Instantiate a class instance from a given className with three args
+   * @param className
+   * @param arg1
+   * @param arg2
+   * @param arg3
+   * @param <T>
+   * @return
+   * @throws ClassNotFoundException
+   * @throws InstantiationException
+   * @throws IllegalAccessException
+   * @throws NoSuchMethodException
+   * @throws InvocationTargetException
+   */
+  public static <T> T getObj(String className, Object arg1, Object arg2, Object arg3)
+      throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
+             InvocationTargetException {
+    for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
+      Class<?>[] paramTypes = ctor.getParameterTypes();
+      if (paramTypes.length == 3 && checkAssignable(paramTypes[0], arg1) && checkAssignable(paramTypes[1], arg2)
+          && checkAssignable(paramTypes[2], arg3)) {
+        return (T) ctor.newInstance(arg1, arg2, arg3);
+      }
     }
+    throw buildNoConstructorException(className, arg1, arg2, arg3);
+  }
+
+  /**
+   * Instantiate a class instance from a given className with variable number of args
+   * @param className
+   * @param args
+   * @param <T>
+   * @return
+   * @throws ClassNotFoundException
+   * @throws InstantiationException
+   * @throws IllegalAccessException
+   * @throws NoSuchMethodException
+   * @throws InvocationTargetException
+   */
+  public static <T> T getObj(String className, Object... args)
+      throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoSuchMethodException,
+             InvocationTargetException {
+    for (Constructor<?> ctor : Class.forName(className).getDeclaredConstructors()) {
+      Class<?>[] paramTypes = ctor.getParameterTypes();
+      if (paramTypes.length == args.length) {
+        int i = 0;
+        for (; i < args.length; i++) {
+          if (!checkAssignable(paramTypes[i], args[i])) {
+            break;
+          }
+        }
+        if (i == args.length) {
+          return (T) ctor.newInstance(args);
+        }
+      }
+    }
+    throw buildNoConstructorException(className, args);
+  }
 
     /**
      * Check if the given constructor parameter type is assignable from the provided argument object.
@@ -446,25 +476,39 @@ public class Utils {
         return arg == null || parameterType.isAssignableFrom(arg.getClass());
     }
 
-    /**
-     * Compute the hash code for the given items
-     * @param items
-     * @return
-     */
-    public static int hashcode(Object[] items) {
-        if (items == null) {
-            return 0;
-        }
-        int h = 1;
-        int i = 0;
-        while (i < items.length) {
-            if (items[i] != null) {
-                h = 31 * h + items[i].hashCode();
-                i += 1;
-            }
-        }
-        return h;
+  /**
+   * Create a {@link NoSuchMethodException} for situations where a constructor for a class that conforms to the provided
+   * argument types was not found.
+   * @param className the class for which a suitable constructor was not found.
+   * @param args the constructor arguments.
+   * @return the {@link NoSuchMethodException} to throw.
+   */
+  private static NoSuchMethodException buildNoConstructorException(String className, Object... args) {
+    String argTypes =
+        Stream.of(args).map(arg -> arg == null ? "null" : arg.getClass().getName()).collect(Collectors.joining(", "));
+    return new NoSuchMethodException(
+        "No constructor found for " + className + " that takes arguments of types: " + argTypes);
+  }
+
+  /**
+   * Compute the hash code for the given items
+   * @param items
+   * @return
+   */
+  public static int hashcode(Object[] items) {
+    if (items == null) {
+      return 0;
     }
+    int h = 1;
+    int i = 0;
+    while (i < items.length) {
+      if (items[i] != null) {
+        h = 31 * h + items[i].hashCode();
+        i += 1;
+      }
+    }
+    return h;
+  }
 
     /**
      * Compute the CRC32 of the byte array
@@ -749,42 +793,18 @@ public class Utils {
         return data;
     }
 
-    /**
-     * Split the input string "data" using the delimiter and return as list of strings for the slices obtained
-     * @param data
-     * @param delimiter
-     * @return
-     */
-    // TODO: 2018/3/21 by zmyer
-    public static ArrayList<String> splitString(String data, String delimiter) {
-        if (data == null) {
-            throw new IllegalArgumentException("Passed in string is null ");
-        }
-        ArrayList<String> toReturn = new ArrayList<String>();
-        String[] slices = data.split(delimiter);
-        toReturn.addAll(Arrays.asList(slices));
-        return toReturn;
+  /**
+   * Split the input string "data" using the delimiter and return as list of strings for the slices obtained
+   * @param data
+   * @param delimiter
+   * @return
+   */
+  public static ArrayList<String> splitString(String data, String delimiter) {
+    if (data == null) {
+      throw new IllegalArgumentException("Passed in string is null ");
     }
-
-    /**
-     * Merge/Concatenate the input list of strings using the delimiter and return the new string
-     * @param data List of strings to be merged/concatenated
-     * @param delimiter using which the list of strings need to be merged/concatenated
-     * @return the obtained string after merging/concatenating
-     */
-    public static String concatenateString(ArrayList<String> data, String delimiter) {
-        if (data == null) {
-            throw new IllegalArgumentException("Passed in List is null ");
-        }
-        StringBuilder sb = new StringBuilder();
-        if (data.size() > 1) {
-            for (int i = 0; i < data.size() - 1; i++) {
-                sb.append(data.get(i)).append(delimiter);
-            }
-            sb.append(data.get(data.size() - 1));
-        }
-        return sb.toString();
-    }
+    return new ArrayList<>(Arrays.asList(data.split(delimiter)));
+  }
 
     /**
      * Make sure that the ByteBuffer capacity is equal to or greater than the expected length.
@@ -877,20 +897,30 @@ public class Utils {
         return new IOException(CLIENT_RESET_EXCEPTION_MSG, cause);
     }
 
-    /**
-     * Delete a directory recursively or delete a single file.
-     * @param file the file or directory to delete.
-     * @throws IOException if all files could not be deleted.
-     */
-    // TODO: 2018/3/22 by zmyer
-    public static void deleteFileOrDirectory(File file) throws IOException {
-        if (file.exists()) {
-            Files.walkFileTree(file.toPath(), new SimpleFileVisitor<Path>() {
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Files.delete(file);
-                    return FileVisitResult.CONTINUE;
-                }
+  /**
+   * Returns a TTL (in secs) given an expiry and creation time (in ms)
+   * @param expiresAtMs the expiry time (in ms)
+   * @param creationTimeMs the creation time (in ms)
+   * @return the time to live (in secs)
+   */
+  public static long getTtlInSecsFromExpiryMs(long expiresAtMs, long creationTimeMs) {
+    return expiresAtMs == Utils.Infinite_Time ? Utils.Infinite_Time
+        : Math.max(0, TimeUnit.MILLISECONDS.toSeconds(expiresAtMs - creationTimeMs));
+  }
+
+  /**
+   * Delete a directory recursively or delete a single file.
+   * @param file the file or directory to delete.
+   * @throws IOException if all files could not be deleted.
+   */
+  public static void deleteFileOrDirectory(File file) throws IOException {
+    if (file.exists()) {
+      Files.walkFileTree(file.toPath(), new SimpleFileVisitor<Path>() {
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+          Files.delete(file);
+          return FileVisitResult.CONTINUE;
+        }
 
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
@@ -901,14 +931,22 @@ public class Utils {
         }
     }
 
-    /**
-     * A thread factory to use for {@link ScheduledExecutorService}s instantiated using
-     * {@link #newScheduler(int, String, boolean)}.
-     */
-    private static class SchedulerThreadFactory implements ThreadFactory {
-        private final AtomicInteger schedulerThreadId = new AtomicInteger(0);
-        private final String threadNamePrefix;
-        private final boolean isDaemon;
+  /**
+   * @param str the {@link String} to examine
+   * @return {@code true} if {@code str} is {@code null} or is an empty string.
+   */
+  public static boolean isNullOrEmpty(String str) {
+    return str == null || str.isEmpty();
+  }
+
+  /**
+   * A thread factory to use for {@link ScheduledExecutorService}s instantiated using
+   * {@link #newScheduler(int, String, boolean)}.
+   */
+  private static class SchedulerThreadFactory implements ThreadFactory {
+    private final AtomicInteger schedulerThreadId = new AtomicInteger(0);
+    private final String threadNamePrefix;
+    private final boolean isDaemon;
 
         /**
          * Create a {@link SchedulerThreadFactory}

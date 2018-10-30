@@ -22,6 +22,7 @@ import com.github.ambry.config.StoreConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobStoreRecovery;
 import com.github.ambry.messageformat.MessageFormatWriteSet;
+import com.github.ambry.messageformat.TtlUpdateMessageFormatInputStream;
 import com.github.ambry.tools.util.ToolUtils;
 import com.github.ambry.utils.ByteBufferChannel;
 import com.github.ambry.utils.Pair;
@@ -32,7 +33,6 @@ import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.text.DecimalFormat;
 import java.util.Collections;
@@ -57,51 +57,6 @@ import static com.github.ambry.utils.Utils.*;
  * tgt) are offline.
  */
 public class StoreCopier implements Closeable {
-
-  /**
-   * Representation of a message in the store. Contains the {@link MessageInfo} and the {@link InputStream} of data.
-   */
-  public static class Message {
-    private final MessageInfo messageInfo;
-    private final InputStream stream;
-
-    /**
-     * @param messageInfo the {@link MessageInfo} for this message.
-     * @param stream the {@link InputStream} that represents the data of this message.
-     */
-    public Message(MessageInfo messageInfo, InputStream stream) {
-      this.messageInfo = messageInfo;
-      this.stream = stream;
-    }
-
-    /**
-     * @return the {@link MessageInfo} for this message.
-     */
-    public MessageInfo getMessageInfo() {
-      return messageInfo;
-    }
-
-    /**
-     * @return the {@link InputStream} that represents the data of this message.
-     */
-    public InputStream getStream() {
-      return stream;
-    }
-  }
-
-  /**
-   * An interface for a transformation function. Transformations can modify any data in the message (including keys).
-   * Needs to be thread safe.
-   */
-  public interface Transformer {
-
-    /**
-     * Transforms the input {@link Message} into an output {@link Message}.
-     * @param message the input {@link Message} to change.
-     * @return the output {@link Message}.
-     */
-    Message transform(Message message);
-  }
 
   /**
    * Config class for the {@link StoreCopier}.
@@ -241,10 +196,9 @@ public class StoreCopier implements Closeable {
    *                   in the return value will be {@code true}.
    * @return a {@link Pair} of the {@link FindToken} until which data has been copied and a {@link Boolean} indicating
    * whether the source had problems that were skipped over - like duplicates ({@code true} indicates that there were).
-   * @throws IOException if there is any I/O error while copying.
-   * @throws StoreException if there is any exception dealing with the stores.
+   * @throws Exception if there is any exception during processing
    */
-  public Pair<FindToken, Boolean> copy(FindToken startToken) throws IOException, StoreException {
+  public Pair<FindToken, Boolean> copy(FindToken startToken) throws Exception {
     boolean sourceHasProblems = false;
     FindToken lastToken;
     FindToken token = startToken;
@@ -252,38 +206,64 @@ public class StoreCopier implements Closeable {
       lastToken = token;
       FindInfo findInfo = src.findEntriesSince(lastToken, fetchSizeInBytes);
       List<MessageInfo> messageInfos = findInfo.getMessageEntries();
+      for (Transformer transformer : transformers) {
+        transformer.warmup(messageInfos);
+      }
       for (MessageInfo messageInfo : messageInfos) {
         logger.trace("Processing {} - isDeleted: {}, isExpired {}", messageInfo.getStoreKey(), messageInfo.isDeleted(),
             messageInfo.isExpired());
         if (!messageInfo.isExpired() && !messageInfo.isDeleted()) {
-          if (messageInfo.getSize() > Integer.MAX_VALUE) {
-            throw new IllegalStateException("Cannot copy blobs whose size > Integer.MAX_VALUE");
-          }
           if (tgt.findMissingKeys(Collections.singletonList(messageInfo.getStoreKey())).size() == 1) {
-            int size = (int) messageInfo.getSize();
             StoreInfo storeInfo =
                 src.get(Collections.singletonList(messageInfo.getStoreKey()), EnumSet.allOf(StoreGetOptions.class));
             MessageReadSet readSet = storeInfo.getMessageReadSet();
+            if (readSet.sizeInBytes(0) > Integer.MAX_VALUE) {
+              throw new IllegalStateException("Cannot copy blobs whose size > Integer.MAX_VALUE");
+            }
+            int size = (int) readSet.sizeInBytes(0);
             byte[] buf = new byte[size];
             readSet.writeTo(0, new ByteBufferChannel(ByteBuffer.wrap(buf)), 0, size);
-            Message message = new Message(messageInfo, new ByteArrayInputStream(buf));
+            Message message = new Message(storeInfo.getMessageReadSetInfo().get(0), new ByteArrayInputStream(buf));
             for (Transformer transformer : transformers) {
-              message = transformer.transform(message);
+              TransformationOutput tfmOutput = transformer.transform(message);
+              if (tfmOutput.getException() != null) {
+                throw tfmOutput.getException();
+              } else {
+                message = tfmOutput.getMsg();
+              }
+              if (message == null) {
+                break;
+              }
+            }
+            if (message == null) {
+              logger.trace("Dropping {} because the transformers did not return a message", messageInfo.getStoreKey());
+              continue;
             }
             MessageFormatWriteSet writeSet =
                 new MessageFormatWriteSet(message.getStream(), Collections.singletonList(message.getMessageInfo()),
                     false);
             tgt.put(writeSet);
-            logger.trace("Copied {} as {}", messageInfo.getStoreKey(), message.getMessageInfo().getStoreKey());
-          } else {
+            MessageInfo tgtMsgInfo = message.getMessageInfo();
+            if (tgtMsgInfo.isTtlUpdated()) {
+              TtlUpdateMessageFormatInputStream stream =
+                  new TtlUpdateMessageFormatInputStream(tgtMsgInfo.getStoreKey(), tgtMsgInfo.getAccountId(),
+                      tgtMsgInfo.getContainerId(), tgtMsgInfo.getExpirationTimeInMs(), tgtMsgInfo.getOperationTimeMs());
+              MessageInfo updateMsgInfo = new MessageInfo(tgtMsgInfo.getStoreKey(), stream.getSize(), false, true,
+                  tgtMsgInfo.getExpirationTimeInMs(), tgtMsgInfo.getAccountId(), tgtMsgInfo.getContainerId(),
+                  tgtMsgInfo.getOperationTimeMs());
+              writeSet = new MessageFormatWriteSet(stream, Collections.singletonList(updateMsgInfo), false);
+              tgt.updateTtl(writeSet);
+            }
+            logger.trace("Copied {} as {}", messageInfo.getStoreKey(), tgtMsgInfo.getStoreKey());
+          } else if (!messageInfo.isTtlUpdated()) {
             logger.warn("Found a duplicate entry for {} while copying data", messageInfo.getStoreKey());
             sourceHasProblems = true;
           }
         }
       }
       token = findInfo.getFindToken();
-      logger.info("[{}] [{}] {}% copied", Thread.currentThread().getName(), storeId,
-          df.format(token.getBytesRead() * 100.0 / src.getSizeInBytes()));
+      double percentBytesRead = src.isEmpty() ? 100.0 : token.getBytesRead() * 100.0 / src.getSizeInBytes();
+      logger.info("[{}] [{}] {}% copied", Thread.currentThread().getName(), storeId, df.format(percentBytesRead));
     } while (!token.equals(lastToken));
     return new Pair<>(token, sourceHasProblems);
   }

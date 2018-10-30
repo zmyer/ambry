@@ -16,6 +16,7 @@ package com.github.ambry.clustermap;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.network.PortType;
+import com.github.ambry.utils.UtilsTest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,7 +36,8 @@ import static org.junit.Assert.*;
 public class DynamicClusterManagerComponentsTest {
   private static final int PORT_NUM1 = 2000;
   private static final int PORT_NUM2 = 2001;
-  private static final long RACK_ID = 1;
+  private static final String RACK_ID = "1";
+  private static final long XID = 64;
   private static final int SSL_PORT_NUM = 3000;
   private static final String HOST_NAME = TestUtils.getLocalHost();
   private final ClusterMapConfig clusterMapConfig1;
@@ -64,24 +66,27 @@ public class DynamicClusterManagerComponentsTest {
   public void helixClusterManagerComponentsTest() throws Exception {
     // AmbryDataNode test
     try {
-      new AmbryDataNode("DC1", clusterMapConfig2, HOST_NAME, PORT_NUM1, RACK_ID, null);
+      new AmbryDataNode("DC1", clusterMapConfig2, HOST_NAME, PORT_NUM1, RACK_ID, null, XID);
       fail("Datanode construction should have failed when SSL is enabled and SSL port is null");
     } catch (IllegalArgumentException e) {
       // OK
     }
     try {
-      new AmbryDataNode("DC1", clusterMapConfig1, HOST_NAME, MAX_PORT + 1, RACK_ID, null);
+      new AmbryDataNode("DC1", clusterMapConfig1, HOST_NAME, MAX_PORT + 1, RACK_ID, null, XID);
       fail("Datanode construction should have failed when port num is outside the valid range");
     } catch (IllegalArgumentException e) {
       // OK
     }
-    AmbryDataNode datanode1 = new AmbryDataNode("DC0", clusterMapConfig1, HOST_NAME, PORT_NUM1, RACK_ID, SSL_PORT_NUM);
-    AmbryDataNode datanode2 = new AmbryDataNode("DC1", clusterMapConfig2, HOST_NAME, PORT_NUM2, RACK_ID, SSL_PORT_NUM);
+    AmbryDataNode datanode1 =
+        new AmbryDataNode("DC0", clusterMapConfig1, HOST_NAME, PORT_NUM1, RACK_ID, SSL_PORT_NUM, XID);
+    AmbryDataNode datanode2 =
+        new AmbryDataNode("DC1", clusterMapConfig2, HOST_NAME, PORT_NUM2, RACK_ID, SSL_PORT_NUM, XID);
     assertEquals(datanode1.getDatacenterName(), "DC0");
     assertEquals(datanode1.getHostname(), HOST_NAME);
     assertEquals(datanode1.getPort(), PORT_NUM1);
     assertEquals(datanode1.getSSLPort(), SSL_PORT_NUM);
     assertEquals(datanode1.getRackId(), RACK_ID);
+    assertEquals(datanode1.getXid(), XID);
     assertTrue(datanode1.hasSSLPort());
     assertEquals(PortType.PLAINTEXT, datanode1.getPortToConnectTo().getPortType());
     assertTrue(datanode2.hasSSLPort());
@@ -148,57 +153,72 @@ public class DynamicClusterManagerComponentsTest {
     // All partitions are READ_WRITE initially.
     sealedStateChangeCounter = new AtomicLong(0);
     MockClusterManagerCallback mockClusterManagerCallback = new MockClusterManagerCallback();
-    AmbryPartition partition1 = new AmbryPartition(1, mockClusterManagerCallback);
-    AmbryPartition partition2 = new AmbryPartition(2, mockClusterManagerCallback);
+    String partition1Class = UtilsTest.getRandomString(10);
+    String partition2Class = UtilsTest.getRandomString(10);
+    AmbryPartition partition1 = new AmbryPartition(1, partition1Class, mockClusterManagerCallback);
+    AmbryPartition partition2 = new AmbryPartition(2, partition2Class, mockClusterManagerCallback);
     assertTrue(partition1.isEqual(partition1.toPathString()));
     assertTrue(partition1.compareTo(partition1) == 0);
     assertFalse(partition1.isEqual(partition2.toPathString()));
     assertTrue(partition1.compareTo(partition2) != 0);
+    assertEquals("Partition class not as expected", partition1Class, partition1.getPartitionClass());
+    assertEquals("Partition class not as expected", partition2Class, partition2.getPartitionClass());
 
     // AmbryReplica tests
     try {
-      new AmbryReplica(null, disk1, MAX_REPLICA_CAPACITY_IN_BYTES, false);
+      new AmbryReplica(clusterMapConfig1, null, disk1, false, MAX_REPLICA_CAPACITY_IN_BYTES, false);
       fail("Replica initialization should fail with invalid arguments");
     } catch (IllegalStateException e) {
       // OK
     }
 
     try {
-      new AmbryReplica(partition1, null, MAX_REPLICA_CAPACITY_IN_BYTES, false);
+      new AmbryReplica(clusterMapConfig1, partition1, null, false, MAX_REPLICA_CAPACITY_IN_BYTES, false);
       fail("Replica initialization should fail with invalid arguments");
     } catch (IllegalStateException e) {
       // OK
     }
 
     try {
-      new AmbryReplica(partition1, disk1, MAX_REPLICA_CAPACITY_IN_BYTES + 1, false);
+      new AmbryReplica(clusterMapConfig1, partition1, disk1, false, MAX_REPLICA_CAPACITY_IN_BYTES + 1, false);
       fail("Replica initialization should fail with invalid arguments");
     } catch (IllegalStateException e) {
       // OK
     }
 
     // Create a few replicas and make the mockClusterManagerCallback aware of the association.
-    AmbryReplica replica1 = new AmbryReplica(partition1, disk1, MAX_REPLICA_CAPACITY_IN_BYTES, false);
+    AmbryReplica replica1 =
+        new AmbryReplica(clusterMapConfig1, partition1, disk1, false, MAX_REPLICA_CAPACITY_IN_BYTES, false);
     mockClusterManagerCallback.addReplicaToPartition(partition1, replica1);
-    AmbryReplica replica2 = new AmbryReplica(partition2, disk1, MIN_REPLICA_CAPACITY_IN_BYTES, false);
+    AmbryReplica replica2 =
+        new AmbryReplica(clusterMapConfig1, partition2, disk1, false, MIN_REPLICA_CAPACITY_IN_BYTES, false);
     mockClusterManagerCallback.addReplicaToPartition(partition2, replica2);
-    AmbryReplica replica3 = new AmbryReplica(partition1, disk2, MIN_REPLICA_CAPACITY_IN_BYTES, false);
+    AmbryReplica replica3 =
+        new AmbryReplica(clusterMapConfig2, partition1, disk2, false, MIN_REPLICA_CAPACITY_IN_BYTES, false);
     mockClusterManagerCallback.addReplicaToPartition(partition1, replica3);
-    AmbryReplica replica4 = new AmbryReplica(partition2, disk2, MIN_REPLICA_CAPACITY_IN_BYTES, true);
+    AmbryReplica replica4 =
+        new AmbryReplica(clusterMapConfig2, partition2, disk2, false, MIN_REPLICA_CAPACITY_IN_BYTES, true);
     mockClusterManagerCallback.addReplicaToPartition(partition2, replica4);
+    AmbryReplica replica5 =
+        new AmbryReplica(clusterMapConfig1, partition1, disk1, true, MIN_REPLICA_CAPACITY_IN_BYTES, false);
+    mockClusterManagerCallback.addReplicaToPartition(partition1, replica5);
+
     sealedStateChangeCounter.incrementAndGet();
 
     assertEquals(replica1.getDiskId().getMountPath(), replica1.getMountPath());
     List<AmbryReplica> peerReplicas = replica1.getPeerReplicaIds();
-    assertEquals(1, peerReplicas.size());
+    assertEquals(2, peerReplicas.size());
     assertEquals(replica1.getPartitionId(), peerReplicas.get(0).getPartitionId());
     assertEquals(replica3, peerReplicas.get(0));
+    assertEquals(replica5, peerReplicas.get(1));
+    assertTrue("Replica should be in stopped state", peerReplicas.get(1).isDown());
 
     List<AmbryReplica> replicaList1 = partition1.getReplicaIds();
     List<AmbryReplica> replicaList2 = partition2.getReplicaIds();
-    assertEquals("Found: " + replicaList1.toString(), 2, replicaList1.size());
+    assertEquals("Mismatch in number of replicas. Found: " + replicaList1.toString(), 3, replicaList1.size());
     assertTrue(replicaList1.contains(replica1));
     assertTrue(replicaList1.contains(replica3));
+    assertTrue(replicaList1.contains(replica5));
     assertEquals(2, replicaList2.size());
     assertTrue(replicaList2.contains(replica2));
     assertTrue(replicaList2.contains(replica4));

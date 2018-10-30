@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 
-public class MockDataNodeId extends DataNodeId {
+public class MockDataNodeId implements DataNodeId {
   private final Map<PortType, Port> ports;
   private final List<String> mountPaths;
   private final String hostname;
@@ -61,7 +61,7 @@ public class MockDataNodeId extends DataNodeId {
    * {@link #getPortToConnectTo()}
    * @param sslEnabledDataCenters list of datacenters to which ssl is enabled.
    */
-  public void setSslEnabledDataCenters(ArrayList<String> sslEnabledDataCenters) {
+  public void setSslEnabledDataCenters(List<String> sslEnabledDataCenters) {
     this.sslEnabledDataCenters = sslEnabledDataCenters;
   }
 
@@ -115,8 +115,13 @@ public class MockDataNodeId extends DataNodeId {
   }
 
   @Override
-  public long getRackId() {
-    return -1;
+  public String getRackId() {
+    return null;
+  }
+
+  @Override
+  public long getXid() {
+    return Long.MIN_VALUE;
   }
 
   public List<String> getMountPaths() {
@@ -167,5 +172,10 @@ public class MockDataNodeId extends DataNodeId {
 
   public void onNodeResponse() {
     /* no-op for now */
+  }
+
+  @Override
+  public String toString() {
+    return datacenter + ":" + hostname + ":" + portNum;
   }
 }

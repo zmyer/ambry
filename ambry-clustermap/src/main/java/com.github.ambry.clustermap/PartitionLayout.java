@@ -16,7 +16,6 @@ package com.github.ambry.clustermap;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -51,44 +50,55 @@ class PartitionLayout {
   private long allocatedRawCapacityInBytes;
   //已分配可用的容量大小
   private long allocatedUsableCapacityInBytes;
+  private final String localDatacenterName;
+  private final ClusterMapUtils.PartitionSelectionHelper partitionSelectionHelper;
 
   //日志对象
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  // TODO: 2018/3/21 by zmyer
-  public PartitionLayout(HardwareLayout hardwareLayout, JSONObject jsonObject) throws JSONException {
+  /**
+   * Create a PartitionLayout
+   * @param hardwareLayout the {@link HardwareLayout} to use.
+   * @param jsonObject the {@link JSONObject} that represents the partition layout
+   * @param localDatacenterName the name of the local datacenter. Can be {@code null}.
+   * @throws JSONException
+   */
+  public PartitionLayout(HardwareLayout hardwareLayout, JSONObject jsonObject, String localDatacenterName)
+      throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("PartitionLayout " + hardwareLayout + ", " + jsonObject.toString());
     }
     this.hardwareLayout = hardwareLayout;
-
+    this.localDatacenterName = localDatacenterName;
     this.clusterName = jsonObject.getString("clusterName");
     this.version = jsonObject.getLong("version");
-    this.partitionMap = new HashMap<ByteBuffer, Partition>();
-
-    //创建分区对象
+    this.partitionMap = new HashMap<>();
     for (int i = 0; i < jsonObject.getJSONArray("partitions").length(); ++i) {
       addPartition(new Partition(this, jsonObject.getJSONArray("partitions").getJSONObject(i)));
     }
 
     //资源验证
     validate();
+    partitionSelectionHelper = new ClusterMapUtils.PartitionSelectionHelper(partitionMap.values(), localDatacenterName);
   }
 
-  // TODO: 2018/3/21 by zmyer
-  // Constructor for initial PartitionLayout.
-  public PartitionLayout(HardwareLayout hardwareLayout) {
+  /**
+   * Constructor for initial PartitionLayout
+   * @param hardwareLayout the {@link JSONObject} that represents the partition layout
+   * @param localDatacenterName the name of the local datacenter. Can be {@code null}.
+   */
+  public PartitionLayout(HardwareLayout hardwareLayout, String localDatacenterName) {
     if (logger.isTraceEnabled()) {
       logger.trace("PartitionLayout " + hardwareLayout);
     }
     this.hardwareLayout = hardwareLayout;
-
+    this.localDatacenterName = localDatacenterName;
     this.clusterName = hardwareLayout.getClusterName();
     this.version = 1;
     this.maxPartitionId = MinPartitionId;
-    this.partitionMap = new HashMap<ByteBuffer, Partition>();
-
+    this.partitionMap = new HashMap<>();
     validate();
+    partitionSelectionHelper = new ClusterMapUtils.PartitionSelectionHelper(partitionMap.values(), localDatacenterName);
   }
 
   public HardwareLayout getHardwareLayout() {
@@ -119,36 +129,12 @@ class PartitionLayout {
     return count;
   }
 
-  // TODO: 2018/3/20 by zmyer
-  public List<PartitionId> getPartitions() {
-    return new ArrayList<PartitionId>(partitionMap.values());
+  public List<PartitionId> getPartitions(String partitionClass) {
+    return partitionSelectionHelper.getPartitions(partitionClass);
   }
 
-  // TODO: 2018/3/20 by zmyer
-  public List<PartitionId> getWritablePartitions() {
-    List<PartitionId> writablePartitions = new ArrayList();
-    List<PartitionId> healthyWritablePartitions = new ArrayList();
-    for (Partition partition : partitionMap.values()) {
-      //依次遍历每个分区信息
-      if (partition.getPartitionState() == PartitionState.READ_WRITE) {
-        //将可读写的分区插入到结果集中
-        writablePartitions.add(partition);
-        boolean up = true;
-        //依次检查每个分区副本信息，如果有跪掉的情况，则需要设置up标记
-        for (Replica replica : partition.getReplicas()) {
-          if (replica.isDown()) {
-            up = false;
-            break;
-          }
-        }
-        //如果当前的分区副本都完好，则将对应的分区插入到结果集中
-        if (up) {
-          healthyWritablePartitions.add(partition);
-        }
-      }
-    }
-    //返回结果集
-    return healthyWritablePartitions.isEmpty() ? writablePartitions : healthyWritablePartitions;
+  public List<PartitionId> getWritablePartitions(String partitionClass) {
+    return partitionSelectionHelper.getWritablePartitions(partitionClass);
   }
 
   public long getAllocatedRawCapacityInBytes() {
@@ -192,8 +178,7 @@ class PartitionLayout {
     }
   }
 
-  // TODO: 2018/3/21 by zmyer
-  protected void validateClusterName() {
+  private void validateClusterName() {
     if (clusterName == null) {
       throw new IllegalStateException("ClusterName cannot be null.");
     }
@@ -205,8 +190,7 @@ class PartitionLayout {
     }
   }
 
-  // TODO: 2018/3/21 by zmyer
-  protected void validatePartitionIds() {
+  private void validatePartitionIds() {
     for (Partition partition : partitionMap.values()) {
       long partitionId = partition.getId();
       if (partitionId < MinPartitionId) {
@@ -218,8 +202,7 @@ class PartitionLayout {
     }
   }
 
-  // TODO: 2018/3/21 by zmyer
-  protected void validateUniqueness() {
+  private void validateUniqueness() {
     // Validate uniqueness of each logical component. Partition uniqueness is validated by method addPartition.
     Set<Replica> replicaSet = new HashSet<Replica>();
 
@@ -233,8 +216,7 @@ class PartitionLayout {
     }
   }
 
-  // TODO: 2018/3/21 by zmyer
-  protected void validate() {
+  private void validate() {
     logger.trace("begin validate.");
     //验证集群名称
     validateClusterName();
@@ -244,12 +226,14 @@ class PartitionLayout {
     validateUniqueness();
     this.allocatedRawCapacityInBytes = calculateAllocatedRawCapacityInBytes();
     this.allocatedUsableCapacityInBytes = calculateAllocatedUsableCapacityInBytes();
+    if (localDatacenterName != null && !localDatacenterName.isEmpty()
+        && hardwareLayout.findDatacenter(localDatacenterName) == null) {
+      throw new IllegalArgumentException("Clustermap has no datacenter named " + localDatacenterName);
+    }
     logger.trace("complete validate.");
   }
 
-  // TODO: 2018/3/21 by zmyer
-  protected long getNewPartitionId() {
-    //设置当前分区id
+  private long getNewPartitionId() {
     long currentPartitionId = maxPartitionId;
     //递增分区id
     maxPartitionId++;
@@ -259,22 +243,21 @@ class PartitionLayout {
 
   // TODO: 2018/3/21 by zmyer
   // Creates a Partition and corresponding Replicas for each specified disk
-  public Partition addNewPartition(List<Disk> disks, long replicaCapacityInBytes) {
-    //如果磁盘为空，则直接报错
+  public Partition addNewPartition(List<Disk> disks, long replicaCapacityInBytes, String partitionClass) {
     if (disks == null || disks.size() == 0) {
       throw new IllegalArgumentException("Disks either null or of zero length.");
     }
 
-    //创建分区对象
-    Partition partition = new Partition(getNewPartitionId(), PartitionState.READ_WRITE, replicaCapacityInBytes);
+    Partition partition =
+        new Partition(getNewPartitionId(), partitionClass, PartitionState.READ_WRITE, replicaCapacityInBytes);
     for (Disk disk : disks) {
-      //为分区分配对应的副本信息，该副本信息包含了磁盘数据
-      partition.addReplica(new Replica(partition, disk));
+      partition.addReplica(new Replica(partition, disk, hardwareLayout.getClusterMapConfig()));
     }
     //将该分区插入到分区列表中
     addPartition(partition);
     //验证
     validate();
+    partitionSelectionHelper.updatePartitions(partitionMap.values(), localDatacenterName);
 
     return partition;
   }
@@ -286,10 +269,10 @@ class PartitionLayout {
       throw new IllegalArgumentException("Partition or disks is null or disks is of zero length");
     }
     for (Disk disk : disks) {
-      //添加新的分区
-      partition.addReplica(new Replica(partition, disk));
+      partition.addReplica(new Replica(partition, disk, hardwareLayout.getClusterMapConfig()));
     }
     validate();
+    partitionSelectionHelper.updatePartitions(partitionMap.values(), localDatacenterName);
   }
 
   /**

@@ -381,10 +381,11 @@ class NettyResponseChannel implements RestResponseChannel {
     RestServiceErrorCode restServiceErrorCode = null;
     String errReason = null;
     if (cause instanceof RestServiceException) {
-      restServiceErrorCode = ((RestServiceException) cause).getErrorCode();
+      RestServiceException restServiceException = (RestServiceException) cause;
+      restServiceErrorCode = restServiceException.getErrorCode();
       errorResponseStatus = ResponseStatus.getResponseStatus(restServiceErrorCode);
       status = getHttpResponseStatus(errorResponseStatus);
-      if (status == HttpResponseStatus.BAD_REQUEST) {
+      if (status == HttpResponseStatus.BAD_REQUEST || restServiceException.shouldIncludeExceptionMessageInResponse()) {
         errReason = new String(
             Utils.getRootCause(cause).getMessage().replaceAll("[\n\t\r]", " ").getBytes(StandardCharsets.US_ASCII),
             StandardCharsets.US_ASCII);
@@ -409,12 +410,50 @@ class NettyResponseChannel implements RestResponseChannel {
       response.headers().set(ERROR_CODE_HEADER, restServiceErrorCode.name());
     }
     response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
-    boolean keepAlive =
-        !forceClose && HttpUtil.isKeepAlive(responseMetadata) && request != null && !request.getRestMethod()
-            .equals(RestMethod.POST) && !request.getRestMethod().equals(RestMethod.PUT)
-            && !CLOSE_CONNECTION_ERROR_STATUSES.contains(status);
-    HttpUtil.setKeepAlive(response, keepAlive);
+    // if there is an ALLOW header in the response so far constructed, copy it
+    if (responseMetadata.headers().contains(HttpHeaderNames.ALLOW)) {
+      response.headers().set(HttpHeaderNames.ALLOW, responseMetadata.headers().get(HttpHeaderNames.ALLOW));
+    } else if (errorResponseStatus == ResponseStatus.MethodNotAllowed) {
+      logger.warn("Response is {} but there is no value for {}", ResponseStatus.MethodNotAllowed,
+          HttpHeaderNames.ALLOW);
+    }
+    copyTrackingHeaders(responseMetadata, response);
+    HttpUtil.setKeepAlive(response, shouldKeepAlive(status));
     return response;
+  }
+
+  /**
+   * Copy tracking headers (if any) from sourceResponse to targetResponse.
+   * @param sourceResponse the source response with the tracking headers.
+   * @param targetResponse the target response that the tracking headers will be copied over.
+   */
+  private void copyTrackingHeaders(HttpResponse sourceResponse, HttpResponse targetResponse) {
+    for (String header : RestUtils.TrackingHeaders.TRACKING_HEADERS) {
+      if (sourceResponse.headers().contains(header)) {
+        targetResponse.headers().set(header, sourceResponse.headers().get(header));
+      }
+    }
+  }
+
+  /**
+   * @param status the {@link HttpResponseStatus}
+   * @return {@code true} if the channel should be kept alive
+   */
+  private boolean shouldKeepAlive(HttpResponseStatus status) {
+    boolean shouldKeepAlive = true;
+    if (request != null) {
+      if (request.getArgs().containsKey(RestUtils.InternalKeys.KEEP_ALIVE_ON_ERROR_HINT)) {
+        shouldKeepAlive =
+            Boolean.parseBoolean(request.getArgs().get(RestUtils.InternalKeys.KEEP_ALIVE_ON_ERROR_HINT).toString());
+      } else if (request.getRestMethod().equals(RestMethod.POST)) {
+        shouldKeepAlive = false;
+      } else if (request.getRestMethod().equals(RestMethod.PUT) && (HttpUtil.isTransferEncodingChunked(request.request)
+          || HttpUtil.getContentLength(request.request, 0L) > 0)) {
+        shouldKeepAlive = false;
+      }
+    }
+    return shouldKeepAlive && !forceClose && HttpUtil.isKeepAlive(responseMetadata)
+        && !CLOSE_CONNECTION_ERROR_STATUSES.contains(status);
   }
 
   /**
@@ -488,6 +527,14 @@ class NettyResponseChannel implements RestResponseChannel {
       case InsufficientCapacity:
         nettyMetrics.insufficientCapacityErrorCount.inc();
         status = HttpResponseStatus.INSUFFICIENT_STORAGE;
+        break;
+      case PreconditionFailed:
+        nettyMetrics.preconditionFailedErrorCount.inc();
+        status = HttpResponseStatus.PRECONDITION_FAILED;
+        break;
+      case MethodNotAllowed:
+        nettyMetrics.methodNotAllowedErrorCount.inc();
+        status = HttpResponseStatus.METHOD_NOT_ALLOWED;
         break;
       default:
         nettyMetrics.unknownResponseStatusCount.inc();

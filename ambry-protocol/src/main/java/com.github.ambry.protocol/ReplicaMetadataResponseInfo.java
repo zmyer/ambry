@@ -16,12 +16,9 @@ package com.github.ambry.protocol;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.ServerErrorCode;
-import com.github.ambry.messageformat.MessageMetadata;
 import com.github.ambry.store.FindToken;
 import com.github.ambry.store.FindTokenFactory;
 import com.github.ambry.store.MessageInfo;
-import com.github.ambry.utils.Pair;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -41,23 +38,26 @@ public class ReplicaMetadataResponseInfo {
     private final PartitionId partitionId;
     private final ServerErrorCode errorCode;
 
-    private static final int Error_Size_InBytes = 2;
-    private static final int Remote_Replica_Lag_Size_In_Bytes = 8;
+  private long totalSizeOfAllMessages = 0;
 
-    private ReplicaMetadataResponseInfo(PartitionId partitionId, FindToken findToken, List<MessageInfo> messageInfoList,
-            long remoteReplicaLagInBytes, short replicaMetadataResponseVersion) {
-        if (partitionId == null || findToken == null || messageInfoList == null) {
-            throw new IllegalArgumentException(
-                    "Invalid partition or token or message info list for ReplicaMetadataResponseInfo");
-        }
-        this.partitionId = partitionId;
-        this.remoteReplicaLagInBytes = remoteReplicaLagInBytes;
-        messageInfoAndMetadataListSerde = new MessageInfoAndMetadataListSerde(messageInfoList,
-                getMessageInfoAndMetadataListSerDeVersion(replicaMetadataResponseVersion));
-        messageInfoListSize = messageInfoAndMetadataListSerde.getMessageInfoAndMetadataListSize();
-        this.token = findToken;
-        this.errorCode = ServerErrorCode.No_Error;
+  private static final int Error_Size_InBytes = 2;
+  private static final int Remote_Replica_Lag_Size_In_Bytes = 8;
+
+  private ReplicaMetadataResponseInfo(PartitionId partitionId, FindToken findToken, List<MessageInfo> messageInfoList,
+      long remoteReplicaLagInBytes, short replicaMetadataResponseVersion) {
+    if (partitionId == null || findToken == null || messageInfoList == null) {
+      throw new IllegalArgumentException(
+          "Invalid partition or token or message info list for ReplicaMetadataResponseInfo");
     }
+    this.partitionId = partitionId;
+    this.remoteReplicaLagInBytes = remoteReplicaLagInBytes;
+    messageInfoAndMetadataListSerde = new MessageInfoAndMetadataListSerde(messageInfoList,
+        getMessageInfoAndMetadataListSerDeVersion(replicaMetadataResponseVersion));
+    messageInfoListSize = messageInfoAndMetadataListSerde.getMessageInfoAndMetadataListSize();
+    this.token = findToken;
+    this.errorCode = ServerErrorCode.No_Error;
+    messageInfoList.forEach(info -> totalSizeOfAllMessages += info.getSize());
+  }
 
     public ReplicaMetadataResponseInfo(PartitionId partitionId, ServerErrorCode errorCode) {
         if (partitionId == null) {
@@ -97,22 +97,22 @@ public class ReplicaMetadataResponseInfo {
         return errorCode;
     }
 
-    public static ReplicaMetadataResponseInfo readFrom(DataInputStream stream, FindTokenFactory factory,
-            ClusterMap clusterMap, short replicaMetadataResponseVersion) throws IOException {
-        PartitionId partitionId = clusterMap.getPartitionIdFromStream(stream);
-        ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
-        if (error != ServerErrorCode.No_Error) {
-            return new ReplicaMetadataResponseInfo(partitionId, error);
-        } else {
-            FindToken token = factory.getFindToken(stream);
-            Pair<List<MessageInfo>, List<MessageMetadata>> messageInfoAndMetadataList =
-                    MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(stream, clusterMap,
-                            getMessageInfoAndMetadataListSerDeVersion(replicaMetadataResponseVersion));
-            long remoteReplicaLag = stream.readLong();
-            return new ReplicaMetadataResponseInfo(partitionId, token, messageInfoAndMetadataList.getFirst(),
-                    remoteReplicaLag, replicaMetadataResponseVersion);
-        }
+  public static ReplicaMetadataResponseInfo readFrom(DataInputStream stream, FindTokenFactory factory,
+      ClusterMap clusterMap, short replicaMetadataResponseVersion) throws IOException {
+    PartitionId partitionId = clusterMap.getPartitionIdFromStream(stream);
+    ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
+    if (error != ServerErrorCode.No_Error) {
+      return new ReplicaMetadataResponseInfo(partitionId, error);
+    } else {
+      FindToken token = factory.getFindToken(stream);
+      MessageInfoAndMetadataListSerde messageInfoAndMetadataList =
+          MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(stream, clusterMap,
+              getMessageInfoAndMetadataListSerDeVersion(replicaMetadataResponseVersion));
+      long remoteReplicaLag = stream.readLong();
+      return new ReplicaMetadataResponseInfo(partitionId, token, messageInfoAndMetadataList.getMessageInfoList(),
+          remoteReplicaLag, replicaMetadataResponseVersion);
     }
+  }
 
     public void writeTo(ByteBuffer buffer) {
         buffer.put(partitionId.getBytes());
@@ -129,37 +129,55 @@ public class ReplicaMetadataResponseInfo {
                 + +partitionId.getBytes().length + Error_Size_InBytes;
     }
 
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(partitionId);
-        sb.append(" ServerErrorCode=").append(errorCode);
-        if (errorCode == ServerErrorCode.No_Error) {
-            sb.append(" Token=").append(token);
-            sb.append(" MessageInfoList=").append(messageInfoAndMetadataListSerde.getMessageInfoList());
-            sb.append(" RemoteReplicaLagInBytes=").append(remoteReplicaLagInBytes);
-        }
-        return sb.toString();
-    }
+  /**
+   * @return the cumulative size of all the messages represented by this response. 0 if the response signifies an error
+   */
+  public long getTotalSizeOfAllMessages() {
+    return totalSizeOfAllMessages;
+  }
 
-    /**
-     * Return the MessageInfoAndMetadataList SerDe version to use for the given {@link ReplicaMetadataResponse} version
-     * @param replicaMetadataResponseVersion the {@link ReplicaMetadataResponse} version
-     * @return the MessageInfoAndMetadataList SerDe version to use for the given {@link ReplicaMetadataResponse} version
-     */
-    private static short getMessageInfoAndMetadataListSerDeVersion(short replicaMetadataResponseVersion) {
-        switch (replicaMetadataResponseVersion) {
-        case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_1:
-            return MessageInfoAndMetadataListSerde.VERSION_1;
-        case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_2:
-            return MessageInfoAndMetadataListSerde.VERSION_2;
-        case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_3:
-            return MessageInfoAndMetadataListSerde.VERSION_3;
-        case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_4:
-            return MessageInfoAndMetadataListSerde.VERSION_4;
-        default:
-            throw new IllegalArgumentException(
-                    "Unknown ReplicaMetadataResponse version encountered: " + replicaMetadataResponseVersion);
+  @Override
+  public String toString() {
+    StringBuilder sb = new StringBuilder();
+    sb.append(partitionId);
+    sb.append(" ServerErrorCode=").append(errorCode);
+    if (errorCode == ServerErrorCode.No_Error) {
+      List<MessageInfo> messageInfos = messageInfoAndMetadataListSerde.getMessageInfoList();
+      sb.append(" Token=").append(token);
+      sb.append(" MessagesTotalSize=").append(totalSizeOfAllMessages);
+      if (messageInfos != null) {
+        int size = messageInfos.size();
+        sb.append(" MessageInfoListSize=").append(size);
+        if (size > 0) {
+          sb.append(" MessageInfoListFirstId=").append(messageInfos.get(0).getStoreKey());
+          sb.append(" MessageInfoListLastId=").append(messageInfos.get(size - 1).getStoreKey());
         }
+      }
+      sb.append(" RemoteReplicaLagInBytes=").append(remoteReplicaLagInBytes);
     }
+    return sb.toString();
+  }
+
+  /**
+   * Return the MessageInfoAndMetadataList SerDe version to use for the given {@link ReplicaMetadataResponse} version
+   * @param replicaMetadataResponseVersion the {@link ReplicaMetadataResponse} version
+   * @return the MessageInfoAndMetadataList SerDe version to use for the given {@link ReplicaMetadataResponse} version
+   */
+  private static short getMessageInfoAndMetadataListSerDeVersion(short replicaMetadataResponseVersion) {
+    switch (replicaMetadataResponseVersion) {
+      case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_1:
+        return MessageInfoAndMetadataListSerde.VERSION_1;
+      case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_2:
+        return MessageInfoAndMetadataListSerde.VERSION_2;
+      case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_3:
+        return MessageInfoAndMetadataListSerde.VERSION_3;
+      case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_4:
+        return MessageInfoAndMetadataListSerde.VERSION_4;
+      case ReplicaMetadataResponse.REPLICA_METADATA_RESPONSE_VERSION_V_5:
+        return MessageInfoAndMetadataListSerde.DETERMINE_VERSION;
+      default:
+        throw new IllegalArgumentException(
+            "Unknown ReplicaMetadataResponse version encountered: " + replicaMetadataResponseVersion);
+    }
+  }
 }

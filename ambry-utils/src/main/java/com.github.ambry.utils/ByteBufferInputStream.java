@@ -66,15 +66,22 @@ public class ByteBufferInputStream extends InputStream {
         return byteBuffer.get() & 0xFF;
     }
 
-    @Override
-    public int read(byte[] bytes, int offset, int length) throws IOException {
-        int count = Math.min(byteBuffer.remaining(), length);
-        if (count == 0) {
-            return -1;
-        }
-        byteBuffer.get(bytes, offset, count);
-        return count;
+  @Override
+  public int read(byte[] bytes, int offset, int length) throws IOException {
+    if (bytes == null) {
+      throw new NullPointerException();
+    } else if (offset < 0 || length < 0 || length > bytes.length - offset) {
+      throw new IndexOutOfBoundsException();
+    } else if (length == 0) {
+      return 0;
     }
+    int count = Math.min(byteBuffer.remaining(), length);
+    if (count == 0) {
+      return -1;
+    }
+    byteBuffer.get(bytes, offset, count);
+    return count;
+  }
 
     @Override
     public int available() throws IOException {

@@ -76,12 +76,26 @@ public class StoreConfig {
     @Default("7")
     public final int storeDeletedMessageRetentionDays;
 
-    /**
-     * The rate of I/O allowed for compaction and hard deletes.
-     */
-    @Config("store.cleanup.operations.bytes.per.sec")
-    @Default("1*1024*1024")
-    public final int storeCleanupOperationsBytesPerSec;
+  /**
+   * The rate of I/O allowed per disk for hard deletes.
+   */
+  @Config("store.hard.delete.operations.bytes.per.sec")
+  @Default("100*1024")
+  public final int storeHardDeleteOperationsBytesPerSec;
+
+  /**
+   * The rate of I/O allowed per disk for compaction.
+   */
+  @Config("store.compaction.operations.bytes.per.sec")
+  @Default("1*1024*1024")
+  public final int storeCompactionOperationsBytesPerSec;
+
+  /**
+   * The minimum buffer size for compaction copy phase.
+   */
+  @Config("store.compaction.min.buffer.size")
+  @Default("10*1024*1024")
+  public final int storeCompactionMinBufferSize;
 
     /**
      * Whether hard deletes are to be enabled or not
@@ -190,13 +204,13 @@ public class StoreConfig {
     @Default("false")
     public final boolean storeValidateAuthorization;
 
-    /**
-     * Enables or disables dynamic sealing/unsealing
-     */
-    @Config(storeWriteStatusDelegateEnableName)
-    @Default("false")
-    public final boolean storeWriteStatusDelegateEnable;
-    public static final String storeWriteStatusDelegateEnableName = "store.write.status.delegate.enable";
+  /**
+   * Enables or disables ReplicaStatusDelegate to dynamically set the replica sealed/stopped status
+   */
+  @Config(storeReplicaStatusDelegateEnableName)
+  @Default("false")
+  public final boolean storeReplicaStatusDelegateEnable;
+  public static final String storeReplicaStatusDelegateEnableName = "store.replica.status.delegate.enable";
 
     /**
      * Specifies the size threshold (as percentage of maximum size) of a store for converting the chunk to RO from RW
@@ -207,68 +221,85 @@ public class StoreConfig {
     public static final String storeReadOnlyEnableSizeThresholdPercentageName =
             "store.read.only.enable.size.threshold.percentage";
 
-    /**
-     * Specifies the size threshold delta below {@link #storeReadOnlyEnableSizeThresholdPercentageName} that a store will be
-     * converted from RO to RW
-     */
-    @Config(storeReadWriteEnableSizeThresholdPercentageDeltaName)
-    @Default("5")
-    public final int storeReadWriteEnableSizeThresholdPercentageDelta;
-    public static final String storeReadWriteEnableSizeThresholdPercentageDeltaName =
-            "store.read.write.enable.size.threshold.percentage.delta";
+  /**
+   * Specifies the size threshold delta below {@link #storeReadOnlyEnableSizeThresholdPercentageName} that a store will
+   * be converted from RO to RW
+   */
+  @Config(storeReadWriteEnableSizeThresholdPercentageDeltaName)
+  @Default("5")
+  public final int storeReadWriteEnableSizeThresholdPercentageDelta;
+  public static final String storeReadWriteEnableSizeThresholdPercentageDeltaName =
+      "store.read.write.enable.size.threshold.percentage.delta";
 
-    // TODO: 2018/3/19 by zmyer
-    public StoreConfig(VerifiableProperties verifiableProperties) {
+  /**
+   * Specifies the minimum number of seconds before a blob's current expiry time (creation time + TTL) that the current
+   * time has to be in order for a TTL update operation on the blob to succeed.
+   */
+  @Config(storeTtlUpdateBufferTimeSecondsName)
+  @Default("60 * 60 * 24")
+  public final int storeTtlUpdateBufferTimeSeconds;
+  public static final String storeTtlUpdateBufferTimeSecondsName = "store.ttl.update.buffer.time.seconds";
 
-        storeKeyFactory = verifiableProperties.getString("store.key.factory", "com.github.ambry.commons.BlobIdFactory");
-        storeDataFlushIntervalSeconds = verifiableProperties.getLong("store.data.flush.interval.seconds", 60);
-        storeIndexMaxMemorySizeBytes = verifiableProperties.getInt("store.index.max.memory.size.bytes",
-                20 * 1024 * 1024);
-        storeDataFlushDelaySeconds = verifiableProperties.getInt("store.data.flush.delay.seconds", 5);
-        storeIndexMaxNumberOfInmemElements = verifiableProperties.getInt("store.index.max.number.of.inmem.elements",
-                10000);
-        storeIndexBloomMaxFalsePositiveProbability =
-                verifiableProperties.getDoubleInRange("store.index.bloom.max.false.positive.probability", 0.01, 0.0,
-                        1.0);
-        storeMaxNumberOfEntriesToReturnFromJournal =
-                verifiableProperties.getIntInRange("store.max.number.of.entries.to.return.from.journal", 5000, 1,
-                        10000);
-        storeDeletedMessageRetentionDays = verifiableProperties.getInt("store.deleted.message.retention.days", 7);
-        storeCleanupOperationsBytesPerSec =
-                verifiableProperties.getIntInRange("store.cleanup.operations.bytes.per.sec", 1 * 1024 * 1024, 1,
-                        Integer.MAX_VALUE);
-        storeEnableHardDelete = verifiableProperties.getBoolean("store.enable.hard.delete", false);
-        storeSegmentSizeInBytes =
-                verifiableProperties.getLongInRange("store.segment.size.in.bytes", Long.MAX_VALUE, 1, Long.MAX_VALUE);
-        storeMinUsedCapacityToTriggerCompactionInPercentage =
-                verifiableProperties.getInt("store.min.used.capacity.to.trigger.compaction.in.percentage", 50);
-        storeCompactionTriggers = verifiableProperties.getString("store.compaction.triggers", "").split(",");
-        storeCompactionCheckFrequencyInHours =
-                verifiableProperties.getIntInRange("store.compaction.check.frequency.in.hours", 7 * 24, 1, 365 * 24);
-        storeCompactionPolicyFactory = verifiableProperties.getString("store.compaction.policy.factory",
-                "com.github.ambry.store.CompactAllPolicyFactory");
-        storeMinLogSegmentCountToReclaimToTriggerCompaction =
-                verifiableProperties.getIntInRange("store.min.log.segment.count.to.reclaim.to.trigger.compaction", 1, 1,
-                        1000);
-        storeStatsBucketCount = verifiableProperties.getIntInRange("store.stats.bucket.count", 0, 0, 10000);
-        storeStatsBucketSpanInMinutes =
-                verifiableProperties.getLongInRange("store.stats.bucket.span.in.minutes", 60, 1, 10000);
-        storeStatsRecentEntryProcessingIntervalInMinutes =
-                verifiableProperties.getLongInRange("store.stats.recent.entry.processing.interval.in.minutes", 2, 1,
-                        60);
-        storeStatsWaitTimeoutInSecs =
-                verifiableProperties.getLongInRange("store.stats.wait.timeout.in.secs", 2 * 60, 0, 30 * 60);
-        storeStatsIndexEntriesPerSecond =
-                verifiableProperties.getIntInRange("store.stats.index.entries.per.second", 240000, 1,
-                        Integer.MAX_VALUE);
-        storeIndexPersistedEntryMinBytes = verifiableProperties.getInt("store.index.persisted.entry.min.bytes", 115);
-        storeWriteStatusDelegateEnable = verifiableProperties.getBoolean(storeWriteStatusDelegateEnableName, false);
-        storeReadOnlyEnableSizeThresholdPercentage =
-                verifiableProperties.getIntInRange(storeReadOnlyEnableSizeThresholdPercentageName, 95, 0, 100);
-        storeReadWriteEnableSizeThresholdPercentageDelta =
-                verifiableProperties.getIntInRange(storeReadWriteEnableSizeThresholdPercentageDeltaName, 5, 0,
-                        storeReadOnlyEnableSizeThresholdPercentage);
-        storeValidateAuthorization = verifiableProperties.getBoolean("store.validate.authorization", false);
-    }
+  /**
+   * Specifies whether all index segments should be kept in memory (as opposed to a specific subset).
+   */
+  @Config(storeKeepIndexInMemoryName)
+  @Default("false")
+  public final boolean storeKeepIndexInMemory;
+  public static final String storeKeepIndexInMemoryName = "store.keep.index.in.memory";
+
+  public StoreConfig(VerifiableProperties verifiableProperties) {
+
+    storeKeyFactory = verifiableProperties.getString("store.key.factory", "com.github.ambry.commons.BlobIdFactory");
+    storeDataFlushIntervalSeconds = verifiableProperties.getLong("store.data.flush.interval.seconds", 60);
+    storeIndexMaxMemorySizeBytes = verifiableProperties.getInt("store.index.max.memory.size.bytes", 20 * 1024 * 1024);
+    storeDataFlushDelaySeconds = verifiableProperties.getInt("store.data.flush.delay.seconds", 5);
+    storeIndexMaxNumberOfInmemElements = verifiableProperties.getInt("store.index.max.number.of.inmem.elements", 10000);
+    storeIndexBloomMaxFalsePositiveProbability =
+        verifiableProperties.getDoubleInRange("store.index.bloom.max.false.positive.probability", 0.01, 0.0, 1.0);
+    storeMaxNumberOfEntriesToReturnFromJournal =
+        verifiableProperties.getIntInRange("store.max.number.of.entries.to.return.from.journal", 5000, 1, 10000);
+    storeDeletedMessageRetentionDays = verifiableProperties.getInt("store.deleted.message.retention.days", 7);
+    storeHardDeleteOperationsBytesPerSec =
+        verifiableProperties.getIntInRange("store.hard.delete.operations.bytes.per.sec", 100 * 1024, 1,
+            Integer.MAX_VALUE);
+    storeCompactionOperationsBytesPerSec =
+        verifiableProperties.getIntInRange("store.compaction.operations.bytes.per.sec", 1 * 1024 * 1024, 1,
+            Integer.MAX_VALUE);
+    storeCompactionMinBufferSize =
+        verifiableProperties.getIntInRange("store.compaction.min.buffer.size", 10 * 1024 * 1024, 0, Integer.MAX_VALUE);
+    storeEnableHardDelete = verifiableProperties.getBoolean("store.enable.hard.delete", false);
+    storeSegmentSizeInBytes =
+        verifiableProperties.getLongInRange("store.segment.size.in.bytes", Long.MAX_VALUE, 1, Long.MAX_VALUE);
+    storeMinUsedCapacityToTriggerCompactionInPercentage =
+        verifiableProperties.getInt("store.min.used.capacity.to.trigger.compaction.in.percentage", 50);
+    storeCompactionTriggers = verifiableProperties.getString("store.compaction.triggers", "").split(",");
+    storeCompactionCheckFrequencyInHours =
+        verifiableProperties.getIntInRange("store.compaction.check.frequency.in.hours", 7 * 24, 1, 365 * 24);
+    storeCompactionPolicyFactory = verifiableProperties.getString("store.compaction.policy.factory",
+        "com.github.ambry.store.CompactAllPolicyFactory");
+    storeMinLogSegmentCountToReclaimToTriggerCompaction =
+        verifiableProperties.getIntInRange("store.min.log.segment.count.to.reclaim.to.trigger.compaction", 1, 1, 1000);
+    storeStatsBucketCount = verifiableProperties.getIntInRange("store.stats.bucket.count", 0, 0, 10000);
+    storeStatsBucketSpanInMinutes =
+        verifiableProperties.getLongInRange("store.stats.bucket.span.in.minutes", 60, 1, 10000);
+    storeStatsRecentEntryProcessingIntervalInMinutes =
+        verifiableProperties.getLongInRange("store.stats.recent.entry.processing.interval.in.minutes", 2, 1, 60);
+    storeStatsWaitTimeoutInSecs =
+        verifiableProperties.getLongInRange("store.stats.wait.timeout.in.secs", 2 * 60, 0, 30 * 60);
+    storeStatsIndexEntriesPerSecond =
+        verifiableProperties.getIntInRange("store.stats.index.entries.per.second", 240000, 1, Integer.MAX_VALUE);
+    storeIndexPersistedEntryMinBytes = verifiableProperties.getInt("store.index.persisted.entry.min.bytes", 115);
+    storeReplicaStatusDelegateEnable = verifiableProperties.getBoolean(storeReplicaStatusDelegateEnableName, false);
+    storeReadOnlyEnableSizeThresholdPercentage =
+        verifiableProperties.getIntInRange(storeReadOnlyEnableSizeThresholdPercentageName, 95, 0, 100);
+    storeReadWriteEnableSizeThresholdPercentageDelta =
+        verifiableProperties.getIntInRange(storeReadWriteEnableSizeThresholdPercentageDeltaName, 5, 0,
+            storeReadOnlyEnableSizeThresholdPercentage);
+    storeValidateAuthorization = verifiableProperties.getBoolean("store.validate.authorization", false);
+    storeTtlUpdateBufferTimeSeconds =
+        verifiableProperties.getIntInRange(storeTtlUpdateBufferTimeSecondsName, 60 * 60 * 24, 0, Integer.MAX_VALUE);
+    storeKeepIndexInMemory = verifiableProperties.getBoolean(storeKeepIndexInMemoryName, false);
+  }
 }
 

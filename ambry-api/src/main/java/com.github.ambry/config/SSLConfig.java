@@ -53,19 +53,23 @@ public class SSLConfig {
     @Default("required")
     public final String sslClientAuthentication;
 
-    /**
-     * The SSL keymanager algorithm
-     */
-    @Config("ssl.keymanager.algorithm")
-    @Default("")
-    public final String sslKeymanagerAlgorithm;
+  /**
+   * The SSL keymanager algorithm.
+   * This is only honored by {@code JdkSslFactory}. {@code NettySslFactory} always uses the default value to maintain
+   * compatibility with the OpenSSL-based engine.
+   */
+  @Config("ssl.keymanager.algorithm")
+  @Default("")
+  public final String sslKeymanagerAlgorithm;
 
-    /**
-     * The SSL trustmanager algorithm
-     */
-    @Config("ssl.trustmanager.algorithm")
-    @Default("")
-    public final String sslTrustmanagerAlgorithm;
+  /**
+   * The SSL trustmanager algorithm
+   * This is only honored by {@code JdkSslFactory}. {@code NettySslFactory} always uses the default value to maintain
+   * compatibility with the OpenSSL-based engine.
+   */
+  @Config("ssl.trustmanager.algorithm")
+  @Default("")
+  public final String sslTrustmanagerAlgorithm;
 
     /**
      * The SSL key store type
@@ -126,23 +130,29 @@ public class SSLConfig {
     @Default("")
     public final String sslCipherSuites;
 
-    // TODO: 2018/3/19 by zmyer
-    public SSLConfig(VerifiableProperties verifiableProperties) {
-        sslContextProtocol = verifiableProperties.getString("ssl.context.protocol", "TLS");
-        sslContextProvider = verifiableProperties.getString("ssl.context.provider", "");
-        sslEnabledProtocols = verifiableProperties.getString("ssl.enabled.protocols", "TLSv1.2");
-        sslEndpointIdentificationAlgorithm = verifiableProperties.getString("ssl.endpoint.identification.algorithm",
-                "");
-        sslClientAuthentication = verifiableProperties.getString("ssl.client.authentication", "required");
-        sslKeymanagerAlgorithm = verifiableProperties.getString("ssl.keymanager.algorithm", "");
-        sslTrustmanagerAlgorithm = verifiableProperties.getString("ssl.trustmanager.algorithm", "");
-        sslKeystoreType = verifiableProperties.getString("ssl.keystore.type", "JKS");
-        sslKeystorePath = verifiableProperties.getString("ssl.keystore.path", "");
-        sslKeystorePassword = verifiableProperties.getString("ssl.keystore.password", "");
-        sslKeyPassword = verifiableProperties.getString("ssl.key.password", "");
-        sslTruststoreType = verifiableProperties.getString("ssl.truststore.type", "JKS");
-        sslTruststorePath = verifiableProperties.getString("ssl.truststore.path", "");
-        sslTruststorePassword = verifiableProperties.getString("ssl.truststore.password", "");
-        sslCipherSuites = verifiableProperties.getString("ssl.cipher.suites", "");
-    }
+  /**
+   * The implementation of {@link com.github.ambry.commons.SSLFactory} to use.
+   */
+  @Config("ssl.factory")
+  @Default("com.github.ambry.commons.JdkSslFactory")
+  public final String sslFactory;
+
+  public SSLConfig(VerifiableProperties verifiableProperties) {
+    sslContextProtocol = verifiableProperties.getString("ssl.context.protocol", "TLS");
+    sslContextProvider = verifiableProperties.getString("ssl.context.provider", "");
+    sslEnabledProtocols = verifiableProperties.getString("ssl.enabled.protocols", "TLSv1.2");
+    sslEndpointIdentificationAlgorithm = verifiableProperties.getString("ssl.endpoint.identification.algorithm", "");
+    sslClientAuthentication = verifiableProperties.getString("ssl.client.authentication", "required");
+    sslKeymanagerAlgorithm = verifiableProperties.getString("ssl.keymanager.algorithm", "");
+    sslTrustmanagerAlgorithm = verifiableProperties.getString("ssl.trustmanager.algorithm", "");
+    sslKeystoreType = verifiableProperties.getString("ssl.keystore.type", "JKS");
+    sslKeystorePath = verifiableProperties.getString("ssl.keystore.path", "");
+    sslKeystorePassword = verifiableProperties.getString("ssl.keystore.password", "");
+    sslKeyPassword = verifiableProperties.getString("ssl.key.password", "");
+    sslTruststoreType = verifiableProperties.getString("ssl.truststore.type", "JKS");
+    sslTruststorePath = verifiableProperties.getString("ssl.truststore.path", "");
+    sslTruststorePassword = verifiableProperties.getString("ssl.truststore.password", "");
+    sslCipherSuites = verifiableProperties.getString("ssl.cipher.suites", "");
+    sslFactory = verifiableProperties.getString("ssl.factory", "com.github.ambry.commons.JdkSslFactory");
+  }
 }

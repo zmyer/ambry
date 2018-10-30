@@ -15,14 +15,17 @@ package com.github.ambry.rest;
 
 import com.github.ambry.router.Callback;
 import com.github.ambry.router.FutureResult;
+import com.github.ambry.utils.Utils;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -97,7 +100,7 @@ public class MockRestResponseChannel implements RestResponseChannel {
   }
 
   public MockRestResponseChannel(RestRequest restRequest) throws JSONException {
-    responseMetadata.put(RESPONSE_STATUS_KEY, ResponseStatus.Ok);
+    responseMetadata.put(RESPONSE_STATUS_KEY, ResponseStatus.Ok.name());
     this.restRequest = restRequest;
   }
 
@@ -132,14 +135,18 @@ public class MockRestResponseChannel implements RestResponseChannel {
       this.exception = exception;
       try {
         if (!responseMetadataFinalized.get() && exception != null) {
-          // clear headers
+          // clear headers except for the value of Allow
+          String allow = getHeader(RestUtils.Headers.ALLOW);
           responseMetadata.put(RESPONSE_HEADERS_KEY, new JSONObject());
+          if (!Utils.isNullOrEmpty(allow)) {
+            setHeader(RestUtils.Headers.ALLOW, allow);
+          }
           setHeader(RestUtils.Headers.CONTENT_TYPE, "text/plain; charset=UTF-8");
           ResponseStatus status = ResponseStatus.InternalServerError;
           if (exception instanceof RestServiceException) {
             status = ResponseStatus.getResponseStatus(((RestServiceException) exception).getErrorCode());
           }
-          responseMetadata.put(RESPONSE_STATUS_KEY, status);
+          responseMetadata.put(RESPONSE_STATUS_KEY, status.name());
           bodyBytes.write(exception.toString().getBytes());
           responseMetadataFinalized.set(true);
         }
@@ -159,7 +166,7 @@ public class MockRestResponseChannel implements RestResponseChannel {
   public synchronized void setStatus(ResponseStatus status) throws RestServiceException {
     if (isOpen() && !responseMetadataFinalized.get()) {
       try {
-        responseMetadata.put(RESPONSE_STATUS_KEY, status);
+        responseMetadata.put(RESPONSE_STATUS_KEY, status.name());
         onEventComplete(Event.SetStatus);
       } catch (JSONException e) {
         throw new RestServiceException("Unable to set Status", RestServiceErrorCode.InternalServerError);
@@ -193,7 +200,7 @@ public class MockRestResponseChannel implements RestResponseChannel {
     try {
       if (responseMetadata.has(RESPONSE_HEADERS_KEY) && responseMetadata.getJSONObject(RESPONSE_HEADERS_KEY)
           .has(headerName)) {
-        headerValue = responseMetadata.getJSONObject(RESPONSE_HEADERS_KEY).getString(headerName);
+        headerValue = responseMetadata.getJSONObject(RESPONSE_HEADERS_KEY).get(headerName).toString();
       }
     } catch (JSONException e) {
       throw new IllegalStateException(e);
@@ -265,6 +272,14 @@ public class MockRestResponseChannel implements RestResponseChannel {
    */
   public Exception getException() {
     return exception;
+  }
+
+  /**
+   * @return the response headers associated with this response channel
+   */
+  public Map<String, Object> getResponseHeaders() {
+    return responseMetadata.has(RESPONSE_HEADERS_KEY) ? responseMetadata.getJSONObject(RESPONSE_HEADERS_KEY).toMap()
+        : Collections.emptyMap();
   }
 
   /**

@@ -11,16 +11,25 @@
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
-package com.github.ambry.store;
+package com.github.ambry.messageformat;
 
-import java.io.DataInputStream;
-import java.io.IOException;
+/**
+ * In mem representation of a TTL update record
+ */
+public class TtlUpdateSubRecord {
+  private final long updatedExpiryTimeMs;
 
+  /**
+   * @param updatedExpiryTimeMs the new expiry time in ms
+   */
+  TtlUpdateSubRecord(long updatedExpiryTimeMs) {
+    this.updatedExpiryTimeMs = updatedExpiryTimeMs;
+  }
 
-public class MockIdFactory implements StoreKeyFactory {
-
-  @Override
-  public StoreKey getStoreKey(DataInputStream value) throws IOException {
-    return new MockId(value);
+  /**
+   * @return the expiry time in ms
+   */
+  public long getUpdatedExpiryTimeMs() {
+    return updatedExpiryTimeMs;
   }
 }

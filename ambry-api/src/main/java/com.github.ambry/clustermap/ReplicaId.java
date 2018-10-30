@@ -71,10 +71,20 @@ public interface ReplicaId {
      */
     DiskId getDiskId();
 
-    /**
-     * Returns true if the replica is down
-     */
-    boolean isDown();
+  /**
+   * Marks the disk as down if all stores on disk are unavailable.
+   */
+  void markDiskDown();
+
+  /**
+   * Marks the disk as up if at least one store on disk is available.
+   */
+  void markDiskUp();
+
+  /**
+   * Returns true if the replica is down
+   */
+  boolean isDown();
 
     /**
      * @return true if this replica is in sealed state.

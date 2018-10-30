@@ -41,26 +41,26 @@ public abstract class MessageFormatInputStream extends InputStream {
     protected long messageLength;
     protected Logger logger = LoggerFactory.getLogger(getClass());
 
-    @Override
-    public int read() throws IOException {
-        if (buffer != null && buffer.remaining() > 0) {
-            return buffer.get() & 0xFF;
-        }
-        if (stream != null && streamRead < streamLength) {
-            streamRead++;
-            return stream.read();
-        }
-        if (stream != null) {
-            if (crc.position() == 0) {
-                crc.putLong(stream.getValue());
-                crc.flip();
-            }
-            if (crc.remaining() > 0) {
-                return crc.get();
-            }
-        }
-        return -1;
+  @Override
+  public int read() throws IOException {
+    if (buffer != null && buffer.remaining() > 0) {
+      return buffer.get() & 0xFF;
     }
+    if (stream != null && streamRead < streamLength) {
+      streamRead++;
+      return stream.read();
+    }
+    if (stream != null) {
+      if (crc.position() == 0) {
+        crc.putLong(stream.getValue());
+        crc.flip();
+      }
+      if (crc.remaining() > 0) {
+        return crc.get() & 0xFF;
+      }
+    }
+    return -1;
+  }
 
     // keep reading. the caller will decide when to end
     @Override
@@ -87,18 +87,23 @@ public abstract class MessageFormatInputStream extends InputStream {
                 totalRead += readFromStream;
             }
 
-            if (streamRead == streamLength) {
-                if (crc.position() == 0) {
-                    crc.putLong(stream.getValue());
-                    crc.flip();
-                }
-                int bytesToRead = Math.min(crc.remaining(), len - totalRead);
-                crc.get(b, off + totalRead, bytesToRead);
-                totalRead += bytesToRead;
-            }
+      if (streamRead == streamLength) {
+        if (crc.position() == 0) {
+          crc.putLong(stream.getValue());
+          crc.flip();
         }
-        return totalRead;
+        int bytesToRead = Math.min(crc.remaining(), len - totalRead);
+        crc.get(b, off + totalRead, bytesToRead);
+        totalRead += bytesToRead;
+      }
     }
+    return totalRead > 0 ? totalRead : -1;
+  }
+
+  @Override
+  public int available() {
+    return (buffer == null ? 0 : buffer.remaining()) + (int) (streamLength - streamRead) + crc.remaining();
+  }
 
     public long getSize() {
         return messageLength;

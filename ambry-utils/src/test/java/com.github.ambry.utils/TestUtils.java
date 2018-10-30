@@ -15,22 +15,29 @@ package com.github.ambry.utils;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 import org.I0Itec.zkclient.IDefaultNameSpace;
 import org.I0Itec.zkclient.ZkServer;
 import org.junit.Assert;
+
+import static org.junit.Assert.*;
 
 
 /**
  * A class consisting of common util methods useful for tests.
  */
 public class TestUtils {
+  public static final long TTL_SECS = TimeUnit.DAYS.toSeconds(7);
   public static final Random RANDOM = new Random();
+  public static final List<Boolean> BOOLEAN_VALUES = Collections.unmodifiableList(Arrays.asList(true, false));
 
   /**
    * Return the number of threads currently running with a name containing the given pattern.
@@ -141,6 +148,56 @@ public class TestUtils {
   }
 
   /**
+   * Asserts that {@code actual} and {@code expect} are equal. Checks that {@code actual}
+   * contains no extra data if {@code checkActualComplete} is {@code true}.
+   */
+  public static void assertInputStreamEqual(InputStream expect, InputStream actual, int size,
+      boolean checkActualComplete) throws IOException {
+    byte[] actualBuf = Utils.readBytesFromStream(actual, size);
+    if (checkActualComplete) {
+      int finalRead = actual.read();
+      // some InputStream impls in Ambry return 0 instead of -1 when they end
+      assertTrue("Actual stream had more bytes than expected", finalRead == 0 || finalRead == -1);
+    }
+    byte[] expectBuf = Utils.readBytesFromStream(expect, size);
+    assertArrayEquals("Data from actual stream does not match expected", expectBuf, actualBuf);
+  }
+
+  /**
+   * Verify that the {@code inputStream} satisfies basic properties of the contract.
+   * @param inputStream
+   * @throws Exception
+   */
+  public static void validateInputStreamContract(InputStream inputStream) throws Exception {
+    int numBytes = 8;
+    byte[] bytes = new byte[numBytes];
+    assertException(NullPointerException.class, () -> inputStream.read(null, 0, 5), null);
+    assertException(IndexOutOfBoundsException.class, () -> inputStream.read(bytes, -1, 5), null);
+    assertException(IndexOutOfBoundsException.class, () -> inputStream.read(bytes, 0, -1), null);
+    assertException(IndexOutOfBoundsException.class, () -> inputStream.read(bytes, numBytes, 1), null);
+    assertException(IndexOutOfBoundsException.class, () -> inputStream.read(bytes, 1, numBytes), null);
+    Assert.assertEquals(0, inputStream.read(bytes, 0, 0));
+  }
+
+  /**
+   * Read through the {@code inputStream} using the no-arg read method until {@code -1} is returned,
+   * and verify that the expected number of bytes {@code expectedLength} is read.
+   * @param inputStream
+   * @param expectedLength
+   * @throws IOException
+   */
+  public static void readInputStreamAndValidateSize(InputStream inputStream, long expectedLength) throws IOException {
+    int readVal = 0;
+    long numRead = 0;
+    do {
+      readVal = inputStream.read();
+      numRead++;
+    } while (readVal != -1);
+    numRead--;
+    Assert.assertEquals("Unexpected inputstream read length", expectedLength, numRead);
+  }
+
+  /**
    * Gets a temporary directory with the given prefix. The directory will be deleted when the virtual machine terminates.
    * @param prefix The prefix for the name of the temporary directory.
    * @return The absolute path of the generated temporary directory.
@@ -183,6 +240,7 @@ public class TestUtils {
      * @param dcName the name of the datacenter.
      * @param id the id of the datacenter.
      * @param port the port at which this Zk server should run on localhost.
+     * @throws IOException
      */
     public ZkInfo(String tempDirPath, String dcName, byte id, int port, boolean start) throws IOException {
       this.dcName = dcName;
@@ -235,19 +293,5 @@ public class TestUtils {
      * @throws Exception
      */
     void run() throws Exception;
-  }
-
-  /**
-   * Similar to {@link Consumer}, but able to throw checked exceptions.
-   * @param <T> the type of the input to the operation
-   */
-  public interface ThrowingConsumer<T> {
-
-    /**
-     * Performs this operation on the given argument.
-     *
-     * @param t the input argument
-     */
-    void accept(T t) throws Exception;
   }
 }

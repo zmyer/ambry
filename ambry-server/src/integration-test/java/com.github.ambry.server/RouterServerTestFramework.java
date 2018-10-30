@@ -13,6 +13,9 @@
  */
 package com.github.ambry.server;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.Container;
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.BlobId;
@@ -22,12 +25,15 @@ import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.network.Selector;
+import com.github.ambry.notification.UpdateType;
 import com.github.ambry.protocol.GetOption;
 import com.github.ambry.router.Callback;
+import com.github.ambry.router.FutureResult;
 import com.github.ambry.router.GetBlobOptions;
 import com.github.ambry.router.GetBlobOptionsBuilder;
 import com.github.ambry.router.GetBlobResult;
 import com.github.ambry.router.NonBlockingRouterFactory;
+import com.github.ambry.router.PutBlobOptionsBuilder;
 import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
 import com.github.ambry.router.RouterErrorCode;
@@ -53,9 +59,9 @@ import org.junit.Assert;
  * This class provides a framework for creating router/server integration test cases. It instantiates a non-blocking
  * router from the provided properties, cluster and notification system. The user defines chains of operations on a
  * certain blob (i.e. putBlob, getBlobInfo, deleteBlob). These chains can be executed asynchronously using the
- * {@link #startOperationChain(int, int, Queue)} method. The results of each stage of the chains can be checked using
- * the {@link #checkOperationChains(List)} method. See {@link RouterServerPlaintextTest} and {@link RouterServerSSLTest}
- * for example usage.
+ * {@link #startOperationChain(int, Container, int, Queue)} method. The results of each stage of the chains can be
+ * checked using the {@link #checkOperationChains(List)} method. See {@link RouterServerPlaintextTest} and
+ * {@link RouterServerSSLTest} for example usage.
  */
 class RouterServerTestFramework {
   static final int AWAIT_TIMEOUT = 20;
@@ -66,6 +72,8 @@ class RouterServerTestFramework {
   private final MockNotificationSystem notificationSystem;
   private final Router router;
   private boolean testEncryption = false;
+
+  final InMemAccountService accountService = new InMemAccountService(false, true);
 
   public static String sslSendBytesMetricName = Selector.class.getName() + ".SslSendBytesRate";
   public static String sslReceiveBytesMetricName = Selector.class.getName() + ".SslReceiveBytesRate";
@@ -84,10 +92,9 @@ class RouterServerTestFramework {
       MockNotificationSystem notificationSystem) throws Exception {
     this.clusterMap = clusterMap;
     this.notificationSystem = notificationSystem;
-
     VerifiableProperties routerVerifiableProps = new VerifiableProperties(routerProps);
     router = new NonBlockingRouterFactory(routerVerifiableProps, clusterMap, notificationSystem,
-        ServerTestUtil.getSSLFactoryIfRequired(routerVerifiableProps)).getRouter();
+        ServerTestUtil.getSSLFactoryIfRequired(routerVerifiableProps), accountService).getRouter();
   }
 
   /**
@@ -127,14 +134,15 @@ class RouterServerTestFramework {
           testFuture.check();
         }
       }
+      Assert.assertEquals("opChain stopped in the middle.", 0, opChain.operations.size());
       if (opChain.blobId != null) {
         blobsPut++;
         PartitionId partitionId = new BlobId(opChain.blobId, clusterMap).getPartition();
-        int count = partitionCount.containsKey(partitionId) ? partitionCount.get(partitionId) : 0;
+        int count = partitionCount.getOrDefault(partitionId, 0);
         partitionCount.put(partitionId, count + 1);
       }
     }
-    double numPartitions = clusterMap.getWritablePartitionIds().size();
+    double numPartitions = clusterMap.getWritablePartitionIds(null).size();
     if (opChains.size() > numPartitions) {
       double blobBalanceThreshold = BALANCE_FACTOR * Math.ceil(blobsPut / numPartitions);
       for (Map.Entry<PartitionId, Integer> entry : partitionCount.entrySet()) {
@@ -148,18 +156,21 @@ class RouterServerTestFramework {
   /**
    * Create an {@link OperationChain} from a queue of {@link OperationType}s.  Start the operation chain asynchronously.
    * @param blobSize the size of the blob generated for put operations.
+   * @param container the {@link Container} to put the blob into (can be {@code null}}
    * @param chainId a numeric identifying the operation chain.
    * @param operations the queue of operations to perform in the chain
    * @return an {@link OperationChain} object describing the started chain.
    */
-  OperationChain startOperationChain(int blobSize, int chainId, Queue<OperationType> operations) {
+  OperationChain startOperationChain(int blobSize, Container container, int chainId, Queue<OperationType> operations) {
     byte[] userMetadata = new byte[1000];
     byte[] data = new byte[blobSize];
     TestUtils.RANDOM.nextBytes(userMetadata);
     TestUtils.RANDOM.nextBytes(data);
-    short accountId = Utils.getRandomShort(TestUtils.RANDOM);
-    short containerId = Utils.getRandomShort(TestUtils.RANDOM);
-    BlobProperties properties = new BlobProperties(blobSize, "serviceid1", accountId, containerId, testEncryption);
+    short accountId = container == null ? Utils.getRandomShort(TestUtils.RANDOM) : container.getParentAccountId();
+    short containerId = container == null ? Utils.getRandomShort(TestUtils.RANDOM) : container.getId();
+    BlobProperties properties =
+        new BlobProperties(blobSize, "serviceid1", null, null, false, TestUtils.TTL_SECS, accountId, containerId,
+            testEncryption);
     OperationChain opChain = new OperationChain(chainId, properties, userMetadata, data, operations);
     continueChain(opChain);
     return opChain;
@@ -183,16 +194,30 @@ class RouterServerTestFramework {
     properties.setProperty("clustermap.datacenter.name", routerDatacenter);
     properties.setProperty("clustermap.host.name", "localhost");
     properties.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
+    properties.setProperty("clustermap.default.partition.class", MockClusterMap.DEFAULT_PARTITION_CLASS);
     return properties;
   }
 
   /**
    * Check for blob ID validity.
    * @param blobId the blobId
+   * @param properties the blob properties associated with the blob (to check that the blob was put in the right
+   *                   partition)
    * @param operationName a name for the operation being checked
    */
-  private static void checkBlobId(String blobId, String operationName) {
+  private void checkBlobId(String blobId, BlobProperties properties, String operationName) throws IOException {
     Assert.assertNotNull("Null blobId for operation: " + operationName, blobId);
+    BlobId id = new BlobId(blobId, clusterMap);
+    String partitionClass = MockClusterMap.DEFAULT_PARTITION_CLASS;
+    Account account = accountService.getAccountById(properties.getAccountId());
+    if (account != null) {
+      Container container = account.getContainerById(properties.getContainerId());
+      if (container != null && container.getReplicationPolicy() != null) {
+        partitionClass = container.getReplicationPolicy();
+      }
+    }
+    Assert.assertTrue("Partition that blob was put not as required by container",
+        clusterMap.getWritablePartitionIds(partitionClass).contains(id.getPartition()));
   }
 
   /**
@@ -207,6 +232,8 @@ class RouterServerTestFramework {
         opChain.properties.getBlobSize(), blobInfo.getBlobProperties().getBlobSize());
     Assert.assertEquals("Service ID in info does not match expected for operation: " + operationName,
         opChain.properties.getServiceId(), blobInfo.getBlobProperties().getServiceId());
+    Assert.assertEquals("TTL is incorrect for operation: " + operationName, opChain.properties.getTimeToLiveInSeconds(),
+        blobInfo.getBlobProperties().getTimeToLiveInSeconds());
     Assert.assertArrayEquals("Unexpected user metadata for operation: " + operationName, opChain.userMetadata,
         blobInfo.getUserMetadata());
   }
@@ -269,11 +296,13 @@ class RouterServerTestFramework {
         opChain.blobId = result;
       }
     };
-    Future<String> future = router.putBlob(opChain.properties, opChain.userMetadata, putChannel, callback);
+    Future<String> future =
+        router.putBlob(opChain.properties, opChain.userMetadata, putChannel, new PutBlobOptionsBuilder().build(),
+            callback);
     TestFuture<String> testFuture = new TestFuture<String>(future, genLabel("putBlob", false), opChain) {
       @Override
       void check() throws Exception {
-        checkBlobId(get(), getOperationName());
+        checkBlobId(get(), opChain.properties, getOperationName());
       }
     };
     opChain.testFutures.add(testFuture);
@@ -331,6 +360,101 @@ class RouterServerTestFramework {
   }
 
   /**
+   * Submit a getBlob operation with incorrect accountId/ContainerId in blobId.
+   * @param opChain the {@link OperationChain} object that this operation is a part of.
+   */
+  private void startGetBlobAuthorizationFailTest(final OperationChain opChain) {
+    Callback<GetBlobResult> callback = new TestCallback<>(opChain, true);
+    BlobId originalId, fraudId;
+    try {
+      originalId = new BlobId(opChain.blobId, clusterMap);
+      fraudId = BlobId.craft(originalId, originalId.getVersion(), (short) (originalId.getAccountId() + 1),
+          (short) (originalId.getContainerId() + 1));
+    } catch (IOException e) {
+      // If there is a blobId creation failure, throw the exception and don't need to do actual action.
+      FutureResult<Void> future = new FutureResult<>();
+      // continue the chain
+      future.done(null, e);
+      callback.onCompletion(null, e);
+      TestFuture<Void> testFuture = new TestFuture<Void>(future, genLabel("getBlobAuthorizationFail", true), opChain) {
+        @Override
+        void check() throws Exception {
+          throw e;
+        }
+      };
+      opChain.testFutures.add(testFuture);
+      return;
+    }
+    // If everything good:
+    Future<GetBlobResult> future = router.getBlob(fraudId.getID(),
+        new GetBlobOptionsBuilder().operationType(GetBlobOptions.OperationType.All)
+            .getOption(GetOption.Include_All)
+            .build(), callback);
+    TestFuture<GetBlobResult> testFuture =
+        new TestFuture<GetBlobResult>(future, genLabel("getBlobAuthorizationFail", true), opChain) {
+          @Override
+          void check() throws Exception {
+            checkExpectedRouterErrorCode(RouterErrorCode.BlobAuthorizationFailure);
+          }
+        };
+    opChain.testFutures.add(testFuture);
+  }
+
+  /**
+   * Submit a deleteBlob operation with incorrect accountId/ContainerId in blobId.
+   * @param opChain the {@link OperationChain} object that this operation is a part of.
+   */
+  private void startDeleteBlobAuthorizationFailTest(final OperationChain opChain) {
+    Callback<Void> callback = new TestCallback<>(opChain, true);
+    BlobId originalId, fraudId;
+    try {
+      originalId = new BlobId(opChain.blobId, clusterMap);
+      fraudId = BlobId.craft(originalId, originalId.getVersion(), (short) (originalId.getAccountId() + 1),
+          (short) (originalId.getContainerId() + 1));
+    } catch (IOException e) {
+      // If there is a blobId creation failure, throw the exception and don't need to do actual action.
+      FutureResult<Void> future = new FutureResult<>();
+      // continue the chain
+      future.done(null, e);
+      callback.onCompletion(null, e);
+      TestFuture<Void> testFuture =
+          new TestFuture<Void>(future, genLabel("deleteBlobAuthorizationFail", true), opChain) {
+            @Override
+            void check() throws Exception {
+              throw e;
+            }
+          };
+      opChain.testFutures.add(testFuture);
+      return;
+    }
+    Future<Void> future = router.deleteBlob(fraudId.getID(), null, callback);
+    TestFuture<Void> testFuture = new TestFuture<Void>(future, genLabel("deleteBlobAuthorizationFail", true), opChain) {
+      @Override
+      void check() throws Exception {
+        checkExpectedRouterErrorCode(RouterErrorCode.BlobAuthorizationFailure);
+      }
+    };
+    opChain.testFutures.add(testFuture);
+  }
+
+  /**
+   * Submit a ttl update operation.
+   * @param opChain the {@link OperationChain} object that this operation is a part of.
+   */
+  private void startTtlUpdate(final OperationChain opChain) {
+    Callback<Void> callback = new TestCallback<>(opChain, false);
+    Future<Void> future = router.updateBlobTtl(opChain.blobId, null, Utils.Infinite_Time, callback);
+    TestFuture<Void> testFuture = new TestFuture<Void>(future, genLabel("updateBlobTtl", false), opChain) {
+      @Override
+      void check() throws Exception {
+        get();
+        opChain.properties.setTimeToLiveInSeconds(Utils.Infinite_Time);
+      }
+    };
+    opChain.testFutures.add(testFuture);
+  }
+
+  /**
    * Submit a deleteBlob operation.
    * @param opChain the {@link OperationChain} object that this operation is a part of.
    */
@@ -367,6 +491,16 @@ class RouterServerTestFramework {
   }
 
   /**
+   * Using the mock notification system, wait for the updated blob in this operation chain to be updated on all server
+   * nodes before continuing the chain.
+   * @param opChain the {@link OperationChain} object that this operation is a part of.
+   */
+  private void startAwaitTtlUpdate(final OperationChain opChain) {
+    notificationSystem.awaitBlobUpdates(opChain.blobId, UpdateType.TTL_UPDATE);
+    continueChain(opChain);
+  }
+
+  /**
    * Submit the next operation in the chain to the router. If there are no more operations in the queue,
    * mark the chain as completed.
    * @param opChain the {@link OperationChain} to get the next operation from.
@@ -382,6 +516,9 @@ class RouterServerTestFramework {
       switch (nextOp) {
         case PUT:
           startPutBlob(opChain);
+          break;
+        case TTL_UPDATE:
+          startTtlUpdate(opChain);
           break;
         case GET_INFO_DELETED_SUCCESS:
           options = GetOption.Include_Deleted_Blobs;
@@ -404,6 +541,15 @@ class RouterServerTestFramework {
         case AWAIT_DELETION:
           startAwaitDeletion(opChain);
           break;
+        case AWAIT_TTL_UPDATE:
+          startAwaitTtlUpdate(opChain);
+          break;
+        case GET_AUTHORIZATION_FAILURE:
+          startGetBlobAuthorizationFailTest(opChain);
+          break;
+        case DELETE_AUTHORIZATION_FAILURE:
+          startDeleteBlobAuthorizationFailTest(opChain);
+          break;
         default:
           throw new IllegalArgumentException("Unknown op: " + nextOp);
       }
@@ -417,40 +563,79 @@ class RouterServerTestFramework {
     /**
      * PutBlob with the nonblocking router
      */
-    PUT(false), /**
+    PUT(false),
+
+    /**
      * GetBlobInfo with the nonblocking router and check the blob info against what was put in.
      */
-    GET_INFO(false), /**
+    GET_INFO(false),
+
+    /**
      * GetBlob with the nonblocking router and check the blob contents against what was put in.
      */
-    GET(false), /**
+    GET(false),
+
+    /**
+     * GetBlob with incorrect accountId and containerId in blobId
+     */
+    GET_AUTHORIZATION_FAILURE(false),
+
+    /**
+     * Update the TTL of a blob
+     */
+    TTL_UPDATE(false),
+
+    /**
      * DeleteBlob with the nonblocking router
      */
-    DELETE(false), /**
+    DELETE(false),
+
+    /**
+     * DeleteBlob with incorrect accountId and containerId in blobId
+     */
+    DELETE_AUTHORIZATION_FAILURE(false),
+
+    /**
      * GetBlobInfo with the nonblocking router. Expect an exception to occur because the blob should have already been
      * deleted
      */
-    GET_INFO_DELETED(true), /**
+    GET_INFO_DELETED(true),
+
+    /**
      * GetBlob with the nonblocking router. Expect an exception to occur because the blob should have already been
      * deleted
      */
-    GET_DELETED(true), /**
+    GET_DELETED(true),
+
+    /**
      * GetBlobInfo with the nonblocking router. Will use {@link GetOption#Include_Deleted_Blobs} and is expected to
      * succeed even though the blob is deleted.
      */
-    GET_INFO_DELETED_SUCCESS(false), /**
+    GET_INFO_DELETED_SUCCESS(false),
+
+    /**
      * GetBlob with the nonblocking router. Will use {@link GetOption#Include_Deleted_Blobs} and is expected to
      * succeed even though the blob is deleted.
      */
-    GET_DELETED_SUCCESS(false), /**
+    GET_DELETED_SUCCESS(false),
+
+    /**
      * Wait for the operation chain's blob ID to be reported as created on all replicas. Continue with the remaining
      * actions in the operation chain afterwards.
      */
-    AWAIT_CREATION(false), /**
+    AWAIT_CREATION(false),
+
+    /**
      * Wait for the operation chain's blob ID to be reported as deleted on all replicas. Continue with the remaining
      * actions in the operation chain afterwards.
      */
-    AWAIT_DELETION(false);
+    AWAIT_DELETION(false),
+
+    /**
+     * Wait for the operation chain's blob ID to be reported as updated on all replicas. Continue with the remaining
+     * actions in the operation chain afterwards.
+     */
+    AWAIT_TTL_UPDATE(false);
 
     /**
      * {@code true} if this operation needs to check that the response returned indicates that the blob is deleted.
@@ -539,6 +724,21 @@ class RouterServerTestFramework {
             RouterErrorCode.BlobDeleted, ((RouterException) rootCause).getErrorCode());
       } catch (Exception e) {
         throw new Exception("Unexpected exception occured in operation: " + getOperationName(), e);
+      }
+    }
+
+    /**
+     * Check if router get expected RouterErrorCode.
+     * @param routerErrorCode is the expected error code.
+     */
+    void checkExpectedRouterErrorCode(RouterErrorCode routerErrorCode) {
+      try {
+        future.get(AWAIT_TIMEOUT, TimeUnit.SECONDS);
+        Assert.fail("Blob should have failed in operation: " + getOperationName());
+      } catch (Exception e) {
+        Assert.assertTrue("Expect RouterException", e.getCause() instanceof RouterException);
+        Assert.assertEquals("RouterErrorCode doesn't match.", routerErrorCode,
+            ((RouterException) e.getCause()).getErrorCode());
       }
     }
 

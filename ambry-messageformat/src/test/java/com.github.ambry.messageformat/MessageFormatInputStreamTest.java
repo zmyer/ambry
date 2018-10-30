@@ -13,6 +13,10 @@
  */
 package com.github.ambry.messageformat;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.Container;
+import com.github.ambry.store.MockId;
+import com.github.ambry.store.MockIdFactory;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.store.StoreKeyFactory;
 import com.github.ambry.utils.ByteBufferInputStream;
@@ -23,6 +27,7 @@ import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.Random;
 import org.junit.After;
@@ -237,7 +242,8 @@ public class MessageFormatInputStreamTest {
    */
   @Test
   public void messageFormatDeleteRecordTest() throws IOException, MessageFormatException {
-    short[] versions = {MessageFormatRecord.Delete_Version_V1, MessageFormatRecord.Delete_Version_V2};
+    short[] versions =
+        {MessageFormatRecord.Update_Version_V1, MessageFormatRecord.Update_Version_V2, MessageFormatRecord.Update_Version_V3};
     for (short version : versions) {
       StoreKey key = new MockId("id1");
       short accountId = Utils.getRandomShort(TestUtils.RANDOM);
@@ -245,18 +251,26 @@ public class MessageFormatInputStreamTest {
       long deletionTimeMs = SystemTime.getInstance().milliseconds() + TestUtils.RANDOM.nextInt();
       MessageFormatInputStream messageFormatStream;
       boolean useV2Header;
-      if (version == MessageFormatRecord.Delete_Version_V1) {
+      int deleteRecordSize;
+      if (version == MessageFormatRecord.Update_Version_V1) {
         messageFormatStream = new DeleteMessageFormatV1InputStream(key, accountId, containerId, deletionTimeMs);
+        deleteRecordSize = MessageFormatRecord.Update_Format_V1.getRecordSize();
         useV2Header = false;
-      } else {
+        // reset account, container ids and time
+        accountId = Account.UNKNOWN_ACCOUNT_ID;
+        containerId = Container.UNKNOWN_CONTAINER_ID;
+        deletionTimeMs = Utils.Infinite_Time;
+      } else if (version == MessageFormatRecord.Update_Version_V2) {
         messageFormatStream = new DeleteMessageFormatInputStream(key, accountId, containerId, deletionTimeMs);
+        deleteRecordSize = MessageFormatRecord.Update_Format_V2.getRecordSize();
+        useV2Header = MessageFormatRecord.headerVersionToUse == MessageFormatRecord.Message_Header_Version_V2;
+      } else {
+        messageFormatStream = new DeleteMessageFormatV3InputStream(key, accountId, containerId, deletionTimeMs);
+        deleteRecordSize = MessageFormatRecord.Update_Format_V3.getRecordSize(UpdateRecord.Type.DELETE);
         useV2Header = MessageFormatRecord.headerVersionToUse == MessageFormatRecord.Message_Header_Version_V2;
       }
       int headerSize = MessageFormatRecord.getHeaderSizeForVersion(
           useV2Header ? MessageFormatRecord.Message_Header_Version_V2 : MessageFormatRecord.Message_Header_Version_V1);
-      int deleteRecordSize =
-          version == MessageFormatRecord.Delete_Version_V1 ? MessageFormatRecord.Delete_Format_V1.getDeleteRecordSize()
-              : MessageFormatRecord.Delete_Format_V2.getDeleteRecordSize();
       Assert.assertEquals(headerSize + deleteRecordSize + key.sizeInBytes(), messageFormatStream.getSize());
 
       // check header
@@ -285,27 +299,141 @@ public class MessageFormatInputStreamTest {
 
       // verify handle
       byte[] handleOutput = new byte[key.sizeInBytes()];
-      ByteBuffer handleOutputBuf = ByteBuffer.wrap(handleOutput);
       messageFormatStream.read(handleOutput);
-      byte[] dest = new byte[key.sizeInBytes()];
-      handleOutputBuf.get(dest);
-      Assert.assertArrayEquals(dest, key.toBytes());
+      Assert.assertArrayEquals(handleOutput, key.toBytes());
 
       // check delete record
-      byte[] deleteRecordOutput = new byte[deleteRecordSize];
-      ByteBuffer deleteRecordBuf = ByteBuffer.wrap(deleteRecordOutput);
-      messageFormatStream.read(deleteRecordOutput);
-      Assert.assertEquals(deleteRecordBuf.getShort(), version);
-      if (version == MessageFormatRecord.Delete_Version_V1) {
-        Assert.assertEquals(true, deleteRecordBuf.get() == 1 ? true : false);
-      } else {
-        Assert.assertEquals("AccountId mismatch", accountId, deleteRecordBuf.getShort());
-        Assert.assertEquals("ContainerId mismatch", containerId, deleteRecordBuf.getShort());
-        Assert.assertEquals("DeletionTime mismatch", deletionTimeMs, deleteRecordBuf.getLong());
-      }
-      crc = new Crc32();
-      crc.update(deleteRecordOutput, 0, deleteRecordSize - MessageFormatRecord.Crc_Size);
-      Assert.assertEquals(crc.getValue(), deleteRecordBuf.getLong());
+      UpdateRecord updateRecord = MessageFormatRecord.deserializeUpdateRecord(messageFormatStream);
+      Assert.assertEquals("Type of update record not DELETE", UpdateRecord.Type.DELETE, updateRecord.getType());
+      Assert.assertNotNull("DeleteSubRecord should not be null", updateRecord.getDeleteSubRecord());
+      Assert.assertEquals("AccountId mismatch", accountId, updateRecord.getAccountId());
+      Assert.assertEquals("ContainerId mismatch", containerId, updateRecord.getContainerId());
+      Assert.assertEquals("DeletionTime mismatch", deletionTimeMs, updateRecord.getUpdateTimeInMs());
     }
+  }
+
+  /**
+   * Test calling the no-arg read method
+   * @throws IOException
+   * @throws MessageFormatException
+   */
+  @Test
+  public void messageFormatNoArgReadTest() throws Exception, MessageFormatException {
+    StoreKey key = new MockId("id1");
+    StoreKeyFactory keyFactory = new MockIdFactory();
+    short accountId = Utils.getRandomShort(TestUtils.RANDOM);
+    short containerId = Utils.getRandomShort(TestUtils.RANDOM);
+    BlobProperties prop = new BlobProperties(10, "servid", accountId, containerId, false);
+    byte[] encryptionKey = new byte[100];
+    new Random().nextBytes(encryptionKey);
+    byte[] usermetadata = new byte[1000];
+    new Random().nextBytes(usermetadata);
+    int blobContentSize = 2000;
+    byte[] data = new byte[blobContentSize];
+    new Random().nextBytes(data);
+    ByteBufferInputStream stream = new ByteBufferInputStream(ByteBuffer.wrap(data));
+
+    MessageFormatInputStream messageFormatStream =
+        new PutMessageFormatInputStream(key, ByteBuffer.wrap(encryptionKey), prop, ByteBuffer.wrap(usermetadata),
+            stream, blobContentSize, BlobType.DataBlob);
+
+    TestUtils.validateInputStreamContract(messageFormatStream);
+    TestUtils.readInputStreamAndValidateSize(messageFormatStream, messageFormatStream.getSize());
+  }
+
+  /**
+   * Tests for {@link TtlUpdateMessageFormatInputStream} in different versions.
+   */
+  @Test
+  public void messageFormatTtlUpdateRecordTest() throws IOException, MessageFormatException {
+    StoreKey key = new MockId("id1");
+    short accountId = Utils.getRandomShort(TestUtils.RANDOM);
+    short containerId = Utils.getRandomShort(TestUtils.RANDOM);
+    long ttlUpdateTimeMs = SystemTime.getInstance().milliseconds() + TestUtils.RANDOM.nextInt();
+    long updatedExpiryMs = ttlUpdateTimeMs + TestUtils.RANDOM.nextInt();
+    MessageFormatInputStream messageFormatStream =
+        new TtlUpdateMessageFormatInputStream(key, accountId, containerId, updatedExpiryMs, ttlUpdateTimeMs);
+    long ttlUpdateRecordSize = MessageFormatRecord.Update_Format_V3.getRecordSize(UpdateRecord.Type.TTL_UPDATE);
+    int headerSize = MessageFormatRecord.getHeaderSizeForVersion(MessageFormatRecord.headerVersionToUse);
+    Assert.assertEquals(headerSize + ttlUpdateRecordSize + key.sizeInBytes(), messageFormatStream.getSize());
+    checkTtlUpdateMessage(messageFormatStream, ttlUpdateRecordSize, key, accountId, containerId, updatedExpiryMs,
+        ttlUpdateTimeMs);
+  }
+
+  /**
+   * Checks a TTL update message including headers and the {@link UpdateRecord}.
+   * @param stream the {@link InputStream} to read data from
+   * @param expectedRecordSize the expected size of the record in the message. Can be {@code null} if unknown (won't be
+   *                            checked)
+   * @param key the expected {@link StoreKey}
+   * @param accountId the account id expected
+   * @param containerId the container id expected
+   * @param updatedExpiresAtMs the expected updated expiry time
+   * @param updateTimeMs the expected time of update
+   * @throws IOException
+   * @throws MessageFormatException
+   */
+  public static void checkTtlUpdateMessage(InputStream stream, Long expectedRecordSize, StoreKey key, short accountId,
+      short containerId, long updatedExpiresAtMs, long updateTimeMs) throws IOException, MessageFormatException {
+    checkHeaderAndStoreKeyForUpdate(stream, expectedRecordSize, key);
+    checkTtlUpdateSubRecord(stream, accountId, containerId, updatedExpiresAtMs, updateTimeMs);
+  }
+
+  /**
+   * Checks the header and storekey for an update message in {@code stream}
+   * @param stream the {@link InputStream} to read data from
+   * @param expectedRecordSize the expected size of the record in the message. Can be {@code null} if unknown (won't be
+   *                            checked)
+   * @param key the expected {@link StoreKey}
+   * @throws IOException
+   * @throws MessageFormatException
+   */
+  private static void checkHeaderAndStoreKeyForUpdate(InputStream stream, Long expectedRecordSize, StoreKey key)
+      throws IOException, MessageFormatException {
+    MessageFormatRecord.MessageHeader_Format header = MessageFormatRecordTest.getHeader(new DataInputStream(stream));
+    header.verifyHeader();
+
+    Assert.assertEquals("Version not as expected", MessageFormatRecord.headerVersionToUse, header.getVersion());
+    // update record relative offset. This is the only relative offset with a valid value.
+    Assert.assertEquals("Update record relative offset not as expected",
+        MessageFormatRecord.getHeaderSizeForVersion(MessageFormatRecord.headerVersionToUse) + key.sizeInBytes(),
+        header.getUpdateRecordRelativeOffset());
+    if (expectedRecordSize != null) {
+      Assert.assertEquals("Size of record not as expected", expectedRecordSize.longValue(), header.getMessageSize());
+    }
+    Assert.assertEquals("Encryption key relative offset should be invalid",
+        MessageFormatRecord.Message_Header_Invalid_Relative_Offset, header.getBlobEncryptionKeyRecordRelativeOffset());
+    Assert.assertEquals("Blob props relative offset should be invalid",
+        MessageFormatRecord.Message_Header_Invalid_Relative_Offset, header.getBlobPropertiesRecordRelativeOffset());
+    Assert.assertEquals("UM relative offset should be invalid",
+        MessageFormatRecord.Message_Header_Invalid_Relative_Offset, header.getUserMetadataRecordRelativeOffset());
+    Assert.assertEquals("Blob relative offset should be invalid",
+        MessageFormatRecord.Message_Header_Invalid_Relative_Offset, header.getBlobRecordRelativeOffset());
+
+    // verify StoreKey
+    byte[] keyBytes = Utils.readBytesFromStream(stream, key.sizeInBytes());
+    Assert.assertArrayEquals("StoreKey not as expected", key.toBytes(), keyBytes);
+  }
+
+  /**
+   * Verifies the values in the {@link UpdateRecord} obtained from {@code stream}
+   * @param stream the {@link InputStream} to obtain the records from
+   * @param accountId the account id expected
+   * @param containerId the container id expected
+   * @param updatedExpiresAtMs the expected updated expiry time
+   * @param updateTimeMs the expected time of update
+   * @throws IOException
+   * @throws MessageFormatException
+   */
+  private static void checkTtlUpdateSubRecord(InputStream stream, short accountId, short containerId,
+      long updatedExpiresAtMs, long updateTimeMs) throws IOException, MessageFormatException {
+    UpdateRecord updateRecord = MessageFormatRecord.deserializeUpdateRecord(stream);
+    Assert.assertEquals("Type of update record not TTL_UPDATE", UpdateRecord.Type.TTL_UPDATE, updateRecord.getType());
+    Assert.assertNotNull("TtlUpdateSubRecord should not be null", updateRecord.getTtlUpdateSubRecord());
+    Assert.assertEquals("AccountId mismatch", accountId, updateRecord.getAccountId());
+    Assert.assertEquals("ContainerId mismatch", containerId, updateRecord.getContainerId());
+    Assert.assertEquals("Updated expiry time mismatch", updatedExpiresAtMs,
+        updateRecord.getTtlUpdateSubRecord().getUpdatedExpiryTimeMs());
+    Assert.assertEquals("UpdateTime mismatch", updateTimeMs, updateRecord.getUpdateTimeInMs());
   }
 }

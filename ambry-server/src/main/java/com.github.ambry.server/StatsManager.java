@@ -16,6 +16,7 @@ package com.github.ambry.server;
 
 import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.clustermap.PartitionId;
+import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.config.StatsManagerConfig;
 import com.github.ambry.store.StorageManager;
 import com.github.ambry.store.Store;
@@ -33,11 +34,17 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.codehaus.jackson.map.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static com.github.ambry.utils.Utils.shutDownExecutorService;
+import static com.github.ambry.utils.Utils.*;
 
 
 /**
@@ -46,50 +53,39 @@ import static com.github.ambry.utils.Utils.shutDownExecutorService;
  */
 // TODO: 2018/3/20 by zmyer
 class StatsManager {
-    //日志对象
-    private static final Logger logger = LoggerFactory.getLogger(StatsManager.class);
-    //存储管理器
-    private final StorageManager storageManager;
-    //状态输出文件
-    private final File statsOutputFile;
-    //发布时间间隔
-    private final long publishPeriodInSecs;
-    //初始化时间间隔
-    private final int initialDelayInSecs;
-    //分区id集合
-    private final List<PartitionId> totalPartitionIds;
-    //状态管理器统计信息
-    private final StatsManagerMetrics metrics;
-    //计时器
-    private final Time time;
-    //序列化对象
-    private final ObjectMapper mapper = new ObjectMapper();
-    //执行器
-    private ScheduledExecutorService scheduler = null;
-    //状态聚合器
-    private StatsAggregator statsAggregator = null;
+  private static final Logger logger = LoggerFactory.getLogger(StatsManager.class);
 
-    /**
-     * Constructs a {@link StatsManager}.
-     * @param storageManager the {@link StorageManager} to be used to fetch the {@link Store}s
-     * @param partitionIds a {@link List} of {@link PartitionId}s that are going to be fetched
-     * @param registry the {@link MetricRegistry} to be used for {@link StatsManagerMetrics}
-     * @param config the {@link StatsManagerConfig} to be used to configure the output file path and publish period
-     * @param time the {@link Time} instance to be used for reporting
-     * @throws IOException
-     */
-    // TODO: 2018/4/20 by zmyer
-    StatsManager(StorageManager storageManager, List<PartitionId> partitionIds, MetricRegistry registry,
-            StatsManagerConfig config, Time time) throws IOException {
-        this.storageManager = storageManager;
-        totalPartitionIds = partitionIds;
-        statsOutputFile = new File(config.outputFilePath);
-        publishPeriodInSecs = config.publishPeriodInSecs;
-        initialDelayInSecs = config.initialDelayUpperBoundInSecs;
-        metrics = new StatsManagerMetrics(registry);
-        mapper.setVisibilityChecker(mapper.getVisibilityChecker().withFieldVisibility(JsonAutoDetect.Visibility.ANY));
-        this.time = time;
-    }
+  private final StorageManager storageManager;
+  private final File statsOutputFile;
+  private final long publishPeriodInSecs;
+  private final int initialDelayInSecs;
+  private final Map<PartitionId, ReplicaId> partitionToReplicaMap;
+  private final StatsManagerMetrics metrics;
+  private final Time time;
+  private final ObjectMapper mapper = new ObjectMapper();
+  private ScheduledExecutorService scheduler = null;
+  private StatsAggregator statsAggregator = null;
+
+  /**
+   * Constructs a {@link StatsManager}.
+   * @param storageManager the {@link StorageManager} to be used to fetch the {@link Store}s
+   * @param replicaIds a {@link List} of {@link ReplicaId}s that are going to be fetched
+   * @param registry the {@link MetricRegistry} to be used for {@link StatsManagerMetrics}
+   * @param config the {@link StatsManagerConfig} to be used to configure the output file path and publish period
+   * @param time the {@link Time} instance to be used for reporting
+   * @throws IOException
+   */
+  StatsManager(StorageManager storageManager, List<? extends ReplicaId> replicaIds, MetricRegistry registry,
+      StatsManagerConfig config, Time time) throws IOException {
+    this.storageManager = storageManager;
+    statsOutputFile = new File(config.outputFilePath);
+    publishPeriodInSecs = config.publishPeriodInSecs;
+    initialDelayInSecs = config.initialDelayUpperBoundInSecs;
+    metrics = new StatsManagerMetrics(registry);
+    partitionToReplicaMap =
+        replicaIds.stream().collect(Collectors.toMap(ReplicaId::getPartitionId, Function.identity()));
+    this.time = time;
+  }
 
     /**
      * Start the stats manager by scheduling the periodic task that collect, aggregate and publish stats.
@@ -183,42 +179,41 @@ class StatsManager {
         return statsSnapshot;
     }
 
-    /**
-     * Get the combined {@link StatsSnapshot} of all partitions in this node. This json will contain one entry per partition
-     * wrt valid data size.
-     * @return a combined {@link StatsSnapshot} of this node
-     */
-    // TODO: 2018/4/20 by zmyer
-    String getNodeStatsInJSON() {
-        String statsWrapperJSON = "";
-        try {
-            long totalFetchAndAggregateStartTimeMs = time.milliseconds();
-            StatsSnapshot combinedSnapshot = new StatsSnapshot(0L, new HashMap<String, StatsSnapshot>());
-            long totalValue = 0;
-            List<String> unreachableStores = new ArrayList<>();
-            Iterator<PartitionId> iterator = totalPartitionIds.iterator();
-            while (iterator.hasNext()) {
-                PartitionId partitionId = iterator.next();
-                long fetchSnapshotStartTimeMs = time.milliseconds();
-                StatsSnapshot statsSnapshot = fetchSnapshot(partitionId, unreachableStores);
-                if (statsSnapshot != null) {
-                    combinedSnapshot.getSubMap().put(partitionId.toString(), statsSnapshot);
-                    totalValue += statsSnapshot.getValue();
-                }
-                metrics.fetchAndAggregateTimePerStoreMs.update(time.milliseconds() - fetchSnapshotStartTimeMs);
-            }
-            combinedSnapshot.setValue(totalValue);
-            metrics.totalFetchAndAggregateTimeMs.update(time.milliseconds() - totalFetchAndAggregateStartTimeMs);
-            StatsHeader statsHeader =
-                    new StatsHeader(StatsHeader.StatsDescription.QUOTA, time.milliseconds(), totalPartitionIds.size(),
-                            totalPartitionIds.size() - unreachableStores.size(), unreachableStores);
-            statsWrapperJSON = mapper.writeValueAsString(new StatsWrapper(statsHeader, combinedSnapshot));
-        } catch (Exception | Error e) {
-            metrics.statsAggregationFailureCount.inc();
-            logger.error("Exception while aggregating stats.", e);
+  /**
+   * Get the combined {@link StatsSnapshot} of all partitions in this node. This json will contain one entry per partition
+   * wrt valid data size.
+   * @return a combined {@link StatsSnapshot} of this node
+   */
+  String getNodeStatsInJSON() {
+    String statsWrapperJSON = "";
+    try {
+      long totalFetchAndAggregateStartTimeMs = time.milliseconds();
+      StatsSnapshot combinedSnapshot = new StatsSnapshot(0L, new HashMap<String, StatsSnapshot>());
+      long totalValue = 0;
+      List<String> unreachableStores = new ArrayList<>();
+      Iterator<PartitionId> iterator = partitionToReplicaMap.keySet().iterator();
+      while (iterator.hasNext()) {
+        PartitionId partitionId = iterator.next();
+        long fetchSnapshotStartTimeMs = time.milliseconds();
+        StatsSnapshot statsSnapshot = fetchSnapshot(partitionId, unreachableStores);
+        if (statsSnapshot != null) {
+          combinedSnapshot.getSubMap().put(partitionId.toString(), statsSnapshot);
+          totalValue += statsSnapshot.getValue();
         }
-        return statsWrapperJSON;
+        metrics.fetchAndAggregateTimePerStoreMs.update(time.milliseconds() - fetchSnapshotStartTimeMs);
+      }
+      combinedSnapshot.setValue(totalValue);
+      metrics.totalFetchAndAggregateTimeMs.update(time.milliseconds() - totalFetchAndAggregateStartTimeMs);
+      StatsHeader statsHeader = new StatsHeader(StatsHeader.StatsDescription.QUOTA, time.milliseconds(),
+          partitionToReplicaMap.keySet().size(), partitionToReplicaMap.keySet().size() - unreachableStores.size(),
+          unreachableStores);
+      statsWrapperJSON = mapper.writeValueAsString(new StatsWrapper(statsHeader, combinedSnapshot));
+    } catch (Exception | Error e) {
+      metrics.statsAggregationFailureCount.inc();
+      logger.error("Exception while aggregating stats.", e);
     }
+    return statsWrapperJSON;
+  }
 
     /**
      * Runnable class that collects, aggregate and publish stats via methods in StatsManager.
@@ -227,35 +222,33 @@ class StatsManager {
     private class StatsAggregator implements Runnable {
         private volatile boolean cancelled = false;
 
-        @Override
-        public void run() {
-            logger.info("Aggregating stats");
-            try {
-                long totalFetchAndAggregateStartTimeMs = time.milliseconds();
-                StatsSnapshot aggregatedSnapshot = new StatsSnapshot(0L, null);
-                List<String> unreachableStores = new ArrayList<>();
-                Iterator<PartitionId> iterator = totalPartitionIds.iterator();
-                while (!cancelled && iterator.hasNext()) {
-                    PartitionId partitionId = iterator.next();
-                    logger.info("Aggregating stats started for store {}", partitionId);
-                    collectAndAggregate(aggregatedSnapshot, partitionId, unreachableStores);
-                }
-                if (!cancelled) {
-                    metrics.totalFetchAndAggregateTimeMs.update(
-                            time.milliseconds() - totalFetchAndAggregateStartTimeMs);
-                    StatsHeader statsHeader =
-                            new StatsHeader(StatsHeader.StatsDescription.QUOTA, time.milliseconds(),
-                                    totalPartitionIds.size(),
-                                    totalPartitionIds.size() - unreachableStores.size(), unreachableStores);
-                    publish(new StatsWrapper(statsHeader, aggregatedSnapshot));
-                    logger.info("Stats snapshot published to {}", statsOutputFile.getAbsolutePath());
-                }
-            } catch (Exception | Error e) {
-                metrics.statsAggregationFailureCount.inc();
-                logger.error("Exception while aggregating stats. Stats output file path - {}",
-                        statsOutputFile.getAbsolutePath(), e);
-            }
+    @Override
+    public void run() {
+      logger.info("Aggregating stats");
+      try {
+        long totalFetchAndAggregateStartTimeMs = time.milliseconds();
+        StatsSnapshot aggregatedSnapshot = new StatsSnapshot(0L, null);
+        List<String> unreachableStores = new ArrayList<>();
+        Iterator<PartitionId> iterator = partitionToReplicaMap.keySet().iterator();
+        while (!cancelled && iterator.hasNext()) {
+          PartitionId partitionId = iterator.next();
+          logger.info("Aggregating stats started for store {}", partitionId);
+          collectAndAggregate(aggregatedSnapshot, partitionId, unreachableStores);
         }
+        if (!cancelled) {
+          metrics.totalFetchAndAggregateTimeMs.update(time.milliseconds() - totalFetchAndAggregateStartTimeMs);
+          StatsHeader statsHeader = new StatsHeader(StatsHeader.StatsDescription.QUOTA, time.milliseconds(),
+              partitionToReplicaMap.keySet().size(), partitionToReplicaMap.keySet().size() - unreachableStores.size(),
+              unreachableStores);
+          publish(new StatsWrapper(statsHeader, aggregatedSnapshot));
+          logger.info("Stats snapshot published to {}", statsOutputFile.getAbsolutePath());
+        }
+      } catch (Exception | Error e) {
+        metrics.statsAggregationFailureCount.inc();
+        logger.error("Exception while aggregating stats. Stats output file path - {}",
+            statsOutputFile.getAbsolutePath(), e);
+      }
+    }
 
         void cancel() {
             cancelled = true;

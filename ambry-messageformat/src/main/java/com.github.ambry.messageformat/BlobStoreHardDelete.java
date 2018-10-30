@@ -37,19 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
-import static com.github.ambry.messageformat.MessageFormatRecord.Blob_Version_V2;
-import static com.github.ambry.messageformat.MessageFormatRecord.MessageHeader_Format;
-import static com.github.ambry.messageformat.MessageFormatRecord.Version_Field_Size_In_Bytes;
-import static com.github.ambry.messageformat.MessageFormatRecord.deserializeAndGetBlobWithVersion;
-import static com.github.ambry.messageformat.MessageFormatRecord.deserializeAndGetUserMetadataWithVersion;
-import static com.github.ambry.messageformat.MessageFormatRecord.deserializeBlobEncryptionKey;
-import static com.github.ambry.messageformat.MessageFormatRecord.deserializeBlobProperties;
-import static com.github.ambry.messageformat.MessageFormatRecord.deserializeDeleteRecord;
-import static com.github.ambry.messageformat.MessageFormatRecord.getHeaderSizeForVersion;
-import static com.github.ambry.messageformat.MessageFormatRecord.getMessageHeader;
-import static com.github.ambry.messageformat.MessageFormatRecord.isValidBlobRecordVersion;
-import static com.github.ambry.messageformat.MessageFormatRecord.isValidHeaderVersion;
-import static com.github.ambry.messageformat.MessageFormatRecord.isValidUserMetadataVersion;
+import static com.github.ambry.messageformat.MessageFormatRecord.*;
 
 
 /**
@@ -88,31 +76,38 @@ public class BlobStoreHardDelete implements MessageStoreHardDelete {
             headerFormat.verifyHeader();
             endOffset = offset + headerFormat.getPayloadRelativeOffset() + headerFormat.getMessageSize();
 
-            stream = new ReadInputStream(read, offset, endOffset);
-            StoreKey key = storeKeyFactory.getStoreKey(new DataInputStream(stream));
-            if (headerFormat.hasEncryptionKeyRecord()) {
-                deserializeBlobEncryptionKey(stream);
-            }
-            // read the appropriate type of message based on the relative offset that is set
-            if (headerFormat.isPutRecord()) {
-                BlobProperties properties = deserializeBlobProperties(stream);
-                return new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(),
-                        Utils.addSecondsToEpochTime(properties.getCreationTimeInMs(),
-                                properties.getTimeToLiveInSeconds()),
-                        properties.getAccountId(), properties.getContainerId(), properties.getCreationTimeInMs());
-            } else {
-                DeleteRecord deleteRecord = deserializeDeleteRecord(stream);
-                return new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(), true,
-                        deleteRecord.getAccountId(), deleteRecord.getContainerId(), deleteRecord.getDeletionTimeInMs());
-            }
-        } catch (MessageFormatException e) {
-            // log in case where we were not able to parse a message.
-            throw new IOException("Message format exception while parsing messages ", e);
-        } catch (IndexOutOfBoundsException e) {
-            // log in case where were not able to read a complete message.
-            throw new IOException("Trying to read more than the available bytes");
+      stream = new ReadInputStream(read, offset, endOffset);
+      StoreKey key = storeKeyFactory.getStoreKey(new DataInputStream(stream));
+      if (headerFormat.hasEncryptionKeyRecord()) {
+        deserializeBlobEncryptionKey(stream);
+      }
+      // read the appropriate type of message based on the relative offset that is set
+      if (headerFormat.isPutRecord()) {
+        BlobProperties properties = deserializeBlobProperties(stream);
+        return new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(),
+            Utils.addSecondsToEpochTime(properties.getCreationTimeInMs(), properties.getTimeToLiveInSeconds()),
+            properties.getAccountId(), properties.getContainerId(), properties.getCreationTimeInMs());
+      } else {
+        UpdateRecord updateRecord = deserializeUpdateRecord(stream);
+        switch (updateRecord.getType()) {
+          case DELETE:
+            return new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(), true,
+                false, updateRecord.getAccountId(), updateRecord.getContainerId(), updateRecord.getUpdateTimeInMs());
+          case TTL_UPDATE:
+            return new MessageInfo(key, header.capacity() + key.sizeInBytes() + headerFormat.getMessageSize(), false,
+                true, updateRecord.getAccountId(), updateRecord.getContainerId(), updateRecord.getUpdateTimeInMs());
+          default:
+            throw new IllegalStateException("Unknown update record type: " + updateRecord.getType());
         }
+      }
+    } catch (MessageFormatException e) {
+      // log in case where we were not able to parse a message.
+      throw new IOException("Message format exception while parsing messages ", e);
+    } catch (IndexOutOfBoundsException e) {
+      // log in case where were not able to read a complete message.
+      throw new IOException("Trying to read more than the available bytes");
     }
+  }
 }
 
 class BlobStoreHardDeleteIterator implements Iterator<HardDeleteInfo> {
@@ -194,20 +189,18 @@ class BlobStoreHardDeleteIterator implements Iterator<HardDeleteInfo> {
                                 + storeKey, MessageFormatErrorCodes.Store_Key_Id_MisMatch);
             }
 
-            if (!headerFormat.isPutRecord()) {
-                throw new MessageFormatException("Cleanup operation for a delete record is unsupported",
-                        MessageFormatErrorCodes.IO_Error);
-            } else {
-                if (headerFormat.hasEncryptionKeyRecord()) {
-                    ByteBuffer blobEncryptionKey =
-                            getBlobEncryptionKeyRecord(readSet, readSetIndex,
-                                    headerFormat.getBlobEncryptionKeyRecordRelativeOffset(),
-                                    headerFormat.getBlobEncryptionKeyRecordSize());
-                }
-                BlobProperties blobProperties =
-                        getBlobPropertiesRecord(readSet, readSetIndex,
-                                headerFormat.getBlobPropertiesRecordRelativeOffset(),
-                                headerFormat.getBlobPropertiesRecordSize());
+      if (!headerFormat.isPutRecord()) {
+        throw new MessageFormatException("Cleanup operation for a non-PUT record is unsupported",
+            MessageFormatErrorCodes.IO_Error);
+      } else {
+        if (headerFormat.hasEncryptionKeyRecord()) {
+          ByteBuffer blobEncryptionKey =
+              getBlobEncryptionKeyRecord(readSet, readSetIndex, headerFormat.getBlobEncryptionKeyRecordRelativeOffset(),
+                  headerFormat.getBlobEncryptionKeyRecordSize());
+        }
+        BlobProperties blobProperties =
+            getBlobPropertiesRecord(readSet, readSetIndex, headerFormat.getBlobPropertiesRecordRelativeOffset(),
+                headerFormat.getBlobPropertiesRecordSize());
 
                 HardDeleteRecoveryMetadata hardDeleteRecoveryMetadata = recoveryInfoMap.get(storeKey);
 

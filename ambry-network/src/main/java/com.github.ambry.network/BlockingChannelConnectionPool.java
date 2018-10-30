@@ -437,19 +437,18 @@ public final class BlockingChannelConnectionPool implements ConnectionPool {
         }
     }
 
-    // TODO: 2018/3/23 by zmyer
-    private void initializeSSLSocketFactory() throws Exception {
-        try {
-            SSLFactory sslFactory = new SSLFactory(sslConfig);
-            SSLContext sslContext = sslFactory.getSSLContext();
-            this.sslSocketFactory = sslContext.getSocketFactory();
-            this.sslSocketFactoryClientInitializationCount.inc();
-        } catch (Exception e) {
-            this.sslSocketFactoryClientInitializationErrorCount.inc();
-            logger.error("SSLSocketFactory Client Initialization Error ", e);
-            throw e;
-        }
+  private void initializeSSLSocketFactory() throws Exception {
+    try {
+      SSLFactory sslFactory = SSLFactory.getNewInstance(sslConfig);
+      SSLContext sslContext = sslFactory.getSSLContext();
+      this.sslSocketFactory = sslContext.getSocketFactory();
+      this.sslSocketFactoryClientInitializationCount.inc();
+    } catch (Exception e) {
+      this.sslSocketFactoryClientInitializationErrorCount.inc();
+      logger.error("SSLSocketFactory Client Initialization Error ", e);
+      throw e;
     }
+  }
 
     // TODO: 2018/3/23 by zmyer
     @Override

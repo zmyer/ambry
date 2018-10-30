@@ -39,6 +39,7 @@ import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.PartitionResponseInfo;
 import com.github.ambry.protocol.RequestOrResponse;
+import com.github.ambry.store.MessageInfo;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.utils.Time;
 import java.io.IOException;
@@ -125,14 +126,16 @@ class GetBlobOperation extends GetOperation {
    * @param cryptoService {@link CryptoService} to assist in encryption or decryption
    * @param cryptoJobHandler {@link CryptoJobHandler} to assist in the execution of crypto jobs
    * @param time the Time instance to use.
+   * @param isEncrypted if the encrypted bit is set based on the original blobId string of a {@link BlobId}.
    */
   GetBlobOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ClusterMap clusterMap,
       ResponseHandler responseHandler, BlobId blobId, GetBlobOptionsInternal options,
       Callback<GetBlobResultInternal> callback, RouterCallback routerCallback, BlobIdFactory blobIdFactory,
-      KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time) {
+      KeyManagementService kms, CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time,
+      boolean isEncrypted) {
     super(routerConfig, routerMetrics, clusterMap, responseHandler, blobId, options, callback,
         routerMetrics.getBlobLocalColoLatencyMs, routerMetrics.getBlobCrossColoLatencyMs,
-        routerMetrics.getBlobPastDueCount, kms, cryptoService, cryptoJobHandler, time);
+        routerMetrics.getBlobPastDueCount, kms, cryptoService, cryptoJobHandler, time, isEncrypted);
     this.routerCallback = routerCallback;
     this.blobIdFactory = blobIdFactory;
     firstChunk = new FirstGetChunk();
@@ -186,7 +189,7 @@ class GetBlobOperation extends GetOperation {
           // poll it periodically. If any exception is encountered while processing subsequent chunks, those will be
           // notified during the channel read.
           long timeElapsed = time.milliseconds() - submissionTimeMs;
-          if (blobId.isEncrypted()) {
+          if (isEncrypted) {
             routerMetrics.getEncryptedBlobOperationLatencyMs.update(timeElapsed);
           } else {
             routerMetrics.getBlobOperationLatencyMs.update(timeElapsed);
@@ -197,7 +200,7 @@ class GetBlobOperation extends GetOperation {
           } else {
             blobDataChannel = null;
             operationResult = null;
-            routerMetrics.onGetBlobError(e, options, blobId.isEncrypted());
+            routerMetrics.onGetBlobError(e, options, isEncrypted);
           }
         }
         NonBlockingRouter.completeOperation(null, getOperationCallback, operationResult, e);
@@ -401,10 +404,10 @@ class GetBlobOperation extends GetOperation {
         if (e == null) {
           updateChunkingAndSizeMetricsOnSuccessfulGet();
         } else {
-          routerMetrics.onGetBlobError(e, options, blobId.isEncrypted());
+          routerMetrics.onGetBlobError(e, options, isEncrypted);
         }
         long totalTime = time.milliseconds() - submissionTimeMs;
-        if (blobId.isEncrypted()) {
+        if (isEncrypted) {
           routerMetrics.getEncryptedBlobOperationTotalTimeMs.update(totalTime);
         } else {
           routerMetrics.getBlobOperationTotalTimeMs.update(totalTime);
@@ -527,7 +530,7 @@ class GetBlobOperation extends GetOperation {
     void initialize(int index, BlobId id) {
       chunkIndex = index;
       chunkBlobId = id;
-      chunkOperationTracker = getOperationTracker(chunkBlobId.getPartition());
+      chunkOperationTracker = getOperationTracker(chunkBlobId.getPartition(), chunkBlobId.getDatacenterId());
       progressTracker = new ProgressTracker(chunkOperationTracker);
       state = ChunkState.Ready;
     }
@@ -662,10 +665,12 @@ class GetBlobOperation extends GetOperation {
      * Handle the body of the response: Deserialize and add to the list of chunk buffers.
      * @param payload the body of the response.
      * @param messageMetadata the {@link MessageMetadata} associated with the message.
+     * @param messageInfo the {@link MessageInfo} associated with the message.
      * @throws IOException if there is an IOException while deserializing the body.
      * @throws MessageFormatException if there is a MessageFormatException while deserializing the body.
      */
-    void handleBody(InputStream payload, MessageMetadata messageMetadata) throws IOException, MessageFormatException {
+    void handleBody(InputStream payload, MessageMetadata messageMetadata, MessageInfo messageInfo)
+        throws IOException, MessageFormatException {
       if (!successfullyDeserialized) {
         BlobData blobData = MessageFormatRecord.deserializeBlob(payload);
         ByteBuffer encryptionKey = messageMetadata == null ? null : messageMetadata.getEncryptionKey();
@@ -792,7 +797,8 @@ class GetBlobOperation extends GetOperation {
                       + objectsInPartitionResponse, RouterErrorCode.UnexpectedInternalError);
             } else {
               MessageMetadata messageMetadata = partitionResponseInfo.getMessageMetadataList().get(0);
-              handleBody(getResponse.getInputStream(), messageMetadata);
+              MessageInfo messageInfo = partitionResponseInfo.getMessageInfoList().get(0);
+              handleBody(getResponse.getInputStream(), messageMetadata, messageInfo);
               chunkOperationTracker.onResponse(getRequestInfo.replicaId, true);
               if (RouterUtils.isRemoteReplica(routerConfig, getRequestInfo.replicaId)) {
                 logger.trace("Cross colo request successful for remote replica in {} ",
@@ -803,7 +809,8 @@ class GetBlobOperation extends GetOperation {
           } else {
             // process and set the most relevant exception.
             processServerError(getError);
-            if (getError == ServerErrorCode.Blob_Deleted || getError == ServerErrorCode.Blob_Expired) {
+            if (getError == ServerErrorCode.Blob_Deleted || getError == ServerErrorCode.Blob_Expired
+                || getError == ServerErrorCode.Blob_Authorization_Failure) {
               // this is a successful response and one that completes the operation regardless of whether the
               // success target has been reached or not.
               chunkCompleted = true;
@@ -815,6 +822,8 @@ class GetBlobOperation extends GetOperation {
       } else {
         logger.trace("Replica {} returned an error {} for a GetBlobRequest with response correlationId : {} ",
             getRequestInfo.replicaId.getDataNodeId(), getError, getResponse.getCorrelationId());
+        // process and set the most relevant exception.
+        processServerError(getError);
         onErrorResponse(getRequestInfo.replicaId);
       }
     }
@@ -848,6 +857,7 @@ class GetBlobOperation extends GetOperation {
     void setChunkException(RouterException exception) {
       if (chunkException == null || exception.getErrorCode() == RouterErrorCode.BlobDeleted
           || exception.getErrorCode() == RouterErrorCode.BlobExpired
+          || exception.getErrorCode() == RouterErrorCode.BlobAuthorizationFailure
           || exception.getErrorCode() == RouterErrorCode.RangeNotSatisfiable) {
         chunkException = exception;
       }
@@ -960,7 +970,7 @@ class GetBlobOperation extends GetOperation {
               decryptCallbackResultInfo.exception);
           setOperationException(
               new RouterException("Exception thrown on decrypting content for " + blobType + " blob " + blobId,
-                  RouterErrorCode.UnexpectedInternalError));
+                  decryptCallbackResultInfo.exception, RouterErrorCode.UnexpectedInternalError));
           progressTracker.setDecryptionFailed();
         } else {
           // in case of Metadata blob, only user-metadata needs decryption if the blob is encrypted
@@ -1001,7 +1011,8 @@ class GetBlobOperation extends GetOperation {
      * or the only chunk of the blob.
      */
     @Override
-    void handleBody(InputStream payload, MessageMetadata messageMetadata) throws IOException, MessageFormatException {
+    void handleBody(InputStream payload, MessageMetadata messageMetadata, MessageInfo messageInfo)
+        throws IOException, MessageFormatException {
       if (!successfullyDeserialized) {
         BlobData blobData;
         ByteBuffer encryptionKey;
@@ -1012,6 +1023,7 @@ class GetBlobOperation extends GetOperation {
         } else {
           BlobAll blobAll = MessageFormatRecord.deserializeBlobAll(payload, blobIdFactory);
           BlobInfo serverBlobInfo = blobAll.getBlobInfo();
+          updateTtlIfRequired(serverBlobInfo.getBlobProperties(), messageInfo);
           getOptions().ageAtAccessTracker.trackAgeAtAccess(serverBlobInfo.getBlobProperties().getCreationTimeInMs());
           blobData = blobAll.getBlobData();
           encryptionKey = blobAll.getBlobEncryptionKey();
@@ -1049,6 +1061,10 @@ class GetBlobOperation extends GetOperation {
     void processServerError(ServerErrorCode errorCode) {
       logger.trace("Server returned an error: {} ", errorCode);
       switch (errorCode) {
+        case Blob_Authorization_Failure:
+          setChunkException(
+              new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobAuthorizationFailure));
+          break;
         case Blob_Deleted:
           setChunkException(new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobDeleted));
           break;
@@ -1057,6 +1073,10 @@ class GetBlobOperation extends GetOperation {
           break;
         case Blob_Not_Found:
           setChunkException(new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobDoesNotExist));
+          break;
+        case Disk_Unavailable:
+        case Replica_Unavailable:
+          setChunkException(new RouterException("Server returned: " + errorCode, RouterErrorCode.AmbryUnavailable));
           break;
         default:
           setChunkException(

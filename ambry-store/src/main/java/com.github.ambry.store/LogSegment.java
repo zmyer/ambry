@@ -13,7 +13,6 @@
  */
 package com.github.ambry.store;
 
-import com.github.ambry.utils.ByteBufferInputStream;
 import com.github.ambry.utils.Crc32;
 import com.github.ambry.utils.CrcInputStream;
 import com.github.ambry.utils.Pair;
@@ -24,10 +23,11 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.ReadableByteChannel;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 
@@ -50,26 +50,19 @@ class LogSegment implements Read, Write {
     //头部长度
     static final int HEADER_SIZE = VERSION_HEADER_SIZE + CAPACITY_HEADER_SIZE + CRC_SIZE;
 
-    //文件通道对象
-    private final FileChannel fileChannel;
-    //文件对象
-    private final File file;
-    //整体容量大小
-    private final long capacityInBytes;
-    //segment名称
-    private final String name;
-    //
-    private final Pair<File, FileChannel> segmentView;
-    //存储统计
-    private final StoreMetrics metrics;
-    //segment起始偏移量
-    private final long startOffset;
-    //segment结束偏移量
-    private final AtomicLong endOffset;
-    //引用次数
-    private final AtomicLong refCount = new AtomicLong(0);
-    //是否打开
-    private final AtomicBoolean open = new AtomicBoolean(true);
+  private final FileChannel fileChannel;
+  private final File file;
+  private final long capacityInBytes;
+  private final String name;
+  private final Pair<File, FileChannel> segmentView;
+  private final StoreMetrics metrics;
+  private final long startOffset;
+  private final AtomicLong endOffset;
+  private final AtomicLong refCount = new AtomicLong(0);
+  private final AtomicBoolean open = new AtomicBoolean(true);
+  static final int BYTE_BUFFER_SIZE_FOR_APPEND = 1024 * 1024;
+  private ByteBuffer byteBufferForAppend = null;
+  static final AtomicInteger byteBufferForAppendTotalCount = new AtomicInteger(0);
 
     /**
      * Creates a LogSegment abstraction with the given capacity.
@@ -146,106 +139,130 @@ class LogSegment implements Read, Write {
         endOffset = new AtomicLong(startOffset);
     }
 
-    /**
-     * {@inheritDoc}
-     * <p/>
-     * Attempts to write the {@code buffer} in its entirety in this segment. To guarantee that the write is persisted,
-     * {@link #flush()} has to be called.
-     * <p/>
-     * The write is not started if it cannot be completed.
-     * @param buffer The buffer from which data needs to be written from
-     * @return the number of bytes written.
-     * @throws IllegalArgumentException if there is not enough space for {@code buffer}
-     * @throws IOException if data could not be written to the file because of I/O errors
-     */
-    // TODO: 2018/4/27 by zmyer
-    @Override
-    public int appendFrom(ByteBuffer buffer) throws IOException {
-        int bytesWritten = 0;
-        if (endOffset.get() + buffer.remaining() > capacityInBytes) {
-            metrics.overflowWriteError.inc();
-            throw new IllegalArgumentException(
-                    "Buffer cannot be written to segment [" + file.getAbsolutePath() + "] because " +
-                            "it exceeds the capacity ["
-                            + capacityInBytes + "]");
-        } else {
-            while (buffer.hasRemaining()) {
-                //写入文件
-                bytesWritten += fileChannel.write(buffer, endOffset.get());
-            }
-            //更新结束偏移量
-            endOffset.addAndGet(bytesWritten);
-        }
-        return bytesWritten;
+  /**
+   * {@inheritDoc}
+   * <p/>
+   * Attempts to write the {@code buffer} in its entirety in this segment. To guarantee that the write is persisted,
+   * {@link #flush()} has to be called.
+   * <p/>
+   * The write is not started if it cannot be completed.
+   * @param buffer The buffer from which data needs to be written from
+   * @return the number of bytes written.
+   * @throws IllegalArgumentException if there is not enough space for {@code buffer}
+   * @throws IOException if data could not be written to the file because of I/O errors
+   */
+  @Override
+  public int appendFrom(ByteBuffer buffer) throws IOException {
+    int bytesWritten = 0;
+    if (endOffset.get() + buffer.remaining() > capacityInBytes) {
+      metrics.overflowWriteError.inc();
+      throw new IllegalArgumentException(
+          "Buffer cannot be written to segment [" + file.getAbsolutePath() + "] because " + "it exceeds the capacity ["
+              + capacityInBytes + "]");
+    } else {
+      while (buffer.hasRemaining()) {
+        bytesWritten += fileChannel.write(buffer, endOffset.get() + bytesWritten);
+      }
+      endOffset.addAndGet(bytesWritten);
     }
+    return bytesWritten;
+  }
 
-    /**
-     * {@inheritDoc}
-     * <p/>
-     * Attempts to write the {@code channel} in its entirety in this segment. To guarantee that the write is persisted,
-     * {@link #flush()} has to be called.
-     * <p/>
-     * The write is not started if it cannot be completed.
-     * @param channel The channel from which data needs to be written from
-     * @param size The amount of data in bytes to be written from the channel
-     * @throws IllegalArgumentException if there is not enough space for data of size {@code size}.
-     * @throws IOException if data could not be written to the file because of I/O errors
-     */
-    // TODO: 2018/4/27 by zmyer
-    @Override
-    public void appendFrom(ReadableByteChannel channel, long size) throws IOException {
-        if (endOffset.get() + size > capacityInBytes) {
-            metrics.overflowWriteError.inc();
-            throw new IllegalArgumentException(
-                    "Channel cannot be written to segment [" + file.getAbsolutePath() + "] because" +
-                            " it exceeds the capacity ["
-                            + capacityInBytes + "]");
+  /**
+   * {@inheritDoc}
+   * <p/>
+   * Attempts to write the {@code channel} in its entirety in this segment. To guarantee that the write is persisted,
+   * {@link #flush()} has to be called.
+   * <p/>
+   * The write is not started if it cannot be completed.
+   * @param channel The channel from which data needs to be written from
+   * @param size The amount of data in bytes to be written from the channel
+   * @throws IllegalArgumentException if there is not enough space for data of size {@code size}.
+   * @throws IOException if data could not be written to the file because of I/O errors
+   */
+  @Override
+  public void appendFrom(ReadableByteChannel channel, long size) throws IOException {
+    if (endOffset.get() + size > capacityInBytes) {
+      metrics.overflowWriteError.inc();
+      throw new IllegalArgumentException(
+          "Channel cannot be written to segment [" + file.getAbsolutePath() + "] because" + " it exceeds the capacity ["
+              + capacityInBytes + "]");
+    } else {
+      if (!fileChannel.isOpen()) {
+        throw new ClosedChannelException();
+      }
+      int bytesWritten = 0;
+      while (bytesWritten < size) {
+        byteBufferForAppend.position(0);
+        if (byteBufferForAppend.capacity() > size - bytesWritten) {
+          byteBufferForAppend.limit((int) size - bytesWritten);
         } else {
-            //写入字节数
-            long bytesWritten = 0;
-            while (bytesWritten < size) {
-                //开始写入文件
-                bytesWritten += fileChannel.transferFrom(channel, endOffset.get() + bytesWritten,
-                        size - bytesWritten);
-            }
-            //更新结束偏移量
-            endOffset.addAndGet(bytesWritten);
+          byteBufferForAppend.limit(byteBufferForAppend.capacity());
         }
+        if (channel.read(byteBufferForAppend) < 0) {
+          throw new IOException("ReadableByteChannel length less than requested size!");
+        }
+        byteBufferForAppend.flip();
+        while (byteBufferForAppend.hasRemaining()) {
+          bytesWritten += fileChannel.write(byteBufferForAppend, endOffset.get() + bytesWritten);
+        }
+      }
+      endOffset.addAndGet(bytesWritten);
     }
+  }
 
-    /**
-     * {@inheritDoc}
-     * <p/>
-     * The read is not started if it cannot be completed.
-     * @param buffer The buffer into which the data needs to be written
-     * @param position The position to start the read from
-     * @throws IOException if data could not be written to the file because of I/O errors
-     * @throws IndexOutOfBoundsException if {@code position} < header size or >= {@link #sizeInBytes()} or if
-     * {@code buffer} size is greater than the data available for read.
-     */
-    // TODO: 2018/4/27 by zmyer
-    @Override
-    public void readInto(ByteBuffer buffer, long position) throws IOException {
-        long sizeInBytes = sizeInBytes();
-        if (position < startOffset || position >= sizeInBytes) {
-            throw new IndexOutOfBoundsException(
-                    "Provided position [" + position + "] is out of bounds for the segment [" + file.getAbsolutePath()
-                            + "] with size [" + sizeInBytes + "]");
-        }
-        if (position + buffer.remaining() > sizeInBytes) {
-            metrics.overflowReadError.inc();
-            throw new IndexOutOfBoundsException(
-                    "Cannot read from segment [" + file.getAbsolutePath() + "] from position [" + position +
-                            "] for size ["
-                            + buffer.remaining() + "] because it exceeds the size [" + sizeInBytes + "]");
-        }
-        long bytesRead = 0;
-        int size = buffer.remaining();
-        while (bytesRead < size) {
-            //从文件中读取数据
-            bytesRead += fileChannel.read(buffer, position + bytesRead);
-        }
+  /**
+   * Initialize a {@link java.nio.DirectByteBuffer} for {@link LogSegment#appendFrom(ReadableByteChannel, long)}.
+   * The buffer is to optimize JDK 8KB small IO write.
+   */
+  void initBufferForAppend() throws IOException{
+    if (byteBufferForAppend != null) {
+      throw new IOException("ByteBufferForAppend has been initialized.");
     }
+    byteBufferForAppend = ByteBuffer.allocateDirect(BYTE_BUFFER_SIZE_FOR_APPEND);
+    byteBufferForAppendTotalCount.incrementAndGet();
+  }
+
+  /**
+   * Free {@link LogSegment#byteBufferForAppend}.
+   */
+  void dropBufferForAppend() {
+    if (byteBufferForAppend != null) {
+      byteBufferForAppend = null;
+      byteBufferForAppendTotalCount.decrementAndGet();
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p/>
+   * The read is not started if it cannot be completed.
+   * @param buffer The buffer into which the data needs to be written
+   * @param position The position to start the read from
+   * @throws IOException if data could not be written to the file because of I/O errors
+   * @throws IndexOutOfBoundsException if {@code position} < header size or >= {@link #sizeInBytes()} or if
+   * {@code buffer} size is greater than the data available for read.
+   */
+  @Override
+  public void readInto(ByteBuffer buffer, long position) throws IOException {
+    long sizeInBytes = sizeInBytes();
+    if (position < startOffset || position >= sizeInBytes) {
+      throw new IndexOutOfBoundsException(
+          "Provided position [" + position + "] is out of bounds for the segment [" + file.getAbsolutePath()
+              + "] with size [" + sizeInBytes + "]");
+    }
+    if (position + buffer.remaining() > sizeInBytes) {
+      metrics.overflowReadError.inc();
+      throw new IndexOutOfBoundsException(
+          "Cannot read from segment [" + file.getAbsolutePath() + "] from position [" + position + "] for size ["
+              + buffer.remaining() + "] because it exceeds the size [" + sizeInBytes + "]");
+    }
+    long bytesRead = 0;
+    int size = buffer.remaining();
+    while (bytesRead < size) {
+      bytesRead += fileChannel.read(buffer, position + bytesRead);
+    }
+  }
 
     /**
      * Writes {@code size} number of bytes from the channel {@code channel} into the segment at {@code offset}.
@@ -377,39 +394,32 @@ class LogSegment implements Read, Write {
         fileChannel.force(true);
     }
 
-    /**
-     * Closes this log segment
-     */
-    void close() throws IOException {
-        if (open.compareAndSet(true, false)) {
-            flush();
-            fileChannel.close();
-        }
+  /**
+   * Closes this log segment
+   */
+  void close() throws IOException {
+    if (open.compareAndSet(true, false)) {
+      flush();
+      fileChannel.close();
+      dropBufferForAppend();
     }
+  }
 
-    /**
-     * Writes a header describing the segment.
-     * @param capacityInBytes the intended capacity of the segment.
-     * @throws IOException if there is any I/O error writing to the file.
-     */
-    // TODO: 2018/4/27 by zmyer
-    private void writeHeader(long capacityInBytes) throws IOException {
-        //crc对象
-        Crc32 crc = new Crc32();
-        //分配头部缓冲区
-        ByteBuffer buffer = ByteBuffer.allocate(HEADER_SIZE);
-        //设置版本
-        buffer.putShort(VERSION);
-        //写入容量大小
-        buffer.putLong(capacityInBytes);
-        //计算crc
-        crc.update(buffer.array(), 0, HEADER_SIZE - CRC_SIZE);
-        //写入crc
-        buffer.putLong(crc.getValue());
-        buffer.flip();
-        //将缓冲区写入文件
-        appendFrom(Channels.newChannel(new ByteBufferInputStream(buffer)), buffer.remaining());
-    }
+  /**
+   * Writes a header describing the segment.
+   * @param capacityInBytes the intended capacity of the segment.
+   * @throws IOException if there is any I/O error writing to the file.
+   */
+  private void writeHeader(long capacityInBytes) throws IOException {
+    Crc32 crc = new Crc32();
+    ByteBuffer buffer = ByteBuffer.allocate(HEADER_SIZE);
+    buffer.putShort(VERSION);
+    buffer.putLong(capacityInBytes);
+    crc.update(buffer.array(), 0, HEADER_SIZE - CRC_SIZE);
+    buffer.putLong(crc.getValue());
+    buffer.flip();
+    appendFrom(buffer);
+  }
 
     @Override
     public String toString() {

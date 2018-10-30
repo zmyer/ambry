@@ -18,10 +18,11 @@ import com.github.ambry.server.StatsSnapshot;
 import com.github.ambry.server.StatsWrapper;
 import com.github.ambry.utils.Pair;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import org.codehaus.jackson.annotate.JsonAutoDetect;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,10 +35,10 @@ public class HelixClusterAggregator {
   private static final Logger logger = LoggerFactory.getLogger(HelixClusterAggregator.class);
   private final ObjectMapper mapper = new ObjectMapper();
   private final long relevantTimePeriodInMs;
+  private final List<String> exceptionOccurredInstances = new ArrayList<>();
 
   HelixClusterAggregator(long relevantTimePeriodInMinutes) {
     relevantTimePeriodInMs = TimeUnit.MINUTES.toMillis(relevantTimePeriodInMinutes);
-    mapper.setVisibilityChecker(mapper.getVisibilityChecker().withFieldVisibility(JsonAutoDetect.Visibility.ANY));
   }
 
   /**
@@ -54,12 +55,19 @@ public class HelixClusterAggregator {
     StatsSnapshot partitionSnapshot = new StatsSnapshot(0L, new HashMap<String, StatsSnapshot>());
     Map<String, Long> partitionTimestampMap = new HashMap<>();
     StatsSnapshot rawPartitionSnapshot = new StatsSnapshot(0L, new HashMap<String, StatsSnapshot>());
+    exceptionOccurredInstances.clear();
     for (Map.Entry<String, String> statsWrapperJSON : statsWrappersJSON.entrySet()) {
-      if (statsWrapperJSON != null) {
-        StatsWrapper snapshotWrapper = mapper.readValue(statsWrapperJSON.getValue(), StatsWrapper.class);
-        StatsWrapper snapshotWrapperCopy = mapper.readValue(statsWrapperJSON.getValue(), StatsWrapper.class);
-        combineRaw(rawPartitionSnapshot, snapshotWrapper);
-        combine(partitionSnapshot, snapshotWrapperCopy, statsWrapperJSON.getKey(), partitionTimestampMap);
+      if (statsWrapperJSON != null && statsWrapperJSON.getValue() != null) {
+        try {
+          StatsWrapper snapshotWrapper = mapper.readValue(statsWrapperJSON.getValue(), StatsWrapper.class);
+          StatsWrapper snapshotWrapperCopy = mapper.readValue(statsWrapperJSON.getValue(), StatsWrapper.class);
+
+          combineRaw(rawPartitionSnapshot, snapshotWrapper);
+          combine(partitionSnapshot, snapshotWrapperCopy, statsWrapperJSON.getKey(), partitionTimestampMap);
+        } catch (Exception e) {
+          logger.error("Exception occurred while processing stats from {}", statsWrapperJSON.getKey(), e);
+          exceptionOccurredInstances.add(statsWrapperJSON.getKey());
+        }
       }
     }
     if (logger.isTraceEnabled()) {
@@ -81,8 +89,12 @@ public class HelixClusterAggregator {
    * @param snapshotWrapper the {@link StatsSnapshot} to be added to the raw base {@link StatsSnapshot}
    */
   private void combineRaw(StatsSnapshot rawBaseSnapshot, StatsWrapper snapshotWrapper) {
-    long totalValue = rawBaseSnapshot.getValue();
     Map<String, StatsSnapshot> partitionSnapshotMap = snapshotWrapper.getSnapshot().getSubMap();
+    if (partitionSnapshotMap == null) {
+      logger.info("There is no partition in given StatsSnapshot, skip aggregation on it.");
+      return;
+    }
+    long totalValue = rawBaseSnapshot.getValue();
     Map<String, StatsSnapshot> basePartitionSnapshotMap = rawBaseSnapshot.getSubMap();
     for (Map.Entry<String, StatsSnapshot> partitionSnapshot : partitionSnapshotMap.entrySet()) {
       if (basePartitionSnapshotMap.containsKey(partitionSnapshot.getKey())) {
@@ -111,10 +123,14 @@ public class HelixClusterAggregator {
    *                              partition entry in the base {@link StatsSnapshot}
    */
   private void combine(StatsSnapshot baseSnapshot, StatsWrapper snapshotWrapper, String instance,
-      Map<String, Long> partitionTimestampMap) throws IOException {
+      Map<String, Long> partitionTimestampMap) {
+    Map<String, StatsSnapshot> partitionSnapshotMap = snapshotWrapper.getSnapshot().getSubMap();
+    if (partitionSnapshotMap == null) {
+      logger.info("There is no partition in given StatsSnapshot, skip aggregation on it.");
+      return;
+    }
     long totalValue = baseSnapshot.getValue();
     long snapshotTimestamp = snapshotWrapper.getHeader().getTimestamp();
-    Map<String, StatsSnapshot> partitionSnapshotMap = snapshotWrapper.getSnapshot().getSubMap();
     Map<String, StatsSnapshot> basePartitionSnapshotMap = baseSnapshot.getSubMap();
     for (Map.Entry<String, StatsSnapshot> partitionSnapshot : partitionSnapshotMap.entrySet()) {
       String partitionId = partitionSnapshot.getKey();
@@ -157,9 +173,16 @@ public class HelixClusterAggregator {
     StatsSnapshot reducedSnapshot = new StatsSnapshot(0L, null);
     if (statsSnapshot.getSubMap() != null) {
       for (StatsSnapshot snapshot : statsSnapshot.getSubMap().values()) {
-        statsSnapshot.aggregate(reducedSnapshot, snapshot);
+        StatsSnapshot.aggregate(reducedSnapshot, snapshot);
       }
     }
     return reducedSnapshot;
+  }
+
+  /**
+   * @return the list of instances on which exception occurred during cluster wide stats aggregation.
+   */
+  List<String> getExceptionOccurredInstances() {
+    return exceptionOccurredInstances;
   }
 }

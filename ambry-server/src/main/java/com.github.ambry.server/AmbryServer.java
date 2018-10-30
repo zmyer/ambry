@@ -19,9 +19,7 @@ import com.github.ambry.clustermap.ClusterAgentsFactory;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.ClusterParticipant;
 import com.github.ambry.clustermap.DataNodeId;
-import com.github.ambry.clustermap.PartitionId;
-import com.github.ambry.clustermap.ReplicaId;
-import com.github.ambry.clustermap.WriteStatusDelegate;
+import com.github.ambry.clustermap.ReplicaStatusDelegate;
 import com.github.ambry.commons.LoggingNotificationSystem;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.ConnectionPoolConfig;
@@ -45,12 +43,16 @@ import com.github.ambry.notification.NotificationSystem;
 import com.github.ambry.replication.ReplicationManager;
 import com.github.ambry.store.FindTokenFactory;
 import com.github.ambry.store.StorageManager;
+import com.github.ambry.store.StoreKeyConverter;
+import com.github.ambry.store.StoreKeyConverterFactory;
 import com.github.ambry.store.StoreKeyFactory;
+import com.github.ambry.store.Transformer;
 import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.Time;
 import com.github.ambry.utils.Utils;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
@@ -174,8 +176,7 @@ public class AmbryServer {
       storageManager =
           new StorageManager(storeConfig, diskManagerConfig, scheduler, registry, clusterMap.getReplicaIds(nodeId),
               storeKeyFactory, new BlobStoreRecovery(), new BlobStoreHardDelete(),
-              new WriteStatusDelegate(clusterParticipant), time);
-      //启动存储管理器
+              new ReplicaStatusDelegate(clusterParticipant), time);
       storageManager.start();
 
       //创建连接池对象
@@ -183,11 +184,14 @@ public class AmbryServer {
       //启动连接池
       connectionPool.start();
 
-      //创建副本管理器
+      StoreKeyConverterFactory storeKeyConverterFactory =
+          Utils.getObj(serverConfig.serverStoreKeyConverterFactory, properties,
+              registry);
+
       replicationManager =
           new ReplicationManager(replicationConfig, clusterMapConfig, storeConfig, storageManager, storeKeyFactory,
-              clusterMap, scheduler, nodeId, connectionPool, registry, notificationSystem);
-      //启动副本管理器
+              clusterMap, scheduler, nodeId, connectionPool, registry, notificationSystem, storeKeyConverterFactory,
+              serverConfig.serverMessageTransformer);
       replicationManager.start();
 
       //端口集合
@@ -202,22 +206,15 @@ public class AmbryServer {
       //请求处理对象
       requests =
           new AmbryRequests(storageManager, networkServer.getRequestResponseChannel(), clusterMap, nodeId, registry,
-              findTokenFactory, notificationSystem, replicationManager, storeKeyFactory);
-      //请求处理池对象
+              findTokenFactory, notificationSystem, replicationManager, storeKeyFactory,
+              serverConfig.serverEnableStoreDataPrefetch, storeKeyConverterFactory);
       requestHandlerPool = new RequestHandlerPool(serverConfig.serverRequestHandlerNumOfThreads,
           networkServer.getRequestResponseChannel(), requests);
       //启动网络服务器
       networkServer.start();
 
       logger.info("Creating StatsManager to publish stats");
-      //获取分区id
-      List<PartitionId> partitionIds = new ArrayList<>();
-      for (ReplicaId replicaId : clusterMap.getReplicaIds(nodeId)) {
-        partitionIds.add(replicaId.getPartitionId());
-      }
-
-      //创建状态管理器
-      statsManager = new StatsManager(storageManager, partitionIds, registry, statsConfig, time);
+      statsManager = new StatsManager(storageManager, clusterMap.getReplicaIds(nodeId), registry, statsConfig, time);
       if (serverConfig.serverStatsPublishLocalEnabled) {
         //启动状态管理器
         statsManager.start();
@@ -230,8 +227,7 @@ public class AmbryServer {
             new QuotaHealthReport(statsManager, serverConfig.serverQuotaStatsAggregateIntervalInMinutes));
       }
 
-      //初始化集群参与者，主要是加入集群
-      clusterParticipant.initialize(networkConfig.hostName, networkConfig.port, ambryHealthReports);
+      clusterParticipant.participate(ambryHealthReports);
 
       logger.info("started");
       //统计启动花费时间

@@ -41,11 +41,11 @@ import static com.github.ambry.account.Container.UNKNOWN_CONTAINER_ID;
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
  *
  */
-// TODO: 2018/3/22 by zmyer
-class IndexValue {
-    enum Flags {
-        Delete_Index
-    }
+class IndexValue implements Comparable<IndexValue> {
+
+  enum Flags {
+    Delete_Index, Ttl_Update_Index
+  }
 
     final static byte FLAGS_DEFAULT_VALUE = (byte) 0;
     final static long UNKNOWN_ORIGINAL_MESSAGE_OFFSET = -1;
@@ -71,60 +71,60 @@ class IndexValue {
                     ACCOUNT_ID_SIZE_IN_BYTES
                     + CONTAINER_ID_SIZE_IN_BYTES;
 
-    private long size;
-    private Offset offset;
-    private byte flags;
-    private final long expiresAtMs;
-    private long originalMessageOffset;
-    private final long operationTimeInMs;
-    private final short accountId;
-    private final short containerId;
-    private final short version;
+  private long size;
+  private Offset offset;
+  private byte flags;
+  private long expiresAtMs;
+  private long originalMessageOffset;
+  private final long operationTimeInMs;
+  private final short accountId;
+  private final short containerId;
+  private final short version;
 
-    /**
-     * Constructs the {@link IndexValue} with the passed in {@link ByteBuffer} and the given {@code version}
-     * @param logSegmentName the log segment name to be used to construct the offset
-     * @param value the {@link ByteBuffer} representation of the {@link IndexValue}
-     * @param version the version of the {@link PersistentIndex}
-     */
-    IndexValue(String logSegmentName, ByteBuffer value, short version) {
-        this.version = version;
-        switch (version) {
-        case PersistentIndex.VERSION_0:
-            if (value.capacity() != INDEX_VALUE_SIZE_IN_BYTES_V0) {
-                throw new IllegalArgumentException("Invalid buffer size for version 0");
-            }
-            size = value.getLong();
-            offset = new Offset(logSegmentName, value.getLong());
-            flags = value.get();
-            expiresAtMs = value.getLong();
-            originalMessageOffset = value.getLong();
-            operationTimeInMs = (int) Utils.Infinite_Time;
-            accountId = UNKNOWN_ACCOUNT_ID;
-            containerId = UNKNOWN_CONTAINER_ID;
-            break;
-        case PersistentIndex.VERSION_1:
-        case PersistentIndex.VERSION_2:
-            if (value.capacity() != INDEX_VALUE_SIZE_IN_BYTES_V1) {
-                throw new IllegalArgumentException("Invalid buffer size for version 1");
-            }
-            size = value.getLong();
-            offset = new Offset(logSegmentName, value.getLong());
-            flags = value.get();
-            long expiresAt = value.getInt();
-            expiresAtMs = expiresAt >= 0 ? TimeUnit.SECONDS.toMillis(expiresAt) : Utils.Infinite_Time;
-            originalMessageOffset = value.getLong();
-            long operationTimeInSecs = value.getInt();
-            operationTimeInMs = operationTimeInSecs != Utils.Infinite_Time ? TimeUnit.SECONDS.toMillis(
-                    operationTimeInSecs)
-                    : Utils.Infinite_Time;
-            accountId = value.getShort();
-            containerId = value.getShort();
-            break;
-        default:
-            throw new IllegalArgumentException("Unsupported version " + version + " passed in for IndexValue ");
+  /**
+   * Constructs the {@link IndexValue} with the passed in {@link ByteBuffer} and the given {@code version}
+   * @param logSegmentName the log segment name to be used to construct the offset
+   * @param value the {@link ByteBuffer} representation of the {@link IndexValue}
+   * @param version the version of the {@link PersistentIndex}
+   */
+  IndexValue(String logSegmentName, ByteBuffer value, short version) {
+    this.version = version;
+    switch (version) {
+      case PersistentIndex.VERSION_0:
+        if (value.capacity() != INDEX_VALUE_SIZE_IN_BYTES_V0) {
+          throw new IllegalArgumentException("Invalid buffer size for version 0");
         }
+        size = value.getLong();
+        offset = new Offset(logSegmentName, value.getLong());
+        flags = value.get();
+        expiresAtMs = value.getLong();
+        originalMessageOffset = value.getLong();
+        operationTimeInMs = (int) Utils.Infinite_Time;
+        accountId = UNKNOWN_ACCOUNT_ID;
+        containerId = UNKNOWN_CONTAINER_ID;
+        break;
+      case PersistentIndex.VERSION_1:
+      case PersistentIndex.VERSION_2:
+        if (value.capacity() != INDEX_VALUE_SIZE_IN_BYTES_V1) {
+          throw new IllegalArgumentException("Invalid buffer size for version 1");
+        }
+        size = value.getLong();
+        offset = new Offset(logSegmentName, value.getLong());
+        flags = value.get();
+        long expiresAt = value.getInt();
+        expiresAtMs = expiresAt != Utils.Infinite_Time && expiresAt >= 0 ? TimeUnit.SECONDS.toMillis(expiresAt)
+            : Utils.Infinite_Time;
+        originalMessageOffset = value.getLong();
+        long operationTimeInSecs = value.getInt();
+        operationTimeInMs = operationTimeInSecs != Utils.Infinite_Time ? TimeUnit.SECONDS.toMillis(operationTimeInSecs)
+            : Utils.Infinite_Time;
+        accountId = value.getShort();
+        containerId = value.getShort();
+        break;
+      default:
+        throw new IllegalArgumentException("Unsupported version " + version + " passed in for IndexValue ");
     }
+  }
 
     /**
      * Constructs IndexValue based on the args passed
@@ -155,35 +155,30 @@ class IndexValue {
         this(size, offset, flags, expiresAtMs, offset.getOffset(), operationTimeInMs, accountId, containerId);
     }
 
-    /**
-     * Constructs IndexValue based on the args passed
-     * @param size the size of the blob that this index value refers to
-     * @param offset the {@link Offset} in the {@link Log} where the blob that this index value refers to resides
-     * @param flags the flags that needs to be set for the Index Value
-     * @param expiresAtMs the expiration time in ms at which the blob expires
-     * @param originalMessageOffset the original message offset where the Put record pertaining to a delete record exists
-     *                              in the same log segment. Set to {@link #UNKNOWN_ORIGINAL_MESSAGE_OFFSET} otherwise.
-     * @param operationTimeInMs the time in ms at which the operation occurred.
-     * @param accountId the accountId that this blob belongs to
-     * @param containerId the containerId that this blob belongs to
-     */
-    private IndexValue(long size, Offset offset, byte flags, long expiresAtMs, long originalMessageOffset,
-            long operationTimeInMs, short accountId, short containerId) {
-        this.size = size;
-        this.offset = offset;
-        this.flags = flags;
-        // if expiry in secs > Integer.MAX_VALUE, treat it as permanent blob
-        if (TimeUnit.MILLISECONDS.toSeconds(expiresAtMs) > Integer.MAX_VALUE) {
-            this.expiresAtMs = Utils.Infinite_Time;
-        } else {
-            this.expiresAtMs = Utils.getTimeInMsToTheNearestSec(expiresAtMs);
-        }
-        this.originalMessageOffset = originalMessageOffset;
-        this.operationTimeInMs = Utils.getTimeInMsToTheNearestSec(operationTimeInMs);
-        this.accountId = accountId;
-        this.containerId = containerId;
-        version = PersistentIndex.CURRENT_VERSION;
-    }
+  /**
+   * Constructs IndexValue based on the args passed
+   * @param size the size of the blob that this index value refers to
+   * @param offset the {@link Offset} in the {@link Log} where the blob that this index value refers to resides
+   * @param flags the flags that needs to be set for the Index Value
+   * @param expiresAtMs the expiration time in ms at which the blob expires
+   * @param originalMessageOffset the offset where the PUT record pertaining to this record exists if in the same log
+   *                              segment. Set to {@link #UNKNOWN_ORIGINAL_MESSAGE_OFFSET} otherwise.
+   * @param operationTimeInMs the time in ms at which the operation occurred.
+   * @param accountId the accountId that this blob belongs to
+   * @param containerId the containerId that this blob belongs to
+   */
+  private IndexValue(long size, Offset offset, byte flags, long expiresAtMs, long originalMessageOffset,
+      long operationTimeInMs, short accountId, short containerId) {
+    this.size = size;
+    this.offset = offset;
+    this.flags = flags;
+    setExpiresAtMs(expiresAtMs);
+    this.originalMessageOffset = originalMessageOffset;
+    this.operationTimeInMs = Utils.getTimeInMsToTheNearestSec(operationTimeInMs);
+    this.accountId = accountId;
+    this.containerId = containerId;
+    version = PersistentIndex.CURRENT_VERSION;
+  }
 
     /**
      * @return the size of the blob that this index value refers to
@@ -223,12 +218,13 @@ class IndexValue {
         return expiresAtMs;
     }
 
-    /**
-     * @return the original message offset of the {@link IndexValue}
-     */
-    long getOriginalMessageOffset() {
-        return originalMessageOffset;
-    }
+  /**
+   * @return the offset of the PUT record related to this {@link IndexValue} if it is in the same log segment.
+   * {@link #UNKNOWN_ORIGINAL_MESSAGE_OFFSET} otherwise.
+   */
+  long getOriginalMessageOffset() {
+    return originalMessageOffset;
+  }
 
     /**
      * @return the operation time in ms of the index value
@@ -259,15 +255,33 @@ class IndexValue {
         flags = (byte) (flags | (1 << flag.ordinal()));
     }
 
-    /**
-     * Updates the {@link Offset} of the {@link IndexValue}
-     * @param newOffset the new {@link Offset} to be updated for the {@link IndexValue}
-     */
-    void setNewOffset(Offset newOffset) {
-        originalMessageOffset =
-                offset.getName().equals(newOffset.getName()) ? offset.getOffset() : UNKNOWN_ORIGINAL_MESSAGE_OFFSET;
-        offset = newOffset;
-    }
+  /**
+   * Clears the provided {@code flag}
+   * @param flag the flag to clear
+   */
+  void clearFlag(Flags flag) {
+    flags = (byte) (flags & ~(1 << flag.ordinal()));
+  }
+
+  /**
+   * Updates the {@link Offset} of the {@link IndexValue}
+   * @param newOffset the new {@link Offset} to be updated for the {@link IndexValue}
+   */
+  void setNewOffset(Offset newOffset) {
+    Offset oldOffset = offset;
+    offset = newOffset;
+    setOriginalMessageOffset(oldOffset);
+  }
+
+  /**
+   * Sets the offset of the PUT record if the offset is in the same {@link LogSegment}
+   * @param originalMessageOffset the offset to set as the original message offset
+   */
+  void setOriginalMessageOffset(Offset originalMessageOffset) {
+    this.originalMessageOffset =
+        offset.getName().equals(originalMessageOffset.getName()) ? originalMessageOffset.getOffset()
+            : UNKNOWN_ORIGINAL_MESSAGE_OFFSET;
+  }
 
     void clearOriginalMessageOffset() {
         originalMessageOffset = UNKNOWN_ORIGINAL_MESSAGE_OFFSET;
@@ -316,12 +330,43 @@ class IndexValue {
         return value;
     }
 
-    @Override
-    public String toString() {
-        return "Offset: " + offset + ", Size: " + getSize() + ", Deleted: " + isFlagSet(Flags.Delete_Index)
-                + ", ExpiresAtMs: " + getExpiresAtMs() + ", Original Message Offset: " + getOriginalMessageOffset() + (
-                version != PersistentIndex.VERSION_0 ? (", OperationTimeAtSecs " + getOperationTimeInMs() +
-                        ", AccountId "
-                        + getAccountId() + ", ContainerId " + getContainerId()) : "");
+  @Override
+  public String toString() {
+    return "Offset: " + offset + ", Size: " + getSize() + ", Deleted: " + isFlagSet(Flags.Delete_Index)
+        + ", TTL Updated: " + isFlagSet(Flags.Ttl_Update_Index) + ", ExpiresAtMs: " + getExpiresAtMs()
+        + ", Original Message Offset: " + getOriginalMessageOffset() + (version != PersistentIndex.VERSION_0 ? (
+        ", OperationTimeAtSecs " + getOperationTimeInMs() + ", AccountId " + getAccountId() + ", ContainerId "
+            + getContainerId()) : "");
+  }
+
+  /**
+   * @return the version of this {@link IndexValue}
+   */
+  short getVersion() {
+    return version;
+  }
+
+  void setExpiresAtMs(long expiresAtMsLocal) {
+    // if expiry in secs > Integer.MAX_VALUE, treat it as permanent blob
+    if (TimeUnit.MILLISECONDS.toSeconds(expiresAtMsLocal) > Integer.MAX_VALUE) {
+      expiresAtMs = Utils.Infinite_Time;
+    } else if (expiresAtMsLocal != Utils.Infinite_Time && expiresAtMsLocal < 0) {
+      expiresAtMs = Utils.Infinite_Time;
+    } else {
+      expiresAtMs = Utils.getTimeInMsToTheNearestSec(expiresAtMsLocal);
     }
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p/>
+   * Compares by {@link Offset}.
+   * @param o the {@link IndexValue} to compare to.
+   * @return a negative integer, zero, or a positive integer as the offset of this {@link IndexValue} is less than,
+   * equal to, or greater than the offset of {@code o}.
+   */
+  @Override
+  public int compareTo(IndexValue o) {
+    return offset.compareTo(o.offset);
+  }
 }

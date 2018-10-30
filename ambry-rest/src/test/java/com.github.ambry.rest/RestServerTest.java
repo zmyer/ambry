@@ -185,6 +185,7 @@ public class RestServerTest {
     doBadFactoryClassTest("rest.server.router.factory");
     doBadFactoryClassTest("rest.server.response.handler.factory");
     doBadFactoryClassTest("rest.server.request.handler.factory");
+    doBadFactoryClassTest("rest.server.account.service.factory");
   }
 
   /**
@@ -212,7 +213,7 @@ public class RestServerTest {
     try {
       new RestServer(verifiableProperties, new MockClusterMap(), new LoggingNotificationSystem(), SSL_FACTORY);
       fail("Properties file contained invalid " + configKey + " class, yet no exception was thrown");
-    } catch (NullPointerException e) {
+    } catch (NoSuchMethodException e) {
       // nothing to do. expected.
     }
 

@@ -13,9 +13,13 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.Container;
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.clustermap.DataNodeId;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.BlobId;
+import com.github.ambry.commons.BlobId.BlobDataType;
 import com.github.ambry.commons.BlobIdFactory;
 import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.commons.LoggingNotificationSystem;
@@ -36,6 +40,7 @@ import com.github.ambry.utils.MockTime;
 import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
+import com.github.ambry.utils.UtilsTest;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,8 +48,10 @@ import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -61,6 +68,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import static org.junit.Assert.*;
+
 
 /**
  * A class to test the Put implementation of the {@link NonBlockingRouter}.
@@ -68,11 +77,12 @@ import org.junit.runners.Parameterized;
 @RunWith(Parameterized.class)
 public class PutManagerTest {
   static final GeneralSecurityException GSE = new GeneralSecurityException("Exception to throw for tests");
-  private static final long MAX_WAIT_MS = 2000;
+  private static final long MAX_WAIT_MS = 5000;
   private final boolean testEncryption;
   private final MockServerLayout mockServerLayout;
   private final MockTime mockTime = new MockTime();
   private final MockClusterMap mockClusterMap;
+  private final InMemAccountService accountService;
   // this is a reference to the state used by the mockSelector. just allows tests to manipulate the state.
   private AtomicReference<MockSelectorState> mockSelectorState = new AtomicReference<MockSelectorState>();
   private TestNotificationSystem notificationSystem;
@@ -93,6 +103,7 @@ public class PutManagerTest {
   private static final int MAX_PORTS_PLAIN_TEXT = 3;
   private static final int MAX_PORTS_SSL = 3;
   private static final int CHECKOUT_TIMEOUT_MS = 1000;
+  private static final String LOCAL_DC = "DC1";
 
   /**
    * Running for both regular and encrypted blobs
@@ -115,9 +126,11 @@ public class PutManagerTest {
     successTarget = 2;
     mockSelectorState.set(MockSelectorState.Good);
     mockClusterMap = new MockClusterMap();
+    mockClusterMap.setLocalDatacenterName(LOCAL_DC);
     mockServerLayout = new MockServerLayout(mockClusterMap);
     notificationSystem = new TestNotificationSystem();
     instantiateNewRouterForPuts = true;
+    accountService = new InMemAccountService(false, true);
   }
 
   /**
@@ -145,7 +158,10 @@ public class PutManagerTest {
       // size in [1, chunkSize]
       requestAndResultsList.clear();
       requestAndResultsList.add(new RequestAndResult(random.nextInt(chunkSize) + 1));
+      mockClusterMap.clearLastNRequestedPartitionClasses();
       submitPutsAndAssertSuccess(true);
+      // since the puts are processed one at a time, it is fair to check the last partition class set
+      checkLastRequestPartitionClasses(1, MockClusterMap.DEFAULT_PARTITION_CLASS);
     }
   }
 
@@ -158,7 +174,11 @@ public class PutManagerTest {
     for (int i = 1; i < 10; i++) {
       requestAndResultsList.clear();
       requestAndResultsList.add(new RequestAndResult(chunkSize * i));
+      mockClusterMap.clearLastNRequestedPartitionClasses();
       submitPutsAndAssertSuccess(true);
+      // since the puts are processed one "large" blob at a time, it is fair to check the last partition classes set
+      // one extra call if there is a metadata blob
+      checkLastRequestPartitionClasses(i == 1 ? 1 : i + 1, MockClusterMap.DEFAULT_PARTITION_CLASS);
     }
   }
 
@@ -170,7 +190,10 @@ public class PutManagerTest {
     for (int i = 1; i < 10; i++) {
       requestAndResultsList.clear();
       requestAndResultsList.add(new RequestAndResult(chunkSize * i + random.nextInt(chunkSize - 1) + 1));
+      mockClusterMap.clearLastNRequestedPartitionClasses();
       submitPutsAndAssertSuccess(true);
+      // since the puts are processed one "large" blob at a time, it is fair to check the last partition classes set
+      checkLastRequestPartitionClasses(i + 2, MockClusterMap.DEFAULT_PARTITION_CLASS);
     }
   }
 
@@ -189,18 +212,20 @@ public class PutManagerTest {
     }
     instantiateNewRouterForPuts = false;
     ReadableStreamChannel putChannel = new ByteBufferReadableStreamChannel(ByteBuffer.wrap(req.putContent));
-    Future future = router.putBlob(req.putBlobProperties, req.putUserMetadata, putChannel, new Callback<String>() {
-      @Override
-      public void onCompletion(String result, Exception exception) {
-        callbackCalled.countDown();
-        throw new RuntimeException("Throwing an exception in the user callback");
-      }
-    });
+    Future future =
+        router.putBlob(req.putBlobProperties, req.putUserMetadata, putChannel, new PutBlobOptionsBuilder().build(),
+            new Callback<String>() {
+              @Override
+              public void onCompletion(String result, Exception exception) {
+                callbackCalled.countDown();
+                throw new RuntimeException("Throwing an exception in the user callback");
+              }
+            });
     submitPutsAndAssertSuccess(false);
     //future.get() for operation with bad callback should still succeed
     future.get();
-    Assert.assertTrue("Callback not called.", callbackCalled.await(2, TimeUnit.SECONDS));
-    Assert.assertEquals("All operations should be finished.", 0, router.getOperationsCount());
+    Assert.assertTrue("Callback not called.", callbackCalled.await(MAX_WAIT_MS, TimeUnit.MILLISECONDS));
+    assertEquals("All operations should be finished.", 0, router.getOperationsCount());
     Assert.assertTrue("Router should not be closed", router.isOpen());
     // Test that PutManager is still operational
     requestAndResultsList.clear();
@@ -263,11 +288,11 @@ public class PutManagerTest {
     submitPutsAndAssertFailure(expectedException, true, true, true);
     // router should get closed automatically
     Assert.assertFalse("Router should be closed", router.isOpen());
-    Assert.assertEquals("No ChunkFiller threads should be running after the router is closed", 0,
+    assertEquals("No ChunkFiller threads should be running after the router is closed", 0,
         TestUtils.numThreadsByThisName("ChunkFillerThread"));
-    Assert.assertEquals("No RequestResponseHandler threads should be running after the router is closed", 0,
+    assertEquals("No RequestResponseHandler threads should be running after the router is closed", 0,
         TestUtils.numThreadsByThisName("RequestResponseHandlerThread"));
-    Assert.assertEquals("All operations should have completed", 0, router.getOperationsCount());
+    assertEquals("All operations should have completed", 0, router.getOperationsCount());
   }
 
   /**
@@ -502,10 +527,10 @@ public class PutManagerTest {
     MockReadableStreamChannel putChannel = new MockReadableStreamChannel(blobSize, sendZeroSizedBuffers);
     FutureResult<String> future =
         (FutureResult<String>) router.putBlob(requestAndResult.putBlobProperties, requestAndResult.putUserMetadata,
-            putChannel, null);
+            putChannel, new PutBlobOptionsBuilder().build(), null);
     ByteBuffer src = ByteBuffer.wrap(requestAndResult.putContent);
     pushWithDelay(src, putChannel, blobSize, future);
-    future.await();
+    future.await(MAX_WAIT_MS, TimeUnit.MILLISECONDS);
     requestAndResult.result = future;
   }
 
@@ -522,14 +547,14 @@ public class PutManagerTest {
     MockReadableStreamChannel putChannel = new MockReadableStreamChannel(blobSize, false);
     FutureResult<String> future =
         (FutureResult<String>) router.putBlob(requestAndResult.putBlobProperties, requestAndResult.putUserMetadata,
-            putChannel, null);
+            putChannel, new PutBlobOptionsBuilder().build(), null);
     ByteBuffer src = ByteBuffer.wrap(requestAndResult.putContent);
 
     //Make the channel act bad.
     putChannel.beBad();
 
     pushWithDelay(src, putChannel, blobSize, future);
-    future.await();
+    future.await(MAX_WAIT_MS, TimeUnit.MILLISECONDS);
     requestAndResult.result = future;
     Exception expectedException = new Exception("Channel encountered an error");
     assertFailure(expectedException, true);
@@ -578,7 +603,7 @@ public class PutManagerTest {
     MockReadableStreamChannel putChannel = new MockReadableStreamChannel(blobSize, false);
     FutureResult<String> future =
         (FutureResult<String>) router.putBlob(requestAndResult.putBlobProperties, requestAndResult.putUserMetadata,
-            putChannel, null);
+            putChannel, new PutBlobOptionsBuilder().build(), null);
     ByteBuffer src = ByteBuffer.wrap(requestAndResult.putContent);
     // There will be two chunks written to the underlying writable channel, and so two events will be fired.
     int writeSize = blobSize / 2;
@@ -604,6 +629,58 @@ public class PutManagerTest {
     requestAndResult.result = future;
     assertSuccess();
     assertCloseCleanup();
+  }
+
+  /**
+   * Tests that the replication policy in the container is respected
+   * @throws Exception
+   */
+  @Test
+  public void testReplPolicyToPartitionClassMapping() throws Exception {
+    Account refAccount = accountService.createAndAddRandomAccount();
+    Map<Container, String> containerToPartClass = new HashMap<>();
+    Iterator<Container> allContainers = refAccount.getAllContainers().iterator();
+    Container container = allContainers.next();
+    // container with null replication policy
+    container = accountService.addReplicationPolicyToContainer(container, null);
+    containerToPartClass.put(container, MockClusterMap.DEFAULT_PARTITION_CLASS);
+    container = allContainers.next();
+    // container with configured default replication policy
+    container = accountService.addReplicationPolicyToContainer(container, MockClusterMap.DEFAULT_PARTITION_CLASS);
+    containerToPartClass.put(container, MockClusterMap.DEFAULT_PARTITION_CLASS);
+    container = allContainers.next();
+    // container with a special replication policy
+    container = accountService.addReplicationPolicyToContainer(container, MockClusterMap.SPECIAL_PARTITION_CLASS);
+    containerToPartClass.put(container, MockClusterMap.SPECIAL_PARTITION_CLASS);
+    // adding this to test the random account and container case (does not actually happen if coming from the frontend)
+    containerToPartClass.put(null, MockClusterMap.DEFAULT_PARTITION_CLASS);
+
+    Map<Integer, Integer> sizeToChunkCount = new HashMap<>();
+    // simple
+    sizeToChunkCount.put(random.nextInt(chunkSize) + 1, 1);
+    int count = random.nextInt(8) + 3;
+    // composite
+    sizeToChunkCount.put(chunkSize * count, count + 1);
+    for (Map.Entry<Integer, Integer> sizeAndChunkCount : sizeToChunkCount.entrySet()) {
+      for (Map.Entry<Container, String> containerAndPartClass : containerToPartClass.entrySet()) {
+        requestAndResultsList.clear();
+        requestAndResultsList.add(new RequestAndResult(sizeAndChunkCount.getKey(), containerAndPartClass.getKey()));
+        mockClusterMap.clearLastNRequestedPartitionClasses();
+        submitPutsAndAssertSuccess(true);
+        // since the puts are processed one at a time, it is fair to check the last partition class set
+        checkLastRequestPartitionClasses(sizeAndChunkCount.getValue(), containerAndPartClass.getValue());
+      }
+    }
+
+    // exception if there is no partition class that conforms to the replication policy
+    String nonExistentClass = UtilsTest.getRandomString(3);
+    accountService.addReplicationPolicyToContainer(container, nonExistentClass);
+    requestAndResultsList.clear();
+    requestAndResultsList.add(new RequestAndResult(chunkSize, container));
+    mockClusterMap.clearLastNRequestedPartitionClasses();
+    submitPutsAndAssertFailure(new RouterException("", RouterErrorCode.UnexpectedInternalError), true, false, false);
+    // because of how the non-encrypted flow is, prepareForSending() may be called twice. So not checking for count
+    checkLastRequestPartitionClasses(-1, nonExistentClass);
   }
 
   /**
@@ -653,7 +730,7 @@ public class PutManagerTest {
   private NonBlockingRouter getNonBlockingRouter() throws IOException, GeneralSecurityException {
     Properties properties = new Properties();
     properties.setProperty("router.hostname", "localhost");
-    properties.setProperty("router.datacenter.name", "DC1");
+    properties.setProperty("router.datacenter.name", LOCAL_DC);
     properties.setProperty("router.max.put.chunk.size.bytes", Integer.toString(chunkSize));
     properties.setProperty("router.put.request.parallelism", Integer.toString(requestParallelism));
     properties.setProperty("router.put.success.target", Integer.toString(successTarget));
@@ -665,7 +742,7 @@ public class PutManagerTest {
     router = new NonBlockingRouter(new RouterConfig(vProps), metrics,
         new MockNetworkClientFactory(vProps, mockSelectorState, MAX_PORTS_PLAIN_TEXT, MAX_PORTS_SSL,
             CHECKOUT_TIMEOUT_MS, mockServerLayout, mockTime), notificationSystem, mockClusterMap, kms, cryptoService,
-        cryptoJobHandler, mockTime);
+        cryptoJobHandler, accountService, mockTime, MockClusterMap.DEFAULT_PARTITION_CLASS);
     return router;
   }
 
@@ -686,7 +763,7 @@ public class PutManagerTest {
    * @param shouldCloseRouterAfter whether the router should be closed after the operation.
    */
   private void submitPutsAndAssertSuccess(boolean shouldCloseRouterAfter) throws Exception {
-    submitPut().await();
+    submitPut().await(MAX_WAIT_MS, TimeUnit.MILLISECONDS);
     assertSuccess();
     if (shouldCloseRouterAfter) {
       assertCloseCleanup();
@@ -713,7 +790,7 @@ public class PutManagerTest {
         mockTime.sleep(CHECKOUT_TIMEOUT_MS + 1);
       } while (!doneLatch.await(1, TimeUnit.MILLISECONDS));
     } else {
-      doneLatch.await();
+      doneLatch.await(MAX_WAIT_MS, TimeUnit.MILLISECONDS);
     }
     assertFailure(expectedException, testNotifications);
     if (shouldCloseRouterAfter) {
@@ -741,8 +818,8 @@ public class PutManagerTest {
             ReadableStreamChannel putChannel =
                 new ByteBufferReadableStreamChannel(ByteBuffer.wrap(requestAndResult.putContent));
             requestAndResult.result = (FutureResult<String>) router.putBlob(requestAndResult.putBlobProperties,
-                requestAndResult.putUserMetadata, putChannel, null);
-            requestAndResult.result.await();
+                requestAndResult.putUserMetadata, putChannel, new PutBlobOptionsBuilder().build(), null);
+            requestAndResult.result.await(MAX_WAIT_MS, TimeUnit.MILLISECONDS);
           } catch (Exception e) {
             requestAndResult.result = new FutureResult<>();
             requestAndResult.result.done(null, e);
@@ -799,26 +876,33 @@ public class PutManagerTest {
     ByteBuffer serializedRequest = serializedRequests.get(blobId);
     PutRequest.ReceivedPutRequest request = deserializePutRequest(serializedRequest);
     NotificationBlobType notificationBlobType;
+    BlobId origBlobId = new BlobId(blobId, mockClusterMap);
+
     if (request.getBlobType() == BlobType.MetadataBlob) {
       notificationBlobType = NotificationBlobType.Composite;
+      assertEquals("Expected metadata", BlobDataType.METADATA, origBlobId.getBlobDataType());
       byte[] data = Utils.readBytesFromStream(request.getBlobStream(), (int) request.getBlobSize());
       CompositeBlobInfo compositeBlobInfo = MetadataContentSerDe.deserializeMetadataContentRecord(ByteBuffer.wrap(data),
           new BlobIdFactory(mockClusterMap));
-      Assert.assertEquals("Wrong max chunk size in metadata", chunkSize, compositeBlobInfo.getChunkSize());
-      Assert.assertEquals("Wrong total size in metadata", originalPutContent.length, compositeBlobInfo.getTotalSize());
+      assertEquals("Wrong max chunk size in metadata", chunkSize, compositeBlobInfo.getChunkSize());
+      assertEquals("Wrong total size in metadata", originalPutContent.length, compositeBlobInfo.getTotalSize());
       List<StoreKey> dataBlobIds = compositeBlobInfo.getKeys();
-      Assert.assertEquals("Number of chunks is not as expected",
+      assertEquals("Number of chunks is not as expected",
           RouterUtils.getNumChunksForBlobAndChunkSize(originalPutContent.length, chunkSize), dataBlobIds.size());
+      // Verify all dataBlobIds are DataChunk
+      for (StoreKey key: dataBlobIds) {
+        BlobId origDataBlobId = (BlobId) key;
+        assertEquals("Expected datachunk", BlobDataType.DATACHUNK, origDataBlobId.getBlobDataType());
+      }
       // verify user-metadata
       if (properties.isEncrypted()) {
         ByteBuffer userMetadata = request.getUsermetadata();
-        BlobId origBlobId = new BlobId(blobId, mockClusterMap);
         // reason to directly call run() instead of spinning up a thread instead of calling start() is that, any exceptions or
         // assertion failures in non main thread will not fail the test.
         new DecryptJob(origBlobId, request.getBlobEncryptionKey().duplicate(), null, userMetadata, cryptoService, kms,
             new CryptoJobMetricsTracker(metrics.decryptJobMetrics), (result, exception) -> {
           Assert.assertNull("Exception should not be thrown", exception);
-          Assert.assertEquals("BlobId mismatch", origBlobId, result.getBlobId());
+          assertEquals("BlobId mismatch", origBlobId, result.getBlobId());
           Assert.assertArrayEquals("UserMetadata mismatch", originalUserMetadata,
               result.getDecryptedUserMetadata().array());
         }).run();
@@ -829,6 +913,11 @@ public class PutManagerTest {
           serializedRequests);
     } else {
       notificationBlobType = NotificationBlobType.Simple;
+      // TODO: Currently, we don't have the logic to distinguish Simple vs DataChunk for the first chunk
+      // Once the logic is fixed we should assert Simple.
+      BlobDataType dataType = origBlobId.getBlobDataType();
+      assertTrue("Invalid blob data type", dataType == BlobDataType.DATACHUNK || dataType == BlobDataType.SIMPLE);
+
       byte[] content = Utils.readBytesFromStream(request.getBlobStream(), (int) request.getBlobSize());
       if (!properties.isEncrypted()) {
         Assert.assertArrayEquals("Input blob and written blob should be the same", originalPutContent, content);
@@ -837,7 +926,6 @@ public class PutManagerTest {
         notificationSystem.verifyNotification(blobId, notificationBlobType, request.getBlobProperties());
       } else {
         ByteBuffer userMetadata = request.getUsermetadata();
-        BlobId origBlobId = new BlobId(blobId, mockClusterMap);
         // reason to directly call run() instead of spinning up a thread instead of calling start() is that, any exceptions or
         // assertion failures in non main thread will not fail the test.
         new DecryptJob(origBlobId, request.getBlobEncryptionKey().duplicate(), ByteBuffer.wrap(content), userMetadata,
@@ -846,7 +934,7 @@ public class PutManagerTest {
               @Override
               public void onCompletion(DecryptJob.DecryptJobResult result, Exception exception) {
                 Assert.assertNull("Exception should not be thrown", exception);
-                Assert.assertEquals("BlobId mismatch", origBlobId, result.getBlobId());
+                assertEquals("BlobId mismatch", origBlobId, result.getBlobId());
                 Assert.assertArrayEquals("Content mismatch", originalPutContent,
                     result.getDecryptedBlobContent().array());
                 Assert.assertArrayEquals("UserMetadata mismatch", originalUserMetadata,
@@ -890,7 +978,7 @@ public class PutManagerTest {
             ByteBuffer.wrap(dataBlobContent), dataBlobPutRequest.getUsermetadata().duplicate(), cryptoService, kms,
             new CryptoJobMetricsTracker(metrics.decryptJobMetrics), (result, exception) -> {
           Assert.assertNull("Exception should not be thrown", exception);
-          Assert.assertEquals("BlobId mismatch", dataBlobPutRequest.getBlobId(), result.getBlobId());
+          assertEquals("BlobId mismatch", dataBlobPutRequest.getBlobId(), result.getBlobId());
           Assert.assertArrayEquals("UserMetadata mismatch", originalUserMetadata,
               result.getDecryptedUserMetadata().array());
           dataBlobLength.set(result.getDecryptedBlobContent().remaining());
@@ -898,13 +986,13 @@ public class PutManagerTest {
         }).run();
       }
       if (key != lastKey) {
-        Assert.assertEquals("all chunks except last should be fully filled", chunkSize, dataBlobLength.get());
+        assertEquals("all chunks except last should be fully filled", chunkSize, dataBlobLength.get());
       } else {
-        Assert.assertEquals("Last chunk should be of non-zero length and equal to the length of the remaining bytes",
+        assertEquals("Last chunk should be of non-zero length and equal to the length of the remaining bytes",
             (originalPutContent.length - 1) % chunkSize + 1, dataBlobLength.get());
       }
       offset.addAndGet(dataBlobLength.get());
-      Assert.assertEquals("dataBlobStream should have no more data", -1, dataBlobStream.read());
+      assertEquals("dataBlobStream should have no more data", -1, dataBlobStream.read());
       notificationSystem.verifyNotification(key.getID(), NotificationBlobType.DataChunk,
           dataBlobPutRequest.getBlobProperties());
     }
@@ -971,7 +1059,7 @@ public class PutManagerTest {
    */
   private boolean exceptionsAreEqual(Exception a, Exception b) {
     if (a instanceof RouterException) {
-      return a.equals(b);
+      return ((RouterException) a).getErrorCode().equals(((RouterException) b).getErrorCode());
     } else {
       return a.getClass() == b.getClass() && a.getMessage().equals(b.getMessage());
     }
@@ -982,16 +1070,33 @@ public class PutManagerTest {
    * router is closed.
    */
   private void assertCloseCleanup() {
-    Assert.assertEquals("Exactly one chunkFiller thread should be running before the router is closed", 1,
+    assertEquals("Exactly one chunkFiller thread should be running before the router is closed", 1,
         TestUtils.numThreadsByThisName("ChunkFillerThread"));
-    Assert.assertEquals("Exactly two RequestResponseHandler thread should be running before the router is closed", 2,
+    assertEquals("Exactly two RequestResponseHandler thread should be running before the router is closed", 2,
         TestUtils.numThreadsByThisName("RequestResponseHandlerThread"));
     router.close();
-    Assert.assertEquals("No ChunkFiller Thread should be running after the router is closed", 0,
+    assertEquals("No ChunkFiller Thread should be running after the router is closed", 0,
         TestUtils.numThreadsByThisName("ChunkFillerThread"));
-    Assert.assertEquals("No RequestResponseHandler should be running after the router is closed", 0,
+    assertEquals("No RequestResponseHandler should be running after the router is closed", 0,
         TestUtils.numThreadsByThisName("RequestResponseHandlerThread"));
-    Assert.assertEquals("All operations should have completed", 0, router.getOperationsCount());
+    assertEquals("All operations should have completed", 0, router.getOperationsCount());
+  }
+
+  /**
+   * Checks the last {@code expectedCount} partition classes requested from the clustermap to make sure they match with
+   * {@code expectedClass}
+   * @param expectedCount the number of times the {@code expectedClass} was requested. If < 0, the check is ignored
+   * @param expectedClass the partition class requested
+   */
+  private void checkLastRequestPartitionClasses(int expectedCount, String expectedClass) {
+    List<String> lastNRequestedPartitionClasses = mockClusterMap.getLastNRequestedPartitionClasses();
+    if (expectedCount >= 0) {
+      assertEquals("Last requested partition class count is not as expected", expectedCount,
+          lastNRequestedPartitionClasses.size());
+    }
+    List<String> partitionClassesExpected = Collections.nCopies(lastNRequestedPartitionClasses.size(), expectedClass);
+    assertEquals("Last requested partition classes not as expected", partitionClassesExpected,
+        lastNRequestedPartitionClasses);
   }
 
   private class RequestAndResult {
@@ -1001,8 +1106,13 @@ public class PutManagerTest {
     FutureResult<String> result;
 
     RequestAndResult(int blobSize) {
+      this(blobSize, null);
+    }
+
+    RequestAndResult(int blobSize, Container container) {
       putBlobProperties = new BlobProperties(-1, "serviceId", "memberId", "contentType", false, Utils.Infinite_Time,
-          Utils.getRandomShort(TestUtils.RANDOM), Utils.getRandomShort(TestUtils.RANDOM), testEncryption);
+          container == null ? Utils.getRandomShort(TestUtils.RANDOM) : container.getParentAccountId(),
+          container == null ? Utils.getRandomShort(TestUtils.RANDOM) : container.getId(), testEncryption);
       putUserMetadata = new byte[10];
       random.nextBytes(putUserMetadata);
       putContent = new byte[blobSize];
@@ -1018,7 +1128,8 @@ public class PutManagerTest {
     Map<String, List<BlobCreatedEvent>> blobCreatedEvents = new HashMap<>();
 
     @Override
-    public void onBlobCreated(String blobId, BlobProperties blobProperties, NotificationBlobType notificationBlobType) {
+    public void onBlobCreated(String blobId, BlobProperties blobProperties, Account account, Container container,
+        NotificationBlobType notificationBlobType) {
       List<BlobCreatedEvent> events = blobCreatedEvents.get(blobId);
       if (events == null) {
         events = new ArrayList<>();
@@ -1038,11 +1149,11 @@ public class PutManagerTest {
       List<BlobCreatedEvent> events = blobCreatedEvents.get(blobId);
       Assert.assertTrue("Wrong number of events for blobId", events != null && events.size() == 1);
       BlobCreatedEvent event = events.get(0);
-      Assert.assertEquals("NotificationBlobType does not match data in notification event.",
-          expectedNotificationBlobType, event.notificationBlobType);
+      assertEquals("NotificationBlobType does not match data in notification event.", expectedNotificationBlobType,
+          event.notificationBlobType);
       Assert.assertTrue("BlobProperties does not match data in notification event.",
           RouterTestHelpers.haveEquivalentFields(expectedBlobProperties, event.blobProperties));
-      Assert.assertEquals("Expected blob size does not match data in notification event.",
+      assertEquals("Expected blob size does not match data in notification event.",
           expectedBlobProperties.getBlobSize(), event.blobProperties.getBlobSize());
     }
 
@@ -1055,7 +1166,6 @@ public class PutManagerTest {
         for (Map.Entry<String, StoredBlob> blobEntry : mockServer.getBlobs().entrySet()) {
           if (blobIdsVisited.add(blobEntry.getKey())) {
             StoredBlob blob = blobEntry.getValue();
-            System.out.println(blobEntry.getKey());
             verifyNotification(blobEntry.getKey(), NotificationBlobType.DataChunk, blob.properties);
           }
         }

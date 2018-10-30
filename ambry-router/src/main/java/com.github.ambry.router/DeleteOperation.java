@@ -13,6 +13,7 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.ResponseHandler;
@@ -81,8 +82,9 @@ class DeleteOperation {
    * @param time A {@link Time} reference.
    * @param futureResult The {@link FutureResult} that is returned to the caller.
    */
-  DeleteOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ResponseHandler responsehandler,
-      BlobId blobId, String serviceId, Callback<Void> callback, Time time, FutureResult<Void> futureResult) {
+  DeleteOperation(ClusterMap clusterMap, RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics,
+      ResponseHandler responsehandler, BlobId blobId, String serviceId, Callback<Void> callback, Time time,
+      FutureResult<Void> futureResult) {
     this.submissionTimeMs = time.milliseconds();
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
@@ -94,8 +96,12 @@ class DeleteOperation {
     this.time = time;
     this.deletionTimeMs = time.milliseconds();
     this.deleteRequestInfos = new HashMap<Integer, DeleteRequestInfo>();
-    this.operationTracker = new SimpleOperationTracker(routerConfig.routerDatacenterName, blobId.getPartition(), true,
-        routerConfig.routerDeleteSuccessTarget, routerConfig.routerDeleteRequestParallelism, false);
+    byte blobDcId = blobId.getDatacenterId();
+    String originatingDcName = clusterMap.getDatacenterName(blobDcId);
+    this.operationTracker =
+        new SimpleOperationTracker(routerConfig.routerDatacenterName, blobId.getPartition(), true, originatingDcName,
+            true, Integer.MAX_VALUE, routerConfig.routerDeleteSuccessTarget,
+            routerConfig.routerDeleteRequestParallelism, false);
   }
 
   /**
@@ -193,6 +199,9 @@ class DeleteOperation {
         } else {
           // The status of operation tracker will be updated within the processServerError method.
           processServerError(replica, deleteResponse.getError(), deleteResponse.getCorrelationId());
+          if (deleteResponse.getError() == ServerErrorCode.Blob_Authorization_Failure) {
+            operationCompleted = true;
+          }
         }
       }
     }
@@ -251,6 +260,9 @@ class DeleteOperation {
           routerMetrics.crossColoSuccessCount.inc();
         }
         break;
+      case Blob_Authorization_Failure:
+        updateOperationState(replica, RouterErrorCode.BlobAuthorizationFailure);
+        break;
       case Blob_Expired:
         updateOperationState(replica, RouterErrorCode.BlobExpired);
         break;
@@ -261,6 +273,7 @@ class DeleteOperation {
         updateOperationState(replica, RouterErrorCode.UnexpectedInternalError);
         break;
       case Disk_Unavailable:
+      case Replica_Unavailable:
         updateOperationState(replica, RouterErrorCode.AmbryUnavailable);
         break;
       default:
@@ -302,7 +315,8 @@ class DeleteOperation {
    * Completes the {@code DeleteOperation} if it is done.
    */
   private void checkAndMaybeComplete() {
-    if (operationTracker.isDone()) {
+    // operationCompleted is true if Blob_Authorization_Failure was received.
+    if (operationTracker.isDone() || operationCompleted == true) {
       if (!operationTracker.hasSucceeded()) {
         setOperationException(
             new RouterException("The DeleteOperation could not be completed.", resolvedRouterErrorCode));
@@ -320,16 +334,18 @@ class DeleteOperation {
    */
   private Integer getPrecedenceLevel(RouterErrorCode routerErrorCode) {
     switch (routerErrorCode) {
-      case BlobExpired:
+      case BlobAuthorizationFailure:
         return 1;
-      case AmbryUnavailable:
+      case BlobExpired:
         return 2;
-      case UnexpectedInternalError:
+      case AmbryUnavailable:
         return 3;
-      case OperationTimedOut:
+      case UnexpectedInternalError:
         return 4;
-      case BlobDoesNotExist:
+      case OperationTimedOut:
         return 5;
+      case BlobDoesNotExist:
+        return 6;
       default:
         return Integer.MIN_VALUE;
     }

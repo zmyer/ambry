@@ -13,13 +13,18 @@
  */
 package com.github.ambry.rest;
 
+import com.github.ambry.commons.CopyingAsyncWritableChannel;
 import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.commons.TestSSLUtils;
 import com.github.ambry.config.SSLConfig;
 import com.github.ambry.router.ByteRange;
-import com.github.ambry.router.CopyingAsyncWritableChannel;
 import com.github.ambry.router.ReadableStreamChannel;
+import com.github.ambry.utils.Utils;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.DefaultHttpRequest;
+import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
@@ -29,7 +34,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import org.json.JSONObject;
 
 
@@ -46,6 +50,23 @@ public class RestTestUtils {
    */
   public static HttpRequest createRequest(HttpMethod httpMethod, String uri, HttpHeaders headers) {
     HttpRequest httpRequest = new DefaultHttpRequest(HttpVersion.HTTP_1_1, httpMethod, uri);
+    if (headers != null) {
+      httpRequest.headers().set(headers);
+    }
+    return httpRequest;
+  }
+
+  /**
+   * Creates a {@link FullHttpRequest} with the given parameters.
+   * @param httpMethod the {@link HttpMethod} required.
+   * @param uri the URI to hit.
+   * @param content the content to add to the request
+   * @return a {@link FullHttpRequest} with the given parameters.
+   */
+  public static FullHttpRequest createFullRequest(HttpMethod httpMethod, String uri, HttpHeaders headers,
+      byte[] content) {
+    ByteBuf buf = content == null ? Unpooled.buffer(0) : Unpooled.wrappedBuffer(content);
+    FullHttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, httpMethod, uri, buf);
     if (headers != null) {
       httpRequest.headers().set(headers);
     }
@@ -87,9 +108,9 @@ public class RestTestUtils {
     try {
       File trustStoreFile = File.createTempFile("truststore", ".jks");
       trustStoreFile.deleteOnExit();
-      return new SSLFactory(
+      return SSLFactory.getNewInstance(
           new SSLConfig(TestSSLUtils.createSslProps("", SSLFactory.Mode.SERVER, trustStoreFile, "frontend")));
-    } catch (IOException | GeneralSecurityException e) {
+    } catch (Exception e) {
       throw new IllegalStateException(e);
     }
   }
@@ -103,6 +124,7 @@ public class RestTestUtils {
   public static JSONObject getJsonizedResponseBody(ReadableStreamChannel channel) throws Exception {
     CopyingAsyncWritableChannel asyncWritableChannel = new CopyingAsyncWritableChannel((int) channel.getSize());
     channel.readInto(asyncWritableChannel, null).get();
-    return new JSONObject(new String(asyncWritableChannel.getData()));
+    return new JSONObject(new String(Utils.readBytesFromStream(asyncWritableChannel.getContentAsInputStream(),
+        (int) asyncWritableChannel.getBytesWritten())));
   }
 }

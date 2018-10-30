@@ -15,6 +15,7 @@ package com.github.ambry.router;
 
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.clustermap.ReplicaId;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -75,11 +76,15 @@ class SimpleOperationTracker implements OperationTracker {
    * @param partitionId The partition on which the operation is performed.
    * @param crossColoEnabled {@code true} if requests can be sent to remote replicas, {@code false}
    *                                otherwise.
+   * @param originatingDcName The original DC where blob was put.
+   * @param includeNonOriginatingDcReplicas if take the option to include remote non originating DC replicas.
+   * @param replicasRequired The number of replicas required for the operation.
    * @param successTarget The number of successful responses required to succeed the operation.
    * @param parallelism The maximum number of inflight requests at any point of time.
    * @param shuffleReplicas Indicates if the replicas need to be shuffled.
    */
-  SimpleOperationTracker(String datacenterName, PartitionId partitionId, boolean crossColoEnabled, int successTarget,
+  SimpleOperationTracker(String datacenterName, PartitionId partitionId, boolean crossColoEnabled,
+      String originatingDcName, boolean includeNonOriginatingDcReplicas, int replicasRequired, int successTarget,
       int parallelism, boolean shuffleReplicas) {
     if (parallelism < 1) {
       throw new IllegalArgumentException("Parallelism has to be > 0. Configured to be " + parallelism);
@@ -89,17 +94,25 @@ class SimpleOperationTracker implements OperationTracker {
     // Order the replicas so that local healthy replicas are ordered and returned first,
     // then the remote healthy ones, and finally the possibly down ones.
     List<? extends ReplicaId> replicas = partitionId.getReplicaIds();
+    LinkedList<ReplicaId> backupReplicas = new LinkedList<>();
     LinkedList<ReplicaId> downReplicas = new LinkedList<>();
     if (shuffleReplicas) {
       Collections.shuffle(replicas);
     }
+    // The priority here is local dc replicas, originating dc replicas, other dc replicas, down replicas.
+    // To improve read-after-write performance across DC, we prefer to take local and originating replicas only,
+    // which can be done by setting includeNonOriginatingDcReplicas False.
+    List<ReplicaId> examinedReplicas = new ArrayList<>();
     for (ReplicaId replicaId : replicas) {
+      examinedReplicas.add(replicaId);
       String replicaDcName = replicaId.getDataNodeId().getDatacenterName();
       if (!replicaId.isDown()) {
         if (replicaDcName.equals(datacenterName)) {
           replicaPool.addFirst(replicaId);
-        } else if (crossColoEnabled) {
+        } else if (crossColoEnabled && replicaDcName.equals(originatingDcName)) {
           replicaPool.addLast(replicaId);
+        } else if (crossColoEnabled) {
+          backupReplicas.addFirst(replicaId);
         }
       } else {
         if (replicaDcName.equals(datacenterName)) {
@@ -109,11 +122,29 @@ class SimpleOperationTracker implements OperationTracker {
         }
       }
     }
-    replicaPool.addAll(downReplicas);
+    List<ReplicaId> backupReplicasToCheck = new ArrayList<>(backupReplicas);
+    List<ReplicaId> downReplicasToCheck = new ArrayList<>(downReplicas);
+    if (includeNonOriginatingDcReplicas || originatingDcName == null) {
+      replicaPool.addAll(backupReplicas);
+      replicaPool.addAll(downReplicas);
+    } else {
+      // This is for get request only. Take replicasRequired copy of replicas to do the request
+      // Please note replicasRequired is 6 because total number of local and originating replicas is always <= 6.
+      // This may no longer be true with partition classes and flexible replication.
+      // Don't do this if originatingDcName is unknown.
+      while (replicaPool.size() < replicasRequired && backupReplicas.size() > 0) {
+        replicaPool.add(backupReplicas.pollFirst());
+      }
+      while (replicaPool.size() < replicasRequired && downReplicas.size() > 0) {
+        replicaPool.add(downReplicas.pollFirst());
+      }
+    }
     totalReplicaCount = replicaPool.size();
     if (totalReplicaCount < successTarget) {
+      // {@link MockPartitionId#getReplicaIds} is returning a shared reference which may cause race condition.
+      // Please report the test failure if you run into this exception.
       throw new IllegalArgumentException(
-          "Total Replica count " + totalReplicaCount + " is less than success target " + successTarget);
+          generateErrorMessage(partitionId, examinedReplicas, replicaPool, backupReplicasToCheck, downReplicasToCheck));
     }
     this.otIterator = new OpTrackerIterator();
   }
@@ -123,14 +154,18 @@ class SimpleOperationTracker implements OperationTracker {
    *
    * @param datacenterName The datacenter where the router is located.
    * @param partitionId The partition on which the operation is performed.
-   * @param crossColoEnabled {@code true} if requests can be sent to remote replicas, {@code false}
-   *                                otherwise.
+   * @param crossColoEnabled {@code true} if requests can be sent to remote replicas, {@code false} otherwise.
+   * @param originatingDcName The original DC where blob was put. null if DC unknown.
+   * @param includeNonOriginatingDcReplicas if take the option to include remote non originating DC replicas.
+   * @param replicasRequired The number of replicas required for the operation.
    * @param successTarget The number of successful responses required to succeed the operation.
    * @param parallelism The maximum number of inflight requests at any point of time.
    */
-  SimpleOperationTracker(String datacenterName, PartitionId partitionId, boolean crossColoEnabled, int successTarget,
+  SimpleOperationTracker(String datacenterName, PartitionId partitionId, boolean crossColoEnabled,
+      String originatingDcName, boolean includeNonOriginatingDcReplicas, int replicasRequired, int successTarget,
       int parallelism) {
-    this(datacenterName, partitionId, crossColoEnabled, successTarget, parallelism, true);
+    this(datacenterName, partitionId, crossColoEnabled, originatingDcName, includeNonOriginatingDcReplicas,
+        replicasRequired, successTarget, parallelism, true);
   }
 
   @Override
@@ -182,5 +217,41 @@ class SimpleOperationTracker implements OperationTracker {
 
   private boolean hasFailed() {
     return (totalReplicaCount - failedCount) < successTarget;
+  }
+
+  /**
+   * Helper function to catch a potential race condition in {@link SimpleOperationTracker#SimpleOperationTracker(String, PartitionId, boolean, String, boolean, int, int, int, boolean)}.
+   *
+   * @param partitionId The partition on which the operation is performed.
+   * @param examinedReplicas All replicas examined.
+   * @param replicaPool Replicas added to replicaPool.
+   * @param backupReplicas Replicas added to backupReplicas.
+   * @param downReplicas Replicas added to downReplicas.
+   */
+  static private String generateErrorMessage(PartitionId partitionId, List<ReplicaId> examinedReplicas,
+      List<ReplicaId> replicaPool, List<ReplicaId> backupReplicas, List<ReplicaId> downReplicas) {
+    StringBuilder errMsg = new StringBuilder("Total Replica count ").append(replicaPool.size())
+        .append(" is less than success target. ")
+        .append("Partition is ")
+        .append(partitionId)
+        .append(" and partition class is ")
+        .append(partitionId.getPartitionClass())
+        .append(". examinedReplicas: ");
+    for (ReplicaId replicaId : examinedReplicas) {
+      errMsg.append(replicaId.getDataNodeId()).append(":").append(replicaId.isDown()).append(" ");
+    }
+    errMsg.append("replicaPool: ");
+    for (ReplicaId replicaId : replicaPool) {
+      errMsg.append(replicaId.getDataNodeId()).append(":").append(replicaId.isDown()).append(" ");
+    }
+    errMsg.append("backupReplicas: ");
+    for (ReplicaId replicaId : backupReplicas) {
+      errMsg.append(replicaId.getDataNodeId()).append(":").append(replicaId.isDown()).append(" ");
+    }
+    errMsg.append("downReplicas: ");
+    for (ReplicaId replicaId : downReplicas) {
+      errMsg.append(replicaId.getDataNodeId()).append(":").append(replicaId.isDown()).append(" ");
+    }
+    return errMsg.toString();
   }
 }

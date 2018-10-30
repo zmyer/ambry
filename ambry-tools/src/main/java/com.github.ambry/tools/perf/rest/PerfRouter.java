@@ -18,13 +18,16 @@ import com.github.ambry.account.Container;
 import com.github.ambry.messageformat.BlobInfo;
 import com.github.ambry.messageformat.BlobProperties;
 import com.github.ambry.router.Callback;
+import com.github.ambry.router.ChunkInfo;
 import com.github.ambry.router.FutureResult;
 import com.github.ambry.router.GetBlobOptions;
 import com.github.ambry.router.GetBlobResult;
+import com.github.ambry.router.PutBlobOptions;
 import com.github.ambry.router.ReadableStreamChannel;
 import com.github.ambry.router.Router;
 import com.github.ambry.router.RouterErrorCode;
 import com.github.ambry.router.RouterException;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Future;
 import org.slf4j.Logger;
@@ -40,7 +43,7 @@ import org.slf4j.LoggerFactory;
  * DeleteBlob: No op.
  */
 class PerfRouter implements Router {
-  protected final static String BLOB_ID = "perf-blob-id";
+  protected final static String BLOB_ID = "AAEAAQAAAAAAAAAAAAAAJGYwNWFkMDc4LWNlNGEtNDY3NS04N2RkLTllZjliMzNlYjYzOA";
 
   private static final String CHARACTERS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final Random random = new Random();
@@ -68,17 +71,6 @@ class PerfRouter implements Router {
     chunk = new byte[perfConfig.perfRouterChunkSize];
     random.nextBytes(chunk);
     logger.trace("Instantiated PerfRouter");
-  }
-
-  /**
-   * Returns a stream of repeating data up to a pre-set size. {@code blobId} is ignored.
-   * @param blobId The ID of the blob for which blob data is requested.
-   * @param options The options associated with the request. This cannot be null.
-   * @return a {@link Future} that will eventually contain a {@link GetBlobResult}.
-   */
-  @Override
-  public Future<GetBlobResult> getBlob(String blobId, GetBlobOptions options) {
-    return getBlob(blobId, options, null);
   }
 
   @Override
@@ -112,25 +104,13 @@ class PerfRouter implements Router {
    * @param blobProperties The properties of the blob.
    * @param usermetadata Optional user metadata about the blob. This can be null.
    * @param channel The {@link ReadableStreamChannel} that contains the content of the blob.
-   * @return a {@link Future} that will contain a (dummy) blob id.
-   */
-  @Override
-  public Future<String> putBlob(BlobProperties blobProperties, byte[] usermetadata, ReadableStreamChannel channel) {
-    return putBlob(blobProperties, usermetadata, channel, null);
-  }
-
-  /**
-   * Consumes the data in {@code channel} and simply throws it away. {@code blobProperties} and {@code usermetadata} are
-   * ignored.
-   * @param blobProperties The properties of the blob.
-   * @param usermetadata Optional user metadata about the blob. This can be null.
-   * @param channel The {@link ReadableStreamChannel} that contains the content of the blob.
+   * @param options
    * @param callback the {@link Callback} to invoke on operation completion.
    * @return a {@link Future} that will contain a (dummy) blob id.
    */
   @Override
   public Future<String> putBlob(BlobProperties blobProperties, byte[] usermetadata, final ReadableStreamChannel channel,
-      final Callback<String> callback) {
+      PutBlobOptions options, final Callback<String> callback) {
     logger.trace("Received putBlob call");
     final FutureResult<String> futureResult = new FutureResult<String>();
     if (!routerOpen) {
@@ -156,15 +136,10 @@ class PerfRouter implements Router {
     return futureResult;
   }
 
-  /**
-   * Does nothing. Simply indicates success immediately.
-   * @param blobId (ignored).
-   * @param serviceId (ignored).
-   * @return a {@link FutureResult} that will eventually contain the result of the operation.
-   */
   @Override
-  public Future<Void> deleteBlob(String blobId, String serviceId) {
-    return deleteBlob(blobId, serviceId, null);
+  public Future<String> stitchBlob(BlobProperties blobProperties, byte[] userMetadata, List<ChunkInfo> chunksToStitch,
+      Callback<String> callback) {
+    throw new UnsupportedOperationException("Only in full PR");
   }
 
   /**
@@ -177,6 +152,26 @@ class PerfRouter implements Router {
   @Override
   public Future<Void> deleteBlob(String blobId, String serviceId, Callback<Void> callback) {
     logger.trace("Received deleteBlob call");
+    FutureResult<Void> futureResult = new FutureResult<Void>();
+    if (!routerOpen) {
+      completeOperation(futureResult, callback, null, ROUTER_CLOSED_EXCEPTION);
+    } else {
+      completeOperation(futureResult, callback, null, null);
+    }
+    return futureResult;
+  }
+
+  /**
+   * Does nothing. Simply indicates success immediately.
+   * @param blobId (ignored).
+   * @param serviceId (ignored).
+   * @param expiresAtMs (ignored).
+   * @param callback the {@link Callback} to invoke on operation completion.
+   * @return a {@link FutureResult} that will eventually contain the result of the operation.
+   */
+  @Override
+  public Future<Void> updateBlobTtl(String blobId, String serviceId, long expiresAtMs, Callback<Void> callback) {
+    logger.trace("Received updateBlobTtl call");
     FutureResult<Void> futureResult = new FutureResult<Void>();
     if (!routerOpen) {
       completeOperation(futureResult, callback, null, ROUTER_CLOSED_EXCEPTION);

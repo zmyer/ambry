@@ -50,8 +50,16 @@ class FileSpan {
         return endOffset;
     }
 
-    @Override
-    public String toString() {
-        return "StartOffset=[" + startOffset + "], EndOffset=[" + endOffset + "]";
-    }
+  /**
+   * @param offset the {@link Offset} to check
+   * @return {@code true} if {@code offset} is in this {@link FileSpan} (start and end offsets are considered inclusive)
+   */
+  boolean inSpan(Offset offset) {
+    return offset.compareTo(startOffset) >= 0 && offset.compareTo(endOffset) <= 0;
+  }
+
+  @Override
+  public String toString() {
+    return "StartOffset=[" + startOffset + "], EndOffset=[" + endOffset + "]";
+  }
 }

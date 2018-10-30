@@ -14,6 +14,7 @@
 package com.github.ambry.router;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.account.AccountService;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.commons.SSLFactory;
 import com.github.ambry.config.ClusterMapConfig;
@@ -44,11 +45,13 @@ public class NonBlockingRouterFactory implements RouterFactory {
   private final NetworkConfig networkConfig;
   private final NetworkMetrics networkMetrics;
   private final NotificationSystem notificationSystem;
+  private final AccountService accountService;
   private final Time time;
   private final NetworkClientFactory networkClientFactory;
   private final KeyManagementService kms;
   private final CryptoService cryptoService;
   private final CryptoJobHandler cryptoJobHandler;
+  private final String defaultPartitionClass;
   private static final Logger logger = LoggerFactory.getLogger(NonBlockingRouterFactory.class);
 
   /**
@@ -59,14 +62,16 @@ public class NonBlockingRouterFactory implements RouterFactory {
    * @param notificationSystem the {@link NotificationSystem} to use to log operations.
    * @param sslFactory the {@link SSLFactory} to support SSL transmissions. Required if SSL is enabled for any
    *                   datacenters.
+   * @param accountService the {@link AccountService} to use.
    * @throws Exception if any of the arguments are null or if instantiation of KMS or CryptoService fails
    */
   public NonBlockingRouterFactory(VerifiableProperties verifiableProperties, ClusterMap clusterMap,
-      NotificationSystem notificationSystem, SSLFactory sslFactory) throws Exception {
+      NotificationSystem notificationSystem, SSLFactory sslFactory, AccountService accountService) throws Exception {
     if (verifiableProperties == null || clusterMap == null || notificationSystem == null) {
       throw new IllegalArgumentException("Null argument passed in");
     }
-    if (sslFactory == null && new ClusterMapConfig(verifiableProperties).clusterMapSslEnabledDatacenters.length() > 0) {
+    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(verifiableProperties);
+    if (sslFactory == null && clusterMapConfig.clusterMapSslEnabledDatacenters.length() > 0) {
       throw new IllegalArgumentException("NonBlockingRouter requires SSL, but sslFactory is null");
     }
     routerConfig = new RouterConfig(verifiableProperties);
@@ -76,6 +81,7 @@ public class NonBlockingRouterFactory implements RouterFactory {
     }
     this.clusterMap = clusterMap;
     this.notificationSystem = notificationSystem;
+    this.accountService = accountService;
     MetricRegistry registry = clusterMap.getMetricRegistry();
     routerMetrics = new NonBlockingRouterMetrics(clusterMap);
     networkConfig = new NetworkConfig(verifiableProperties);
@@ -92,6 +98,7 @@ public class NonBlockingRouterFactory implements RouterFactory {
         Utils.getObj(routerConfig.routerCryptoServiceFactory, verifiableProperties, registry);
     cryptoService = cryptoServiceFactory.getCryptoService();
     cryptoJobHandler = new CryptoJobHandler(routerConfig.routerCryptoJobsWorkerCount);
+    defaultPartitionClass = clusterMapConfig.clusterMapDefaultPartitionClass;
     logger.trace("Instantiated NonBlockingRouterFactory");
   }
 
@@ -103,7 +110,7 @@ public class NonBlockingRouterFactory implements RouterFactory {
   public Router getRouter() {
     try {
       return new NonBlockingRouter(routerConfig, routerMetrics, networkClientFactory, notificationSystem, clusterMap,
-          kms, cryptoService, cryptoJobHandler, time);
+          kms, cryptoService, cryptoJobHandler, accountService, time, defaultPartitionClass);
     } catch (IOException e) {
       throw new IllegalStateException("Error instantiating NonBlocking Router ", e);
     }

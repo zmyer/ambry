@@ -35,9 +35,13 @@ public class BlobIdFactory implements StoreKeyFactory {
         this.clusterMap = clusterMap;
     }
 
-    // TODO: 2018/3/22 by zmyer
-    @Override
-    public StoreKey getStoreKey(DataInputStream value) throws IOException {
-        return new BlobId(value, clusterMap);
-    }
+  @Override
+  public StoreKey getStoreKey(DataInputStream value) throws IOException {
+    return new BlobId(value, clusterMap);
+  }
+
+  @Override
+  public StoreKey getStoreKey(String input) throws IOException {
+    return new BlobId(input, clusterMap);
+  }
 }

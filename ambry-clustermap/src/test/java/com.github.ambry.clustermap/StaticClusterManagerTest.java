@@ -13,23 +13,32 @@
  */
 package com.github.ambry.clustermap;
 
+import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.utils.ByteBufferInputStream;
+import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Random;
 import java.util.Set;
 import junit.framework.Assert;
+import org.json.JSONException;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import static com.github.ambry.clustermap.TestUtils.*;
 import static org.junit.Assert.*;
 
 
@@ -73,14 +82,14 @@ public class StaticClusterManagerTest {
   }
 
   @Test
-  public void clusterMapInterface() throws Exception {
+  public void clusterMapInterface() {
     // Exercise entire clusterMap interface
 
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha");
-    TestUtils.TestPartitionLayout testPartitionLayout = new TestUtils.TestPartitionLayout(testHardwareLayout);
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    TestPartitionLayout testPartitionLayout = new TestPartitionLayout(testHardwareLayout, null);
     // add 3 partitions with read_only state.
     testPartitionLayout.partitionState = PartitionState.READ_ONLY;
-    testPartitionLayout.addNewPartitions(3);
+    testPartitionLayout.addNewPartitions(3, DEFAULT_PARTITION_CLASS, testPartitionLayout.partitionState, null);
     testPartitionLayout.partitionState = PartitionState.READ_WRITE;
 
     Datacenter localDatacenter = testHardwareLayout.getRandomDatacenter();
@@ -96,8 +105,8 @@ public class StaticClusterManagerTest {
     }
 
     assertEquals("Incorrect local datacenter ID", localDatacenter.getId(), clusterMapManager.getLocalDatacenterId());
-    List<? extends PartitionId> writablePartitionIds = clusterMapManager.getWritablePartitionIds();
-    List<? extends PartitionId> partitionIds = clusterMapManager.getAllPartitionIds();
+    List<? extends PartitionId> writablePartitionIds = clusterMapManager.getWritablePartitionIds(null);
+    List<? extends PartitionId> partitionIds = clusterMapManager.getAllPartitionIds(null);
     assertEquals(writablePartitionIds.size(), testPartitionLayout.getPartitionCount() - 3);
     assertEquals(partitionIds.size(), testPartitionLayout.getPartitionCount());
     for (PartitionId partitionId : partitionIds) {
@@ -134,12 +143,12 @@ public class StaticClusterManagerTest {
   }
 
   @Test
-  public void findDatacenter() throws Exception {
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha");
-    TestUtils.TestPartitionLayout testPartitionLayout = new TestUtils.TestPartitionLayout(testHardwareLayout);
+  public void findDatacenter() {
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    TestPartitionLayout testPartitionLayout = new TestPartitionLayout(testHardwareLayout, null);
 
-    StaticClusterManager clusterMapManager = (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(),
-        testPartitionLayout.getPartitionLayout())).getClusterMap();
+    StaticClusterManager clusterMapManager =
+        (new StaticClusterAgentsFactory(getDummyConfig(), testPartitionLayout.getPartitionLayout())).getClusterMap();
 
     for (Datacenter datacenter : testHardwareLayout.getHardwareLayout().getDatacenters()) {
       assertTrue(clusterMapManager.hasDatacenter(datacenter.getName()));
@@ -148,38 +157,40 @@ public class StaticClusterManagerTest {
   }
 
   @Test
-  public void addNewPartition() throws Exception {
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha");
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+  public void addNewPartition() {
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager =
-        (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(), partitionLayout)).getClusterMap();
+        (new StaticClusterAgentsFactory(getDummyConfig(), partitionLayout)).getClusterMap();
     int dcCount = testHardwareLayout.getDatacenterCount();
 
-    List<PartitionId> partitionIds = clusterMapManager.getWritablePartitionIds();
+    List<PartitionId> partitionIds = clusterMapManager.getWritablePartitionIds(null);
     assertEquals(partitionIds.size(), 0);
-    clusterMapManager.addNewPartition(testHardwareLayout.getIndependentDisks(3), 100 * 1024 * 1024 * 1024L);
-    partitionIds = clusterMapManager.getWritablePartitionIds();
+    clusterMapManager.addNewPartition(testHardwareLayout.getIndependentDisks(3), 100 * 1024 * 1024 * 1024L,
+        MockClusterMap.DEFAULT_PARTITION_CLASS);
+    partitionIds = clusterMapManager.getWritablePartitionIds(null);
     assertEquals(partitionIds.size(), 1);
     PartitionId partitionId = partitionIds.get(0);
     assertEquals(partitionId.getReplicaIds().size(), 3 * dcCount);
   }
 
   @Test
-  public void nonRackAwareAllocationTest() throws Exception {
+  public void nonRackAwareAllocationTest() {
     int replicaCountPerDataCenter = 2;
     long replicaCapacityInBytes = 100 * 1024 * 1024 * 1024L;
 
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha");
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager =
-        (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(), partitionLayout)).getClusterMap();
+        (new StaticClusterAgentsFactory(getDummyConfig(), partitionLayout)).getClusterMap();
     List<PartitionId> allocatedPartitions;
 
     try {
       // Test with retryIfNotRackAware set to false, this should throw an exception
-      clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, false);
+      clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+          replicaCapacityInBytes, false);
       Assert.fail("allocatePartitions should not succeed when datacenters are missing rack info "
           + "and retryIfNotRackAware is false");
     } catch (IllegalArgumentException e) {
@@ -187,71 +198,76 @@ public class StaticClusterManagerTest {
     }
     // Allocate five partitions that fit within cluster's capacity
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, true);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, true);
     assertEquals(allocatedPartitions.size(), 5);
-    assertEquals(clusterMapManager.getWritablePartitionIds().size(), 5);
+    assertEquals(clusterMapManager.getWritablePartitionIds(null).size(), 5);
 
     // Allocate "too many" partitions (1M) to exhaust capacity. Capacity is not exhausted evenly across nodes so some
     // "free" but unusable capacity may be left after trying to allocate these partitions.
-    allocatedPartitions =
-        clusterMapManager.allocatePartitions(1000 * 1000, replicaCountPerDataCenter, replicaCapacityInBytes, true);
-    assertEquals(allocatedPartitions.size() + 5, clusterMapManager.getWritablePartitionIds().size());
+    allocatedPartitions = clusterMapManager.allocatePartitions(1000 * 1000, MockClusterMap.DEFAULT_PARTITION_CLASS,
+        replicaCountPerDataCenter, replicaCapacityInBytes, true);
+    assertEquals(allocatedPartitions.size() + 5, clusterMapManager.getWritablePartitionIds(null).size());
     System.out.println(freeCapacityDump(clusterMapManager, testHardwareLayout.getHardwareLayout()));
 
     // Capacity is already exhausted...
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, true);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, true);
     assertEquals(allocatedPartitions.size(), 0);
   }
 
   @Test
-  public void rackAwareAllocationTest() throws Exception {
+  public void rackAwareAllocationTest() {
     int replicaCountPerDataCenter = 3;
     long replicaCapacityInBytes = 100 * 1024 * 1024 * 1024L;
 
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha", true);
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha", true);
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager =
-        (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(), partitionLayout)).getClusterMap();
+        (new StaticClusterAgentsFactory(getDummyConfig(), partitionLayout)).getClusterMap();
     List<PartitionId> allocatedPartitions;
 
     // Allocate five partitions that fit within cluster's capacity
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, false);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, false);
     assertEquals(allocatedPartitions.size(), 5);
-    assertEquals(clusterMapManager.getWritablePartitionIds().size(), 5);
+    assertEquals(clusterMapManager.getWritablePartitionIds(null).size(), 5);
     checkRackUsage(allocatedPartitions);
     checkNumReplicasPerDatacenter(allocatedPartitions, replicaCountPerDataCenter);
 
     // Allocate "too many" partitions (1M) to exhaust capacity. Capacity is not exhausted evenly across nodes so some
     // "free" but unusable capacity may be left after trying to allocate these partitions.
-    allocatedPartitions =
-        clusterMapManager.allocatePartitions(1000 * 1000, replicaCountPerDataCenter, replicaCapacityInBytes, false);
-    assertEquals(allocatedPartitions.size() + 5, clusterMapManager.getWritablePartitionIds().size());
+    allocatedPartitions = clusterMapManager.allocatePartitions(1000 * 1000, MockClusterMap.DEFAULT_PARTITION_CLASS,
+        replicaCountPerDataCenter, replicaCapacityInBytes, false);
+    assertEquals(allocatedPartitions.size() + 5, clusterMapManager.getWritablePartitionIds(null).size());
     System.out.println(freeCapacityDump(clusterMapManager, testHardwareLayout.getHardwareLayout()));
     checkRackUsage(allocatedPartitions);
 
     // Capacity is already exhausted...
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, false);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, false);
     assertEquals(allocatedPartitions.size(), 0);
   }
 
   @Test
-  public void rackAwareOverAllocationTest() throws Exception {
+  public void rackAwareOverAllocationTest() {
     int replicaCountPerDataCenter = 4;
     long replicaCapacityInBytes = 100 * 1024 * 1024 * 1024L;
 
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha", true);
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha", true);
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager =
-        (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(), partitionLayout)).getClusterMap();
+        (new StaticClusterAgentsFactory(getDummyConfig(), partitionLayout)).getClusterMap();
     List<PartitionId> allocatedPartitions;
     // Require more replicas than there are racks
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, false);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, false);
     assertEquals(allocatedPartitions.size(), 5);
     checkNumReplicasPerDatacenter(allocatedPartitions, 3);
     checkRackUsage(allocatedPartitions);
@@ -259,18 +275,19 @@ public class StaticClusterManagerTest {
     // Test with retryIfNotRackAware enabled.  We should be able to allocate 4 replicas per datacenter b/c we no
     // longer require unique racks
     allocatedPartitions =
-        clusterMapManager.allocatePartitions(5, replicaCountPerDataCenter, replicaCapacityInBytes, true);
+        clusterMapManager.allocatePartitions(5, MockClusterMap.DEFAULT_PARTITION_CLASS, replicaCountPerDataCenter,
+            replicaCapacityInBytes, true);
     assertEquals(allocatedPartitions.size(), 5);
     checkNumReplicasPerDatacenter(allocatedPartitions, 4);
   }
 
   @Test
-  public void capacities() throws Exception {
-    TestUtils.TestHardwareLayout testHardwareLayout = new TestUtils.TestHardwareLayout("Alpha");
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+  public void capacities() {
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager =
-        (new StaticClusterAgentsFactory(TestUtils.getDummyConfig(), partitionLayout)).getClusterMap();
+        (new StaticClusterAgentsFactory(getDummyConfig(), partitionLayout)).getClusterMap();
 
     // Confirm initial capacity is available for use
     long raw = clusterMapManager.getRawCapacityInBytes();
@@ -291,7 +308,8 @@ public class StaticClusterManagerTest {
       }
     }
 
-    clusterMapManager.addNewPartition(testHardwareLayout.getIndependentDisks(3), 100 * 1024 * 1024 * 1024L);
+    clusterMapManager.addNewPartition(testHardwareLayout.getIndependentDisks(3), 100 * 1024 * 1024 * 1024L,
+        MockClusterMap.DEFAULT_PARTITION_CLASS);
     int dcCount = testHardwareLayout.getDatacenterCount();
 
     // Confirm 100GB has been used on 3 distinct DataNodes / Disks in each datacenter.
@@ -329,7 +347,7 @@ public class StaticClusterManagerTest {
     String hardwareLayoutDe = tmpDir + "/hardwareLayoutDe.json";
     String partitionLayoutDe = tmpDir + "/partitionLayoutDe.json";
 
-    StaticClusterManager clusterMapManagerSer = TestUtils.getTestClusterMap();
+    StaticClusterManager clusterMapManagerSer = getTestClusterMap();
     clusterMapManagerSer.persist(hardwareLayoutSer, partitionLayoutSer);
 
     ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(props));
@@ -362,9 +380,159 @@ public class StaticClusterManagerTest {
     StaticClusterManager clusterMapManager =
         (new StaticClusterAgentsFactory(new ClusterMapConfig(new VerifiableProperties(props)), hardwareLayoutSer,
             partitionLayoutSer)).getClusterMap();
-    assertEquals(clusterMapManager.getWritablePartitionIds().size(), 1);
+    assertEquals(clusterMapManager.getWritablePartitionIds(null).size(), 1);
     assertEquals(clusterMapManager.getUnallocatedRawCapacityInBytes(), 10737418240L);
     assertNotNull(clusterMapManager.getDataNodeId("localhost", 6667));
+  }
+
+  /**
+   * Tests for {@link PartitionLayout#getPartitions(String)} and {@link PartitionLayout#getWritablePartitions(String)}.
+   * @throws IOException
+   * @throws JSONException
+   */
+  @Test
+  public void getPartitionsTest() throws IOException, JSONException {
+    String specialPartitionClass = "specialPartitionClass";
+    TestHardwareLayout hardwareLayout = new TestHardwareLayout("Alpha");
+    String dc = hardwareLayout.getRandomDatacenter().getName();
+    TestPartitionLayout testPartitionLayout = new TestPartitionLayout(hardwareLayout, dc);
+    assertTrue("There should be more than 1 replica per partition in each DC for this test to work",
+        testPartitionLayout.replicaCountPerDc > 1);
+    PartitionRangeCheckParams defaultRw =
+        new PartitionRangeCheckParams(0, testPartitionLayout.partitionCount, DEFAULT_PARTITION_CLASS,
+            PartitionState.READ_WRITE);
+    // add 15 RW partitions for the special class
+    PartitionRangeCheckParams specialRw =
+        new PartitionRangeCheckParams(defaultRw.rangeEnd + 1, 15, specialPartitionClass, PartitionState.READ_WRITE);
+    testPartitionLayout.addNewPartitions(specialRw.count, specialPartitionClass, PartitionState.READ_WRITE, dc);
+    // add 10 RO partitions for the default class
+    PartitionRangeCheckParams defaultRo =
+        new PartitionRangeCheckParams(specialRw.rangeEnd + 1, 10, DEFAULT_PARTITION_CLASS, PartitionState.READ_ONLY);
+    testPartitionLayout.addNewPartitions(defaultRo.count, DEFAULT_PARTITION_CLASS, PartitionState.READ_ONLY, dc);
+    // add 5 RO partitions for the special class
+    PartitionRangeCheckParams specialRo =
+        new PartitionRangeCheckParams(defaultRo.rangeEnd + 1, 5, specialPartitionClass, PartitionState.READ_ONLY);
+    testPartitionLayout.addNewPartitions(specialRo.count, specialPartitionClass, PartitionState.READ_ONLY, dc);
+
+    PartitionLayout partitionLayout = testPartitionLayout.getPartitionLayout();
+
+    Properties props = new Properties();
+    props.setProperty("clustermap.host.name", "localhost");
+    props.setProperty("clustermap.cluster.name", "cluster");
+    props.setProperty("clustermap.datacenter.name", dc);
+    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(props));
+    File tempDir = Files.createTempDirectory("helixClusterManager-" + new Random().nextInt(1000)).toFile();
+    String tempDirPath = tempDir.getAbsolutePath();
+    String hardwareLayoutPath = tempDirPath + File.separator + "hardwareLayoutTest.json";
+    String partitionLayoutPath = tempDirPath + File.separator + "partitionLayoutTest.json";
+    Utils.writeJsonObjectToFile(hardwareLayout.getHardwareLayout().toJSONObject(), hardwareLayoutPath);
+    Utils.writeJsonObjectToFile(partitionLayout.toJSONObject(), partitionLayoutPath);
+    ClusterMap clusterMapManager =
+        (new StaticClusterAgentsFactory(clusterMapConfig, hardwareLayoutPath, partitionLayoutPath)).getClusterMap();
+
+    // "good" cases for getPartitions() and getWritablePartitions() only
+    // getPartitions(), class null
+    List<? extends PartitionId> returnedPartitions = clusterMapManager.getAllPartitionIds(null);
+    checkReturnedPartitions(returnedPartitions, Arrays.asList(defaultRw, defaultRo, specialRw, specialRo));
+    // getWritablePartitions(), class null
+    returnedPartitions = clusterMapManager.getWritablePartitionIds(null);
+    checkReturnedPartitions(returnedPartitions, Arrays.asList(defaultRw, specialRw));
+
+    // getPartitions(), class default
+    returnedPartitions = clusterMapManager.getAllPartitionIds(DEFAULT_PARTITION_CLASS);
+    checkReturnedPartitions(returnedPartitions, Arrays.asList(defaultRw, defaultRo));
+    // getWritablePartitions(), class default
+    returnedPartitions = clusterMapManager.getWritablePartitionIds(DEFAULT_PARTITION_CLASS);
+    checkReturnedPartitions(returnedPartitions, Collections.singletonList(defaultRw));
+
+    // getPartitions(), class special
+    returnedPartitions = clusterMapManager.getAllPartitionIds(specialPartitionClass);
+    checkReturnedPartitions(returnedPartitions, Arrays.asList(specialRw, specialRo));
+    // getWritablePartitions(), class special
+    returnedPartitions = clusterMapManager.getWritablePartitionIds(specialPartitionClass);
+    checkReturnedPartitions(returnedPartitions, Collections.singletonList(specialRw));
+
+    // to test the dc affinity, we pick one datanode from "dc" and insert 1 replica for part1 (special class) in "dc"
+    // and make sure that it is returned in getPartitions() but not in getWritablePartitions() (because all the other
+    // partitions have more than 1 replica in "dc").
+    DataNode dataNode = hardwareLayout.getRandomDataNodeFromDc(dc);
+    Partition partition =
+        partitionLayout.addNewPartition(dataNode.getDisks().subList(0, 1), testPartitionLayout.replicaCapacityInBytes,
+            specialPartitionClass);
+    Utils.writeJsonObjectToFile(partitionLayout.toJSONObject(), partitionLayoutPath);
+    clusterMapManager =
+        (new StaticClusterAgentsFactory(clusterMapConfig, hardwareLayoutPath, partitionLayoutPath)).getClusterMap();
+    PartitionRangeCheckParams extraPartCheckParams =
+        new PartitionRangeCheckParams(specialRo.rangeEnd + 1, 1, specialPartitionClass, PartitionState.READ_WRITE);
+    // getPartitions(), class special
+    returnedPartitions = clusterMapManager.getAllPartitionIds(specialPartitionClass);
+    assertTrue("Added partition should exist in returned partitions", returnedPartitions.contains(partition));
+    checkReturnedPartitions(returnedPartitions, Arrays.asList(specialRw, specialRo, extraPartCheckParams));
+    // getWritablePartitions(), class special
+    returnedPartitions = clusterMapManager.getWritablePartitionIds(specialPartitionClass);
+    assertFalse("Added partition should not exist in returned partitions", returnedPartitions.contains(partition));
+    checkReturnedPartitions(returnedPartitions, Collections.singletonList(specialRw));
+  }
+
+  /**
+   * Test that {@link StaticClusterManager#onReplicaEvent(ReplicaId, ReplicaEventType)} works as expected in the presence
+   * of various types of server/replica events. This test also verifies the states of datanode, disk and replica are changed
+   * correctly based on server event.
+   */
+  @Test
+  public void onReplicaEventTest() {
+    Properties props = new Properties();
+    props.setProperty("clustermap.host.name", "localhost");
+    props.setProperty("clustermap.cluster.name", "cluster");
+    props.setProperty("clustermap.datacenter.name", "dc1");
+    ClusterMapConfig clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(props));
+    TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
+    TestPartitionLayout testPartitionLayout = new TestPartitionLayout(testHardwareLayout, null);
+    ClusterMap clusterMapManager =
+        (new StaticClusterAgentsFactory(clusterMapConfig, testPartitionLayout.getPartitionLayout())).getClusterMap();
+    // Test configuration: we select the disk from one datanode and select the replica on that disk
+
+    // Initial state: only disk is down; Server event: Replica_Unavailable; Expected result: disk becomes available again and replica becomes down
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Up},
+        ServerErrorCode.Replica_Unavailable,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Down});
+
+    // Initial state: only disk is down; Server event: Temporarily_Disabled; Expected result: disk becomes available again and replica becomes down
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Up},
+        ServerErrorCode.Temporarily_Disabled,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Down});
+
+    // Initial state: disk and replica are down; Server event: Replica_Unavailable; Expected result: disk becomes available again
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Down},
+        ServerErrorCode.Replica_Unavailable,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Down});
+
+    // Initial state: disk and replica are down; Server event: Temporarily_Disabled; Expected result: disk becomes available again
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Down},
+        ServerErrorCode.Temporarily_Disabled,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Down});
+
+    // Initial state: disk and replica are down; Server event: Partition_ReadOnly; Expected result: disk and replica become available again
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Down},
+        ServerErrorCode.Partition_ReadOnly,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Up});
+
+    // Initial state: everything is up; Server event: IO_Error; Expected result: disk and replica become unavailable
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Up},
+        ServerErrorCode.IO_Error,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Down});
+
+    // Initial state: everything is up; Server event: Disk_Unavailable; Expected result: disk and replica become unavailable
+    mockServerEventsAndVerify(clusterMapManager, clusterMapConfig,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Up, ResourceState.Replica_Up},
+        ServerErrorCode.Disk_Unavailable,
+        new ResourceState[]{ResourceState.Node_Up, ResourceState.Disk_Down, ResourceState.Replica_Down});
   }
 
   /**
@@ -374,17 +542,13 @@ public class StaticClusterManagerTest {
    */
   private static void checkRackUsage(List<PartitionId> allocatedPartitions) {
     for (PartitionId partition : allocatedPartitions) {
-      Map<String, Set<Long>> rackSetByDatacenter = new HashMap<>();
+      Map<String, Set<String>> rackSetByDatacenter = new HashMap<>();
       for (ReplicaId replica : partition.getReplicaIds()) {
         String datacenter = replica.getDataNodeId().getDatacenterName();
-        Set<Long> rackSet = rackSetByDatacenter.get(datacenter);
-        if (rackSet == null) {
-          rackSet = new HashSet<>();
-          rackSetByDatacenter.put(datacenter, rackSet);
-        }
+        Set<String> rackSet = rackSetByDatacenter.computeIfAbsent(datacenter, k -> new HashSet<>());
 
-        long rackId = replica.getDataNodeId().getRackId();
-        if (rackId >= 0) {
+        String rackId = replica.getDataNodeId().getRackId();
+        if (rackId != null) {
           assertFalse("Allocation was not on unique racks", rackSet.contains(rackId));
           rackSet.add(rackId);
         }
@@ -403,7 +567,7 @@ public class StaticClusterManagerTest {
       Map<String, Integer> numReplicasMap = new HashMap<>();
       for (ReplicaId replica : partition.getReplicaIds()) {
         String datacenter = replica.getDataNodeId().getDatacenterName();
-        Integer replicasInDatacenter = numReplicasMap.containsKey(datacenter) ? numReplicasMap.get(datacenter) : 0;
+        Integer replicasInDatacenter = numReplicasMap.getOrDefault(datacenter, 0);
         numReplicasMap.put(datacenter, replicasInDatacenter + 1);
       }
       for (int replicasInDatacenter : numReplicasMap.values()) {

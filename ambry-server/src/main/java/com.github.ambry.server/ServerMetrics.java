@@ -82,6 +82,12 @@ public class ServerMetrics {
   public final Histogram getBlobAllSendTimeInMs;
   public final Histogram getBlobAllTotalTimeInMs;
 
+  public final Histogram getBlobAllByReplicaRequestQueueTimeInMs;
+  public final Histogram getBlobAllByReplicaProcessingTimeInMs;
+  public final Histogram getBlobAllByReplicaResponseQueueTimeInMs;
+  public final Histogram getBlobAllByReplicaSendTimeInMs;
+  public final Histogram getBlobAllByReplicaTotalTimeInMs;
+
   public final Histogram getBlobInfoRequestQueueTimeInMs;
   public final Histogram getBlobInfoProcessingTimeInMs;
   public final Histogram getBlobInfoResponseQueueTimeInMs;
@@ -94,17 +100,18 @@ public class ServerMetrics {
   public final Histogram deleteBlobSendTimeInMs;
   public final Histogram deleteBlobTotalTimeInMs;
 
-  public final Histogram ttlBlobRequestQueueTimeInMs;
-  public final Histogram ttlBlobProcessingTimeInMs;
-  public final Histogram ttlBlobResponseQueueTimeInMs;
-  public final Histogram ttlBlobSendTimeInMs;
-  public final Histogram ttlBlobTotalTimeInMs;
+  public final Histogram updateBlobTtlRequestQueueTimeInMs;
+  public final Histogram updateBlobTtlProcessingTimeInMs;
+  public final Histogram updateBlobTtlResponseQueueTimeInMs;
+  public final Histogram updateBlobTtlSendTimeInMs;
+  public final Histogram updateBlobTtlTotalTimeInMs;
 
   public final Histogram replicaMetadataRequestQueueTimeInMs;
   public final Histogram replicaMetadataRequestProcessingTimeInMs;
   public final Histogram replicaMetadataResponseQueueTimeInMs;
   public final Histogram replicaMetadataSendTimeInMs;
   public final Histogram replicaMetadataTotalTimeInMs;
+  public final Histogram replicaMetadataTotalSizeOfMessages;
 
   public final Histogram triggerCompactionRequestQueueTimeInMs;
   public final Histogram triggerCompactionRequestProcessingTimeInMs;
@@ -130,6 +137,12 @@ public class ServerMetrics {
   public final Histogram catchupStatusResponseSendTimeInMs;
   public final Histogram catchupStatusRequestTotalTimeInMs;
 
+  public final Histogram blobStoreControlRequestQueueTimeInMs;
+  public final Histogram blobStoreControlRequestProcessingTimeInMs;
+  public final Histogram blobStoreControlResponseQueueTimeInMs;
+  public final Histogram blobStoreControlResponseSendTimeInMs;
+  public final Histogram blobStoreControlRequestTotalTimeInMs;
+
   public final Histogram blobSizeInBytes;
   public final Histogram blobUserMetadataSizeInBytes;
 
@@ -141,14 +154,16 @@ public class ServerMetrics {
   public final Meter getBlobPropertiesRequestRate;
   public final Meter getBlobUserMetadataRequestRate;
   public final Meter getBlobAllRequestRate;
+  public final Meter getBlobAllByReplicaRequestRate;
   public final Meter getBlobInfoRequestRate;
   public final Meter deleteBlobRequestRate;
-  public final Meter ttlBlobRequestRate;
+  public final Meter updateBlobTtlRequestRate;
   public final Meter replicaMetadataRequestRate;
   public final Meter triggerCompactionRequestRate;
   public final Meter requestControlRequestRate;
   public final Meter replicationControlRequestRate;
   public final Meter catchupStatusRequestRate;
+  public final Meter blobStoreControlRequestRate;
 
   public final Meter putSmallBlobRequestRate;
   public final Meter getSmallBlobRequestRate;
@@ -161,11 +176,12 @@ public class ServerMetrics {
 
   public final Counter partitionUnknownError;
   public final Counter diskUnavailableError;
+  public final Counter replicaUnavailableError;
   public final Counter partitionReadOnlyError;
   public final Counter storeIOError;
   public final Counter unExpectedStorePutError;
   public final Counter unExpectedStoreGetError;
-  public final Counter unExpectedStoreTTLError;
+  public final Counter unExpectedStoreTtlUpdateError;
   public final Counter unExpectedStoreDeleteError;
   public final Counter unExpectedAdminOperationError;
   public final Counter unExpectedStoreFindEntriesError;
@@ -179,6 +195,10 @@ public class ServerMetrics {
   public final Counter temporarilyDisabledError;
   public final Counter getAuthorizationFailure;
   public final Counter deleteAuthorizationFailure;
+  public final Counter ttlUpdateAuthorizationFailure;
+  public final Counter ttlAlreadyUpdatedError;
+  public final Counter ttlUpdateRejectedError;
+  public final Counter replicationResponseMessageSizeTooHigh;
 
   public ServerMetrics(MetricRegistry registry) {
     putBlobRequestQueueTimeInMs =
@@ -258,6 +278,17 @@ public class ServerMetrics {
     getBlobAllSendTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllSendTime"));
     getBlobAllTotalTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllTotalTime"));
 
+    getBlobAllByReplicaRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaRequestQueueTime"));
+    getBlobAllByReplicaProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaProcessingTime"));
+    getBlobAllByReplicaResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaResponseQueueTime"));
+    getBlobAllByReplicaSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaSendTime"));
+    getBlobAllByReplicaTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaTotalTime"));
+
     getBlobInfoRequestQueueTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "GetBlobInfoRequestQueueTime"));
     getBlobInfoProcessingTimeInMs =
@@ -276,13 +307,14 @@ public class ServerMetrics {
     deleteBlobSendTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "DeleteBlobSendTime"));
     deleteBlobTotalTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "DeleteBlobTotalTime"));
 
-    ttlBlobRequestQueueTimeInMs =
-        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TTLBlobRequestQueueTime"));
-    ttlBlobProcessingTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "TTLBlobProcessingTime"));
-    ttlBlobResponseQueueTimeInMs =
-        registry.histogram(MetricRegistry.name(AmbryRequests.class, "TTLBlobResponseQueueTime"));
-    ttlBlobSendTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "TTLBlobSendTime"));
-    ttlBlobTotalTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "TTLBlobTotalTime"));
+    updateBlobTtlRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlRequestQueueTime"));
+    updateBlobTtlProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlProcessingTime"));
+    updateBlobTtlResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlResponseQueueTime"));
+    updateBlobTtlSendTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlSendTime"));
+    updateBlobTtlTotalTimeInMs = registry.histogram(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlTotalTime"));
 
     replicaMetadataRequestQueueTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataRequestQueueTime"));
@@ -294,6 +326,8 @@ public class ServerMetrics {
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataSendTime"));
     replicaMetadataTotalTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataTotalTime"));
+    replicaMetadataTotalSizeOfMessages =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataTotalSizeOfMessages"));
 
     triggerCompactionRequestQueueTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestQueueTimeInMs"));
@@ -339,6 +373,17 @@ public class ServerMetrics {
     catchupStatusRequestTotalTimeInMs =
         registry.histogram(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestTotalTimeInMs"));
 
+    blobStoreControlRequestQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlRequestQueueTimeInMs"));
+    blobStoreControlRequestProcessingTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlRequestProcessingTimeInMs"));
+    blobStoreControlResponseQueueTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlResponseQueueTimeInMs"));
+    blobStoreControlResponseSendTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlResponseSendTimeInMs"));
+    blobStoreControlRequestTotalTimeInMs =
+        registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlRequestTotalTimeInMs"));
+
     blobSizeInBytes = registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobSize"));
     blobUserMetadataSizeInBytes = registry.histogram(MetricRegistry.name(AmbryRequests.class, "BlobUserMetadataSize"));
 
@@ -352,9 +397,11 @@ public class ServerMetrics {
     getBlobUserMetadataRequestRate =
         registry.meter(MetricRegistry.name(AmbryRequests.class, "GetBlobUserMetadataRequestRate"));
     getBlobAllRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "GetBlobAllRequestRate"));
+    getBlobAllByReplicaRequestRate =
+        registry.meter(MetricRegistry.name(AmbryRequests.class, "GetBlobAllByReplicaRequestRate"));
     getBlobInfoRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "GetBlobInfoRequestRate"));
     deleteBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "DeleteBlobRequestRate"));
-    ttlBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "TTLBlobRequestRate"));
+    updateBlobTtlRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "UpdateBlobTtlRequestRate"));
     replicaMetadataRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "ReplicaMetadataRequestRate"));
     triggerCompactionRequestRate =
         registry.meter(MetricRegistry.name(AmbryRequests.class, "TriggerCompactionRequestRate"));
@@ -362,6 +409,8 @@ public class ServerMetrics {
     replicationControlRequestRate =
         registry.meter(MetricRegistry.name(AmbryRequests.class, "ReplicationControlRequestRate"));
     catchupStatusRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "CatchupStatusRequestRate"));
+    blobStoreControlRequestRate =
+        registry.meter(MetricRegistry.name(AmbryRequests.class, "BlobStoreControlRequestRate"));
 
     putSmallBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "PutSmallBlobRequestRate"));
     getSmallBlobRequestRate = registry.meter(MetricRegistry.name(AmbryRequests.class, "GetSmallBlobRequestRate"));
@@ -374,6 +423,7 @@ public class ServerMetrics {
 
     partitionUnknownError = registry.counter(MetricRegistry.name(AmbryRequests.class, "PartitionUnknownError"));
     diskUnavailableError = registry.counter(MetricRegistry.name(AmbryRequests.class, "DiskUnavailableError"));
+    replicaUnavailableError = registry.counter(MetricRegistry.name(AmbryRequests.class, "ReplicaUnavailableError"));
     partitionReadOnlyError = registry.counter(MetricRegistry.name(AmbryRequests.class, "PartitionReadOnlyError"));
     storeIOError = registry.counter(MetricRegistry.name(AmbryRequests.class, "StoreIOError"));
     idAlreadyExistError = registry.counter(MetricRegistry.name(AmbryRequests.class, "IDAlreadyExistError"));
@@ -390,15 +440,24 @@ public class ServerMetrics {
         registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreDeleteError"));
     unExpectedAdminOperationError =
         registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedAdminOperationError"));
-    unExpectedStoreTTLError = registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreTTLError"));
+    unExpectedStoreTtlUpdateError =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreTtlUpdateError"));
     unExpectedStoreFindEntriesError =
         registry.counter(MetricRegistry.name(AmbryRequests.class, "UnexpectedStoreFindEntriesError"));
-    getAuthorizationFailure =
-        registry.counter(MetricRegistry.name(AmbryRequests.class, "GetAuthorizationFailure"));
+    getAuthorizationFailure = registry.counter(MetricRegistry.name(AmbryRequests.class, "GetAuthorizationFailure"));
     deleteAuthorizationFailure =
         registry.counter(MetricRegistry.name(AmbryRequests.class, "DeleteAuthorizationFailure"));
+    ttlUpdateAuthorizationFailure =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "TtlUpdateAuthorizationFailure"));
+    ttlAlreadyUpdatedError = registry.counter(MetricRegistry.name(AmbryRequests.class, "TtlAlreadyUpdatedError"));
+    ttlUpdateRejectedError = registry.counter(MetricRegistry.name(AmbryRequests.class, "TtlUpdateRejectedError"));
+    replicationResponseMessageSizeTooHigh =
+        registry.counter(MetricRegistry.name(AmbryRequests.class, "ReplicationResponseMessageSizeTooHigh"));
   }
 
+  /**
+   * Update put blob request rate based on blob size.
+   */
   public void markPutBlobRequestRateBySize(long blobSize) {
     if (blobSize <= smallBlob) {
       putSmallBlobRequestRate.mark();
@@ -409,6 +468,9 @@ public class ServerMetrics {
     }
   }
 
+  /**
+   * Update get blob request rate based on blob size.
+   */
   public void markGetBlobRequestRateBySize(long blobSize) {
     if (blobSize <= smallBlob) {
       getSmallBlobRequestRate.mark();
@@ -416,6 +478,32 @@ public class ServerMetrics {
       getMediumBlobRequestRate.mark();
     } else {
       getLargeBlobRequestRate.mark();
+    }
+  }
+
+  /**
+   * Update get blob processing time based on blob size.
+   */
+  public void updateGetBlobProcessingTimeBySize(long blobSize, long processingTime) {
+    if (blobSize <= ServerMetrics.smallBlob) {
+      getSmallBlobProcessingTimeInMs.update(processingTime);
+    } else if (blobSize <= ServerMetrics.mediumBlob) {
+      getMediumBlobProcessingTimeInMs.update(processingTime);
+    } else {
+      getLargeBlobProcessingTimeInMs.update(processingTime);
+    }
+  }
+
+  /**
+   * Update put blob processing time based on blob size.
+   */
+  public void updatePutBlobProcessingTimeBySize(long blobSize, long processingTime) {
+    if (blobSize <= ServerMetrics.smallBlob) {
+      putSmallBlobProcessingTimeInMs.update(processingTime);
+    } else if (blobSize <= ServerMetrics.mediumBlob) {
+      putMediumBlobProcessingTimeInMs.update(processingTime);
+    } else {
+      putLargeBlobProcessingTimeInMs.update(processingTime);
     }
   }
 }

@@ -13,7 +13,11 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.AccountService;
+import com.github.ambry.account.Container;
 import com.github.ambry.clustermap.ClusterMap;
+import com.github.ambry.clustermap.ClusterMapUtils;
 import com.github.ambry.clustermap.ReplicaId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.ResponseHandler;
@@ -26,6 +30,7 @@ import com.github.ambry.protocol.DeleteRequest;
 import com.github.ambry.protocol.DeleteResponse;
 import com.github.ambry.protocol.RequestOrResponse;
 import com.github.ambry.utils.ByteBufferInputStream;
+import com.github.ambry.utils.Pair;
 import com.github.ambry.utils.Time;
 import java.io.DataInputStream;
 import java.util.Collections;
@@ -47,6 +52,7 @@ class DeleteManager {
   private final NotificationSystem notificationSystem;
   private final Time time;
   private final ResponseHandler responseHandler;
+  private final AccountService accountService;
   private final NonBlockingRouterMetrics routerMetrics;
   private final ClusterMap clusterMap;
   private final RouterConfig routerConfig;
@@ -75,16 +81,19 @@ class DeleteManager {
    * Creates a DeleteManager.
    * @param clusterMap The {@link ClusterMap} of the cluster.
    * @param responseHandler The {@link ResponseHandler} used to notify failures for failure detection.
+   * @param accountService The {@link AccountService} used for account/container id and name mapping.
    * @param notificationSystem The {@link NotificationSystem} used for notifying blob deletions.
    * @param routerConfig The {@link RouterConfig} containing the configs for the DeleteManager.
    * @param routerMetrics The {@link NonBlockingRouterMetrics} to be used for reporting metrics.
    * @param routerCallback The {@link RouterCallback} to use for callbacks to the router.
    * @param time The {@link Time} instance to use.
    */
-  DeleteManager(ClusterMap clusterMap, ResponseHandler responseHandler, NotificationSystem notificationSystem,
-      RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, RouterCallback routerCallback, Time time) {
+  DeleteManager(ClusterMap clusterMap, ResponseHandler responseHandler, AccountService accountService,
+      NotificationSystem notificationSystem, RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics,
+      RouterCallback routerCallback, Time time) {
     this.clusterMap = clusterMap;
     this.responseHandler = responseHandler;
+    this.accountService = accountService;
     this.notificationSystem = notificationSystem;
     this.routerConfig = routerConfig;
     this.routerMetrics = routerMetrics;
@@ -96,15 +105,21 @@ class DeleteManager {
 
   /**
    * Submits a {@link DeleteOperation} to this {@code DeleteManager}.
-   * @param blobId The {@link BlobId} to be deleted.
+   * @param blobIdStr The original blobId string for a {@link BlobId}.
    * @param serviceId The service ID of the service deleting the blob. This can be null if unknown.
    * @param futureResult The {@link FutureResult} that will contain the result eventually and exception if any.
    * @param callback The {@link Callback} that will be called on completion of the request.
+   * @throws RouterException if the blobIdStr is invalid.
    */
-  void submitDeleteBlobOperation(BlobId blobId, String serviceId, FutureResult<Void> futureResult,
-      Callback<Void> callback) {
+  void submitDeleteBlobOperation(String blobIdStr, String serviceId, FutureResult<Void> futureResult,
+      Callback<Void> callback) throws RouterException {
+    final BlobId blobId = RouterUtils.getBlobIdFromString(blobIdStr, clusterMap);
+    if (blobId.getDatacenterId() != ClusterMapUtils.UNKNOWN_DATACENTER_ID
+        && blobId.getDatacenterId() != clusterMap.getLocalDatacenterId()) {
+      routerMetrics.deleteBlobNotOriginateLocalOperationRate.mark();
+    }
     DeleteOperation deleteOperation =
-        new DeleteOperation(routerConfig, routerMetrics, responseHandler, blobId, serviceId, callback, time,
+        new DeleteOperation(clusterMap, routerConfig, routerMetrics, responseHandler, blobId, serviceId, callback, time,
             futureResult);
     deleteOperations.add(deleteOperation);
   }
@@ -202,7 +217,11 @@ class DeleteManager {
   void onComplete(DeleteOperation op) {
     Exception e = op.getOperationException();
     if (e == null) {
-      notificationSystem.onBlobDeleted(op.getBlobId().getID(), op.getServiceId());
+      BlobId blobId = op.getBlobId();
+      Pair<Account, Container> accountContainer =
+          RouterUtils.getAccountContainer(accountService, blobId.getAccountId(), blobId.getContainerId());
+      notificationSystem.onBlobDeleted(blobId.getID(), op.getServiceId(), accountContainer.getFirst(),
+          accountContainer.getSecond());
     } else {
       routerMetrics.onDeleteBlobError(e);
     }

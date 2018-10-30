@@ -35,26 +35,27 @@ import static com.github.ambry.clustermap.ClusterMapUtils.*;
  * A Partition is the unit of data management in Ambry. Each Partition is uniquely identifiable by an ID. Partitions
  * consist of one or more {@link Replica}s. Replicas ensure that a Partition is available and reliable.
  */
-// TODO: 2018/3/20 by zmyer
-class Partition extends PartitionId {
+class Partition implements PartitionId {
 
   private static final short Version_Field_Size_In_Bytes = 2;
   private static final short Current_Version = 1;
   private static final int Partition_Size_In_Bytes = Version_Field_Size_In_Bytes + 8;
 
-  private Long id;
+  private final List<Replica> replicas;
+  private final Long id;
   PartitionState partitionState;
   long replicaCapacityInBytes;
-  List<Replica> replicas;
+  String partitionClass;
 
   private Logger logger = LoggerFactory.getLogger(getClass());
 
-  Partition(long id, PartitionState partitionState, long replicaCapacityInBytes) {
+  Partition(long id, String partitionClass, PartitionState partitionState, long replicaCapacityInBytes) {
     logger.trace("Partition " + id + ", " + partitionState + ", " + replicaCapacityInBytes);
     this.id = id;
+    this.partitionClass = partitionClass;
     this.partitionState = partitionState;
     this.replicaCapacityInBytes = replicaCapacityInBytes;
-    this.replicas = new ArrayList<Replica>();
+    this.replicas = new ArrayList<>();
 
     validate();
   }
@@ -68,6 +69,8 @@ class Partition extends PartitionId {
       logger.trace("Partition " + jsonObject.toString());
     }
     this.id = jsonObject.getLong("id");
+    this.partitionClass = jsonObject.has("partitionClass") ? jsonObject.getString("partitionClass")
+        : hardwareLayout.getClusterMapConfig().clusterMapDefaultPartitionClass;
     this.partitionState = PartitionState.valueOf(jsonObject.getString("partitionState"));
     this.replicaCapacityInBytes = jsonObject.getLong("replicaCapacityInBytes");
     this.replicas = new ArrayList<Replica>(jsonObject.getJSONArray("replicas").length());
@@ -131,6 +134,11 @@ class Partition extends PartitionId {
     return Long.toString(id);
   }
 
+  @Override
+  public String getPartitionClass() {
+    return partitionClass;
+  }
+
   // For constructing new Partition
   void addReplica(Replica replica) {
     replicas.add(replica);
@@ -164,7 +172,8 @@ class Partition extends PartitionId {
 
   JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject = new JSONObject().put("id", id)
-        .put("partitionState", partitionState)
+        .put("partitionClass", partitionClass)
+        .put("partitionState", partitionState.name())
         .put("replicaCapacityInBytes", replicaCapacityInBytes)
         .put("replicas", new JSONArray());
     for (Replica replica : replicas) {

@@ -57,7 +57,7 @@ class Datacenter {
     }
     this.hardwareLayout = hardwareLayout;
     this.name = jsonObject.getString("name");
-    id = Byte.parseByte(jsonObject.getString("id"));
+    id = (byte) jsonObject.getInt("id");
 
     //创建数据节点
     this.dataNodes = new ArrayList<DataNode>(jsonObject.getJSONArray("dataNodes").length());
@@ -138,17 +138,15 @@ class Datacenter {
   private void validateRackAwareness() {
     if (dataNodes.size() > 0) {
       Iterator<DataNode> dataNodeIter = dataNodes.iterator();
-      //是否有机架号
-      boolean hasRackId = (dataNodeIter.next().getRackId() >= 0);
+      boolean firstHasRackId = (dataNodeIter.next().getRackId() != null);
       while (dataNodeIter.hasNext()) {
-        //如果存在部分有机架号的情况，直接异常处理
-        if (hasRackId != (dataNodeIter.next().getRackId() >= 0)) {
+        boolean currHasRackId = (dataNodeIter.next().getRackId() != null);
+        if (firstHasRackId != currHasRackId) {
           throw new IllegalStateException(
               "dataNodes in datacenter: " + name + " must all have defined rack IDs or none at all");
         }
       }
-      //更新是否有机架号标记
-      this.rackAware = hasRackId;
+      this.rackAware = firstHasRackId;
     }
   }
 

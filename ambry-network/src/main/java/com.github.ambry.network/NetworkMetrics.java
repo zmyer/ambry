@@ -45,36 +45,40 @@ public class NetworkMetrics {
     public final Counter selectorCloseSocketErrorCount;
     private final List<AtomicLong> selectorActiveConnectionsList;
 
-    // Plaintext metrics
-    // the bytes rate to receive the entire request
-    public final Meter plaintextReceiveBytesRate;
-    // the bytes rate to send the entire response
-    public final Meter plaintextSendBytesRate;
-    // the time to receive 1KB data in one read call
-    public final Histogram plaintextReceiveTimePerKB;
-    // the time to send data in one write call
-    public final Histogram plaintextSendTimePerKB;
+  // Plaintext metrics
+  // the bytes rate to receive the entire request
+  public final Meter plaintextReceiveBytesRate;
+  // the bytes rate to send the entire response
+  public final Meter plaintextSendBytesRate;
+  // the time to receive 1KB data in one read call
+  public final Histogram plaintextReceiveTimeInUsPerKB;
+  // the time to send 1KB data in one write call
+  public final Histogram plaintextSendTimeInUsPerKB;
+  // the time to send data in one write call
+  public final Histogram plaintextSendTime;
 
-    // SSL metrics
-    public final Counter sslFactoryInitializationCount;
-    public final Counter sslTransmissionInitializationCount;
-    public final Counter sslFactoryInitializationErrorCount;
-    public final Counter sslTransmissionInitializationErrorCount;
-    public final Histogram sslHandshakeTime;
-    public final Counter sslHandshakeCount;
-    public final Counter sslHandshakeErrorCount;
-    // the bytes rate to receive the entire request
-    public final Meter sslReceiveBytesRate;
-    // the bytes rate to send the entire response
-    public final Meter sslSendBytesRate;
-    // the time to receive 1KB data in one read call
-    public final Histogram sslReceiveTimePerKB;
-    // the time to send data in one write call
-    public final Histogram sslSendTimePerKB;
-    public final Histogram sslEncryptionTimePerKB;
-    public final Histogram sslDecryptionTimePerKB;
-    // the count of renegotiation after initial handshake done
-    public final Counter sslRenegotiationCount;
+  // SSL metrics
+  public final Counter sslFactoryInitializationCount;
+  public final Counter sslTransmissionInitializationCount;
+  public final Counter sslFactoryInitializationErrorCount;
+  public final Counter sslTransmissionInitializationErrorCount;
+  public final Histogram sslHandshakeTime;
+  public final Counter sslHandshakeCount;
+  public final Counter sslHandshakeErrorCount;
+  // the bytes rate to receive the entire request
+  public final Meter sslReceiveBytesRate;
+  // the bytes rate to send the entire response
+  public final Meter sslSendBytesRate;
+  // the time to receive 1KB data in one read call
+  public final Histogram sslReceiveTimeInUsPerKB;
+  // the time to send 1KB data in one write call
+  public final Histogram sslSendTimeInUsPerKB;
+  public final Histogram sslEncryptionTimeInUsPerKB;
+  public final Histogram sslDecryptionTimeInUsPerKB;
+  // the time to send data in one write call
+  public final Histogram sslSendTime;
+  // the count of renegotiation after initial handshake done
+  public final Counter sslRenegotiationCount;
 
     // NetworkClient metrics
     public final Histogram networkClientSendAndPollTime;
@@ -89,48 +93,48 @@ public class NetworkMetrics {
     public final Counter networkClientException;
     private List<AtomicLong> networkClientPendingRequestList;
 
-    public NetworkMetrics(MetricRegistry registry) {
-        sendInFlight = registry.counter(MetricRegistry.name(Selector.class, "SendInFlight"));
-        selectorConnectionClosed = registry.counter(MetricRegistry.name(Selector.class, "SelectorConnectionClosed"));
-        selectorConnectionCreated = registry.counter(MetricRegistry.name(Selector.class, "SelectorConnectionCreated"));
-        selectorSelectCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorSelectCount"));
-        selectorIOCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorIOCount"));
-        selectorSelectTime = registry.histogram(MetricRegistry.name(Selector.class, "SelectorSelectTime"));
-        selectorIOTime = registry.histogram(MetricRegistry.name(Selector.class, "SelectorIOTime"));
-        selectorNioCloseErrorCount = registry.counter(
-                MetricRegistry.name(Selector.class, "SelectorNioCloseErrorCount"));
-        selectorDisconnectedErrorCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SelectorDisconnectedErrorCount"));
-        selectorIOErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorIoErrorCount"));
-        selectorKeyOperationErrorCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SelectorKeyOperationErrorCount"));
-        selectorCloseKeyErrorCount = registry.counter(
-                MetricRegistry.name(Selector.class, "SelectorCloseKeyErrorCount"));
-        selectorCloseSocketErrorCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SelectorCloseSocketErrorCount"));
-        plaintextReceiveBytesRate = registry.meter(MetricRegistry.name(Selector.class, "PlaintextReceiveBytesRate"));
-        plaintextSendBytesRate = registry.meter(MetricRegistry.name(Selector.class, "PlaintextSendBytesRate"));
-        plaintextReceiveTimePerKB = registry.histogram(
-                MetricRegistry.name(Selector.class, "PlaintextReceiveTimePerKB"));
-        plaintextSendTimePerKB = registry.histogram(MetricRegistry.name(Selector.class, "PlaintextSendTimePerKB"));
-        sslReceiveBytesRate = registry.meter(MetricRegistry.name(Selector.class, "SslReceiveBytesRate"));
-        sslSendBytesRate = registry.meter(MetricRegistry.name(Selector.class, "SslSendBytesRate"));
-        sslEncryptionTimePerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslEncryptionTimePerKB"));
-        sslDecryptionTimePerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslDecryptionTimePerKB"));
-        sslReceiveTimePerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslReceiveTimePerKB"));
-        sslSendTimePerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslSendTimePerKB"));
-        sslFactoryInitializationCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SslFactoryInitializationCount"));
-        sslFactoryInitializationErrorCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SslFactoryInitializationErrorCount"));
-        sslTransmissionInitializationCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SslTransmissionInitializationCount"));
-        sslTransmissionInitializationErrorCount =
-                registry.counter(MetricRegistry.name(Selector.class, "SslTransmissionInitializationErrorCount"));
-        sslHandshakeTime = registry.histogram(MetricRegistry.name(Selector.class, "SslHandshakeTime"));
-        sslHandshakeCount = registry.counter(MetricRegistry.name(Selector.class, "SslHandshakeCount"));
-        sslHandshakeErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SslHandshakeErrorCount"));
-        sslRenegotiationCount = registry.counter(MetricRegistry.name(Selector.class, "SslRenegotiationCount"));
+  public NetworkMetrics(MetricRegistry registry) {
+    sendInFlight = registry.counter(MetricRegistry.name(Selector.class, "SendInFlight"));
+    selectorConnectionClosed = registry.counter(MetricRegistry.name(Selector.class, "SelectorConnectionClosed"));
+    selectorConnectionCreated = registry.counter(MetricRegistry.name(Selector.class, "SelectorConnectionCreated"));
+    selectorSelectCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorSelectCount"));
+    selectorIOCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorIOCount"));
+    selectorSelectTime = registry.histogram(MetricRegistry.name(Selector.class, "SelectorSelectTime"));
+    selectorIOTime = registry.histogram(MetricRegistry.name(Selector.class, "SelectorIOTime"));
+    selectorNioCloseErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorNioCloseErrorCount"));
+    selectorDisconnectedErrorCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SelectorDisconnectedErrorCount"));
+    selectorIOErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorIoErrorCount"));
+    selectorKeyOperationErrorCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SelectorKeyOperationErrorCount"));
+    selectorCloseKeyErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SelectorCloseKeyErrorCount"));
+    selectorCloseSocketErrorCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SelectorCloseSocketErrorCount"));
+    plaintextReceiveBytesRate = registry.meter(MetricRegistry.name(Selector.class, "PlaintextReceiveBytesRate"));
+    plaintextSendBytesRate = registry.meter(MetricRegistry.name(Selector.class, "PlaintextSendBytesRate"));
+    plaintextReceiveTimeInUsPerKB =
+        registry.histogram(MetricRegistry.name(Selector.class, "PlaintextReceiveTimeInUsPerKB"));
+    plaintextSendTimeInUsPerKB = registry.histogram(MetricRegistry.name(Selector.class, "PlaintextSendTimeInUsPerKB"));
+    plaintextSendTime = registry.histogram(MetricRegistry.name(Selector.class, "PlaintextSendTime"));
+    sslReceiveBytesRate = registry.meter(MetricRegistry.name(Selector.class, "SslReceiveBytesRate"));
+    sslSendBytesRate = registry.meter(MetricRegistry.name(Selector.class, "SslSendBytesRate"));
+    sslEncryptionTimeInUsPerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslEncryptionTimeInUsPerKB"));
+    sslDecryptionTimeInUsPerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslDecryptionTimeInUsPerKB"));
+    sslReceiveTimeInUsPerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslReceiveTimeInUsPerKB"));
+    sslSendTimeInUsPerKB = registry.histogram(MetricRegistry.name(Selector.class, "SslSendTimeInUsPerKB"));
+    sslSendTime = registry.histogram(MetricRegistry.name(Selector.class, "SslSendTime"));
+    sslFactoryInitializationCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SslFactoryInitializationCount"));
+    sslFactoryInitializationErrorCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SslFactoryInitializationErrorCount"));
+    sslTransmissionInitializationCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SslTransmissionInitializationCount"));
+    sslTransmissionInitializationErrorCount =
+        registry.counter(MetricRegistry.name(Selector.class, "SslTransmissionInitializationErrorCount"));
+    sslHandshakeTime = registry.histogram(MetricRegistry.name(Selector.class, "SslHandshakeTime"));
+    sslHandshakeCount = registry.counter(MetricRegistry.name(Selector.class, "SslHandshakeCount"));
+    sslHandshakeErrorCount = registry.counter(MetricRegistry.name(Selector.class, "SslHandshakeErrorCount"));
+    sslRenegotiationCount = registry.counter(MetricRegistry.name(Selector.class, "SslRenegotiationCount"));
 
         networkClientSendAndPollTime =
                 registry.histogram(MetricRegistry.name(NetworkClient.class, "NetworkClientSendAndPollTime"));

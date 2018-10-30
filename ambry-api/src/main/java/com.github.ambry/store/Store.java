@@ -53,15 +53,22 @@ public interface Store {
      */
     void delete(MessageWriteSet messageSetToDelete) throws StoreException;
 
-    /**
-     * Finds all the entries from the store given a find token
-     * @param token The token that acts as a bookmark to make subsequent searches
-     * @param maxTotalSizeOfEntries The maximum total size of entries that needs to be returned. The api will try to
-     *                              return a list of entries whose total size is close to this value.
-     * @return The FindInfo instance that contains the entries found and the new token for future searches
-     * @throws StoreException
-     */
-    FindInfo findEntriesSince(FindToken token, long maxTotalSizeOfEntries) throws StoreException;
+  /**
+   * Updates the TTL of all the messages that are part of the message set
+   * @param messageSetToUpdate The list of messages that need to be updated
+   * @throws StoreException
+   */
+  void updateTtl(MessageWriteSet messageSetToUpdate) throws StoreException;
+
+  /**
+   * Finds all the entries from the store given a find token
+   * @param token The token that acts as a bookmark to make subsequent searches
+   * @param maxTotalSizeOfEntries The maximum total size of entries that needs to be returned. The api will try to
+   *                              return a list of entries whose total size is close to this value.
+   * @return The FindInfo instance that contains the entries found and the new token for future searches
+   * @throws StoreException
+   */
+  FindInfo findEntriesSince(FindToken token, long maxTotalSizeOfEntries) throws StoreException;
 
     /**
      * Finds all the keys that are not present in the store from the input keys
@@ -93,8 +100,13 @@ public interface Store {
      */
     long getSizeInBytes();
 
-    /**
-     * Shutsdown the store
-     */
-    void shutdown() throws StoreException;
+  /**
+   * @return true if the store contains no data
+   */
+  boolean isEmpty();
+
+  /**
+   * Shutsdown the store
+   */
+  void shutdown() throws StoreException;
 }

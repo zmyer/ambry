@@ -55,7 +55,27 @@ public class ServerConfig {
   @Default("60")
   public final long serverQuotaStatsAggregateIntervalInMinutes;
 
-  // TODO: 2018/3/19 by zmyer
+  /**
+   * The option to enable data prefetch for GET request and don't do zero copy.
+   */
+  @Config("server.enable.store.data.prefetch")
+  @Default("false")
+  public final boolean serverEnableStoreDataPrefetch;
+
+  /**
+   * Implementation class for StoreKeyConverterFactory
+   */
+  @Config("server.store.key.converter.factory")
+  @Default("com.github.ambry.store.StoreKeyConverterFactoryImpl")
+  public final String serverStoreKeyConverterFactory;
+
+  /**
+   * Implementation for message transformation.
+   */
+  @Config("server.message.transformer")
+  @Default("com.github.ambry.messageformat.ValidatingTransformer")
+  public final String serverMessageTransformer;
+
   public ServerConfig(VerifiableProperties verifiableProperties) {
     serverRequestHandlerNumOfThreads = verifiableProperties.getInt("server.request.handler.num.of.threads", 7);
     serverSchedulerNumOfthreads = verifiableProperties.getInt("server.scheduler.num.of.threads", 10);
@@ -64,5 +84,10 @@ public class ServerConfig {
         verifiableProperties.getBoolean("server.stats.publish.health.report.enabled", false);
     serverQuotaStatsAggregateIntervalInMinutes =
         verifiableProperties.getLong("server.quota.stats.aggregate.interval.in.minutes", 60);
+    serverEnableStoreDataPrefetch = verifiableProperties.getBoolean("server.enable.store.data.prefetch", false);
+    serverStoreKeyConverterFactory = verifiableProperties.getString("server.store.key.converter.factory",
+        "com.github.ambry.store.StoreKeyConverterFactoryImpl");
+    serverMessageTransformer = verifiableProperties.getString("server.message.transformer",
+        "com.github.ambry.messageformat.ValidatingTransformer");
   }
 }

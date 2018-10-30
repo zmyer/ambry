@@ -13,6 +13,7 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.ByteBufferReadableStreamChannel;
 import com.github.ambry.commons.LoggingNotificationSystem;
@@ -103,9 +104,9 @@ public class PutOperationTest {
     MockNetworkClient mockNetworkClient = new MockNetworkClient();
     PutOperation op =
         new PutOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, new LoggingNotificationSystem(),
-            userMetadata, channel, future, null,
+            new InMemAccountService(true, false), userMetadata, channel, future, null,
             new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>()), null, null, null, null,
-            time, blobProperties);
+            time, blobProperties, MockClusterMap.DEFAULT_PARTITION_CLASS);
     op.startReadingFromChannel();
     List<RequestInfo> requestInfos = new ArrayList<>();
     requestRegistrationCallback.requestListToFill = requestInfos;
@@ -211,9 +212,9 @@ public class PutOperationTest {
     MockNetworkClient mockNetworkClient = new MockNetworkClient();
     PutOperation op =
         new PutOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, new LoggingNotificationSystem(),
-            userMetadata, channel, future, null,
+            new InMemAccountService(true, false), userMetadata, channel, future, null,
             new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>()), null, null, null, null,
-            time, blobProperties);
+            time, blobProperties, MockClusterMap.DEFAULT_PARTITION_CLASS);
     RouterErrorCode[] routerErrorCodes = new RouterErrorCode[5];
     routerErrorCodes[0] = RouterErrorCode.OperationTimedOut;
     routerErrorCodes[1] = RouterErrorCode.UnexpectedInternalError;

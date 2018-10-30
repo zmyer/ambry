@@ -79,9 +79,9 @@ public class ServerHardDeleteTest {
 
   @Before
   public void initialize() throws Exception {
-    notificationSystem = new MockNotificationSystem(1);
     mockClusterAgentsFactory = new MockClusterAgentsFactory(false, 1, 1, 1);
     mockClusterMap = mockClusterAgentsFactory.getClusterMap();
+    notificationSystem = new MockNotificationSystem(mockClusterMap);
     time = new MockTime(SystemTime.getInstance().milliseconds());
     Properties props = new Properties();
     props.setProperty("host.name", mockClusterMap.getDataNodes().get(0).getHostname());
@@ -92,6 +92,7 @@ public class ServerHardDeleteTest {
     props.setProperty("clustermap.cluster.name", "test");
     props.setProperty("clustermap.datacenter.name", "DC1");
     props.setProperty("clustermap.host.name", "localhost");
+    props.setProperty("clustermap.default.partition.class", MockClusterMap.DEFAULT_PARTITION_CLASS);
     VerifiableProperties propverify = new VerifiableProperties(props);
     server = new AmbryServer(propverify, mockClusterAgentsFactory, notificationSystem, time);
     server.startup();
@@ -99,8 +100,12 @@ public class ServerHardDeleteTest {
 
   @After
   public void cleanup() throws IOException {
-    server.shutdown();
-    mockClusterMap.cleanup();
+    if (server != null) {
+      server.shutdown();
+    }
+    if (mockClusterMap != null) {
+      mockClusterMap.cleanup();
+    }
   }
 
   /**
@@ -260,13 +265,13 @@ public class ServerHardDeleteTest {
     properties.add(new BlobProperties(31878, "serviceid1", Utils.getRandomShort(TestUtils.RANDOM),
         Utils.getRandomShort(TestUtils.RANDOM), true));
 
-    List<PartitionId> partitionIds = mockClusterMap.getWritablePartitionIds();
+    List<PartitionId> partitionIds = mockClusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS);
     PartitionId chosenPartition = partitionIds.get(0);
     blobIdList = new ArrayList<>(9);
     for (int i = 0; i < 9; i++) {
       blobIdList.add(new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
           mockClusterMap.getLocalDatacenterId(), properties.get(i).getAccountId(), properties.get(i).getContainerId(),
-          chosenPartition, false));
+          chosenPartition, false, BlobId.BlobDataType.DATACHUNK));
     }
 
     BlockingChannel channel =
@@ -295,10 +300,10 @@ public class ServerHardDeleteTest {
     notificationSystem.awaitBlobDeletions(blobIdList.get(4).getID());
 
     time.sleep(TimeUnit.DAYS.toMillis(1));
-    // Changes in this patch: a. New header version has 4 more bytes compared to previous b. BlobProperties increased by 1 byte
-    // c. Encryption Key Record size is 114 for an encryptionKey of size 100. EncryptionKeyRecord could be null if not applicable.
-    // Delta: 7 * 4 (headers for 7 records) + 1*6 (BlobProperties for 6 put records) + 114*3 = 376
-    ensureCleanupTokenCatchesUp(chosenPartition.getReplicaIds().get(0).getReplicaPath(), mockClusterMap, 198896);
+    int expectedTokenValueT1 = 198728;
+    // For each future change to this offset, add to this variable and write an explanation of why the number changed.
+    ensureCleanupTokenCatchesUp(chosenPartition.getReplicaIds().get(0).getReplicaPath(), mockClusterMap,
+        expectedTokenValueT1);
 
     getAndVerify(channel, 6);
 
@@ -330,10 +335,10 @@ public class ServerHardDeleteTest {
     notificationSystem.awaitBlobDeletions(blobIdList.get(6).getID());
 
     time.sleep(TimeUnit.DAYS.toMillis(1));
-    // changes in this patch: a. New header version has 4 more bytes compared to preivous b. BlobProperties increased by 1 byte
-    // c. Encryption Key Record size is 114 for an encryptionKey of size 100. EncryptionKeyRecord could be null if not applicable.
-    // Delta: 6*4 (header) + 3*1 ( blob props) + 114*2 = 225 + 376 (from previous checkpoint) = 631
-    ensureCleanupTokenCatchesUp(chosenPartition.getReplicaIds().get(0).getReplicaPath(), mockClusterMap, 298712);
+    int expectedTokenValueT2 = 298400;
+    // For each future change to this offset, add to this variable and write an explanation of why the number changed.
+    ensureCleanupTokenCatchesUp(chosenPartition.getReplicaIds().get(0).getReplicaPath(), mockClusterMap,
+        expectedTokenValueT2);
 
     getAndVerify(channel, 9);
   }

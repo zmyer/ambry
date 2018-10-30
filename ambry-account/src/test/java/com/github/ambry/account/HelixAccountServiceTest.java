@@ -14,13 +14,14 @@
 package com.github.ambry.account;
 
 import com.codahale.metrics.MetricRegistry;
-import com.github.ambry.commons.HelixStoreOperator;
+import com.github.ambry.clustermap.HelixStoreOperator;
 import com.github.ambry.commons.Notifier;
 import com.github.ambry.config.HelixAccountServiceConfig;
 import com.github.ambry.config.HelixPropertyStoreConfig;
 import com.github.ambry.config.VerifiableProperties;
 import com.github.ambry.utils.TestUtils;
 import com.github.ambry.utils.Utils;
+import com.github.ambry.utils.UtilsTest;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -94,6 +95,8 @@ public class HelixAccountServiceTest {
   private boolean refContainerEncryption;
   private boolean refContainerPreviousEncryption;
   private boolean refContainerMediaScanDisabled;
+  private boolean refContainerTtlRequired;
+  private String refReplicationPolicy;
   private short refParentAccountId;
   private AccountService accountService;
   private MockHelixAccountServiceFactory mockHelixAccountServiceFactory;
@@ -109,8 +112,7 @@ public class HelixAccountServiceTest {
         String.valueOf(ZK_CLIENT_CONNECTION_TIMEOUT_MS));
     helixConfigProps.setProperty(HelixPropertyStoreConfig.HELIX_PROPERTY_STORE_PREFIX + "zk.client.session.timeout.ms",
         String.valueOf(ZK_CLIENT_SESSION_TIMEOUT_MS));
-    helixConfigProps.setProperty(HelixPropertyStoreConfig.HELIX_PROPERTY_STORE_PREFIX + "zk.client.connect.string",
-        ZK_CONNECT_STRING);
+    helixConfigProps.setProperty(HelixAccountServiceConfig.ZK_CLIENT_CONNECT_STRING_KEY, ZK_CONNECT_STRING);
     helixConfigProps.setProperty(HelixPropertyStoreConfig.HELIX_PROPERTY_STORE_PREFIX + "root.path", STORE_ROOT_PATH);
     accountBackupDir = Paths.get(TestUtils.getTempDir("account-backup")).toAbsolutePath();
     helixConfigProps.setProperty(HelixAccountServiceConfig.BACKUP_DIRECTORY_KEY, accountBackupDir.toString());
@@ -141,7 +143,7 @@ public class HelixAccountServiceTest {
    * @throws Exception Any unexpected exception.
    */
   @Test
-  public void testStartUpWithoutMetadataExists() throws Exception {
+  public void testStartUpWithoutMetadataExists() {
     accountService = mockHelixAccountServiceFactory.getAccountService();
     // At time zero, no account metadata exists.
     assertEquals("The number of account in HelixAccountService is incorrect after clean startup", 0,
@@ -167,7 +169,7 @@ public class HelixAccountServiceTest {
    * exists on the {@code ZooKeeper}.
    */
   @Test
-  public void testCreateAccount() throws Exception {
+  public void testCreateAccount() {
     accountService = mockHelixAccountServiceFactory.getAccountService();
     assertEquals("The number of account in HelixAccountService is incorrect", 0,
         accountService.getAllAccounts().size());
@@ -224,6 +226,8 @@ public class HelixAccountServiceTest {
         containerBuilder.setStatus(
             container.getStatus().equals(ContainerStatus.ACTIVE) ? ContainerStatus.INACTIVE : ContainerStatus.ACTIVE);
         containerBuilder.setDescription(container.getDescription() + "--extra");
+        containerBuilder.setReplicationPolicy(container.getReplicationPolicy() + "---extra");
+        containerBuilder.setTtlRequired(!container.isTtlRequired());
         accountBuilder.addOrUpdateContainer(containerBuilder.build());
       }
       accountsToUpdate.add(accountBuilder.build());
@@ -657,7 +661,7 @@ public class HelixAccountServiceTest {
         new MockHelixAccountServiceFactory(vHelixConfigProps, new MetricRegistry(), notifier, updaterThreadPrefix);
     accountService = mockHelixAccountServiceFactory.getAccountService();
     CountDownLatch latch = new CountDownLatch(1);
-    mockHelixAccountServiceFactory.getHelixStore(storeConfig).setReadLatch(latch);
+    mockHelixAccountServiceFactory.getHelixStore(ZK_CONNECT_STRING, storeConfig).setReadLatch(latch);
     assertEquals("Wrong number of thread for account updater.", 1, numThreadsByThisName(updaterThreadPrefix));
     awaitLatchOrTimeout(latch, 100);
   }
@@ -666,10 +670,9 @@ public class HelixAccountServiceTest {
    * Tests disabling the background thread. By setting the polling interval to 0ms, the accounts should not be fetched.
    * Therefore, after the {@link HelixAccountService} starts, there should be a single get call to the
    * {@link HelixPropertyStore}.
-   * @throws Exception
    */
   @Test
-  public void testDisableBackgroundUpdater() throws Exception {
+  public void testDisableBackgroundUpdater() {
     helixConfigProps.setProperty(HelixAccountServiceConfig.UPDATER_POLLING_INTERVAL_MS_KEY, "0");
     vHelixConfigProps = new VerifiableProperties(helixConfigProps);
     storeConfig = new HelixPropertyStoreConfig(vHelixConfigProps);
@@ -797,13 +800,13 @@ public class HelixAccountServiceTest {
 
   /**
    * Pre-populates a collection of {@link Account}s to the underlying {@link org.apache.helix.store.HelixPropertyStore}
-   * using {@link com.github.ambry.commons.HelixStoreOperator} (not through the {@link HelixAccountService}). This method
+   * using {@link com.github.ambry.clustermap.HelixStoreOperator} (not through the {@link HelixAccountService}). This method
    * does not check any conflict among the {@link Account}s to write.
    * @throws Exception Any unexpected exception.
    */
   private void writeAccountsToHelixPropertyStore(Collection<Account> accounts, boolean shouldNotify) throws Exception {
     HelixStoreOperator storeOperator =
-        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(storeConfig));
+        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(ZK_CONNECT_STRING, storeConfig));
     ZNRecord zNRecord = new ZNRecord(String.valueOf(System.currentTimeMillis()));
     Map<String, String> accountMap = new HashMap<>();
     for (Account account : accounts) {
@@ -824,7 +827,7 @@ public class HelixAccountServiceTest {
    */
   private void writeZNRecordToHelixPropertyStore(ZNRecord zNRecord, boolean shouldNotify) throws Exception {
     HelixStoreOperator storeOperator =
-        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(storeConfig));
+        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(ZK_CONNECT_STRING, storeConfig));
     storeOperator.write(HelixAccountService.FULL_ACCOUNT_METADATA_PATH, zNRecord);
     if (shouldNotify) {
       notifier.publish(ACCOUNT_METADATA_CHANGE_TOPIC, FULL_ACCOUNT_METADATA_CHANGE_MESSAGE);
@@ -871,7 +874,7 @@ public class HelixAccountServiceTest {
    */
   private void deleteStoreIfExists() throws Exception {
     HelixStoreOperator storeOperator =
-        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(storeConfig));
+        new HelixStoreOperator(mockHelixAccountServiceFactory.getHelixStore(ZK_CONNECT_STRING, storeConfig));
     // check if the store exists by checking if root path (e.g., "/") exists in the store.
     if (storeOperator.exist("/")) {
       storeOperator.delete("/");
@@ -925,13 +928,19 @@ public class HelixAccountServiceTest {
     refContainerDescription = UUID.randomUUID().toString();
     refContainerCaching = random.nextBoolean();
     refParentAccountId = refAccountId;
-    // TODO make these randomly generated once V2 container writes are enabled
-    refContainerEncryption = Container.ENCRYPTED_DEFAULT_VALUE;
-    refContainerPreviousEncryption = Container.PREVIOUSLY_ENCRYPTED_DEFAULT_VALUE;
-    refContainerMediaScanDisabled = Container.MEDIA_SCAN_DISABLED_DEFAULT_VALUE;
+    refContainerEncryption = random.nextBoolean();
+    refContainerPreviousEncryption = refContainerEncryption || random.nextBoolean();
+    refContainerMediaScanDisabled = random.nextBoolean();
+    refReplicationPolicy = UtilsTest.getRandomString(10);
+    refContainerTtlRequired = random.nextBoolean();
     refContainer = new ContainerBuilder(refContainerId, refContainerName, refContainerStatus, refContainerDescription,
-        refContainerEncryption, refContainerPreviousEncryption, refContainerCaching, refContainerMediaScanDisabled,
-        refParentAccountId).build();
+        refParentAccountId).setEncrypted(refContainerEncryption)
+        .setPreviouslyEncrypted(refContainerPreviousEncryption)
+        .setCacheable(refContainerCaching)
+        .setMediaScanDisabled(refContainerMediaScanDisabled)
+        .setReplicationPolicy(refReplicationPolicy)
+        .setTtlRequired(refContainerTtlRequired)
+        .build();
     refAccount =
         new AccountBuilder(refAccountId, refAccountName, refAccountStatus).addOrUpdateContainer(refContainer).build();
     generateRefAccounts(idToRefAccountMap, idToRefContainerMap, accountIdSet, NUM_REF_ACCOUNT,

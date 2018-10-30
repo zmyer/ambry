@@ -38,13 +38,14 @@ public class GetResponse extends Response {
     private final List<PartitionResponseInfo> partitionResponseInfoList;
     private int partitionResponseInfoSize;
 
-    private static int Partition_Response_Info_List_Size = 4;
-    static final short GET_RESPONSE_VERSION_V_1 = 1;
-    static final short GET_RESPONSE_VERSION_V_2 = 2;
-    static final short GET_RESPONSE_VERSION_V_3 = 3;
-    static final short GET_RESPONSE_VERSION_V_4 = 4;
+  private static int Partition_Response_Info_List_Size = 4;
+  static final short GET_RESPONSE_VERSION_V_1 = 1;
+  static final short GET_RESPONSE_VERSION_V_2 = 2;
+  static final short GET_RESPONSE_VERSION_V_3 = 3;
+  static final short GET_RESPONSE_VERSION_V_4 = 4;
+  static final short GET_RESPONSE_VERSION_V_5 = 5;
 
-    static short CURRENT_VERSION = GET_RESPONSE_VERSION_V_4;
+  static short CURRENT_VERSION = GET_RESPONSE_VERSION_V_5;
 
     public GetResponse(int correlationId, String clientId, List<PartitionResponseInfo> partitionResponseInfoList,
             Send send, ServerErrorCode error) {

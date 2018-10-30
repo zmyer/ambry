@@ -31,6 +31,7 @@ import com.github.ambry.network.ResponseInfo;
 import com.github.ambry.protocol.GetRequest;
 import com.github.ambry.protocol.GetResponse;
 import com.github.ambry.protocol.PartitionResponseInfo;
+import com.github.ambry.store.MessageInfo;
 import com.github.ambry.utils.Time;
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +39,7 @@ import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +50,8 @@ import org.slf4j.LoggerFactory;
  * which is either the only chunk in the case of a simple blob, or the metadata chunk in the case of composite blobs.
  */
 class GetBlobInfoOperation extends GetOperation {
+  // whether the operationCallback has been called already.
+  private final AtomicBoolean operationCallbackInvoked = new AtomicBoolean(false);
   // the callback to use to notify the router about events and state changes
   private final RouterCallback routerCallback;
   private final OperationTracker operationTracker;
@@ -77,23 +81,26 @@ class GetBlobInfoOperation extends GetOperation {
    * @param cryptoService {@link CryptoService} to assist in encryption or decryption
    * @param cryptoJobHandler {@link CryptoJobHandler} to assist in the execution of crypto jobs
    * @param time the Time instance to use.
+   * @param isEncrypted if encrypted bit set based on original string of a {@link BlobId}
    */
   GetBlobInfoOperation(RouterConfig routerConfig, NonBlockingRouterMetrics routerMetrics, ClusterMap clusterMap,
       ResponseHandler responseHandler, BlobId blobId, GetBlobOptionsInternal options,
       Callback<GetBlobResultInternal> callback, RouterCallback routerCallback, KeyManagementService kms,
-      CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time) {
+      CryptoService cryptoService, CryptoJobHandler cryptoJobHandler, Time time, boolean isEncrypted) {
     super(routerConfig, routerMetrics, clusterMap, responseHandler, blobId, options, callback,
         routerMetrics.getBlobInfoLocalColoLatencyMs, routerMetrics.getBlobInfoCrossColoLatencyMs,
-        routerMetrics.getBlobInfoPastDueCount, kms, cryptoService, cryptoJobHandler, time);
+        routerMetrics.getBlobInfoPastDueCount, kms, cryptoService, cryptoJobHandler, time, isEncrypted);
     this.routerCallback = routerCallback;
-    operationTracker = getOperationTracker(blobId.getPartition());
+    operationTracker = getOperationTracker(blobId.getPartition(), blobId.getDatacenterId());
     progressTracker = new ProgressTracker(operationTracker);
   }
 
   @Override
   void abort(Exception abortCause) {
-    NonBlockingRouter.completeOperation(null, getOperationCallback, null, abortCause);
-    operationCompleted = true;
+    if (operationCallbackInvoked.compareAndSet(false, true)) {
+      NonBlockingRouter.completeOperation(null, getOperationCallback, null, abortCause);
+      operationCompleted = true;
+    }
   }
 
   /**
@@ -275,7 +282,8 @@ class GetBlobInfoOperation extends GetOperation {
             onErrorResponse(getRequestInfo.replicaId);
           } else {
             MessageMetadata messageMetadata = partitionResponseInfo.getMessageMetadataList().get(0);
-            handleBody(getResponse.getInputStream(), messageMetadata);
+            MessageInfo messageInfo = partitionResponseInfo.getMessageInfoList().get(0);
+            handleBody(getResponse.getInputStream(), messageMetadata, messageInfo);
             operationTracker.onResponse(getRequestInfo.replicaId, true);
             if (RouterUtils.isRemoteReplica(routerConfig, getRequestInfo.replicaId)) {
               logger.trace("Cross colo request successful for remote replica in {} ",
@@ -290,7 +298,8 @@ class GetBlobInfoOperation extends GetOperation {
                 getRequestInfo.replicaId.getDataNodeId(), getError, getResponse.getCorrelationId());
           }
           processServerError(getError);
-          if (getError == ServerErrorCode.Blob_Deleted || getError == ServerErrorCode.Blob_Expired) {
+          if (getError == ServerErrorCode.Blob_Deleted || getError == ServerErrorCode.Blob_Expired
+              || getError == ServerErrorCode.Blob_Authorization_Failure) {
             // this is a successful response and one that completes the operation regardless of whether the
             // success target has been reached or not.
             operationCompleted = true;
@@ -302,6 +311,7 @@ class GetBlobInfoOperation extends GetOperation {
     } else {
       logger.trace("Replica {} returned an error {} for a GetBlobInfoRequest with response correlationId : {} ",
           getRequestInfo.replicaId.getDataNodeId(), getError, getResponse.getCorrelationId());
+      processServerError(getError);
       onErrorResponse(getRequestInfo.replicaId);
     }
   }
@@ -321,13 +331,15 @@ class GetBlobInfoOperation extends GetOperation {
    * If decryption is required, submit a job for decryption.
    * @param payload the body of the response.
    * @param messageMetadata the {@link MessageMetadata} associated with the message.
+   * @param messageInfo the {@link MessageInfo} associated with the message.
    * @throws IOException if there is an IOException while deserializing the body.
    * @throws MessageFormatException if there is a MessageFormatException while deserializing the body.
    */
-  private void handleBody(InputStream payload, MessageMetadata messageMetadata)
+  private void handleBody(InputStream payload, MessageMetadata messageMetadata, MessageInfo messageInfo)
       throws IOException, MessageFormatException {
     ByteBuffer encryptionKey = messageMetadata == null ? null : messageMetadata.getEncryptionKey();
     serverBlobProperties = MessageFormatRecord.deserializeBlobProperties(payload);
+    updateTtlIfRequired(serverBlobProperties, messageInfo);
     ByteBuffer userMetadata = MessageFormatRecord.deserializeUserMetadata(payload);
     if (encryptionKey == null) {
       // if blob is not encrypted, move the state to Complete
@@ -372,6 +384,11 @@ class GetBlobInfoOperation extends GetOperation {
    */
   private void processServerError(ServerErrorCode errorCode) {
     switch (errorCode) {
+      case Blob_Authorization_Failure:
+        logger.trace("Requested blob authorization failed");
+        setOperationException(
+            new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobAuthorizationFailure));
+        break;
       case Blob_Deleted:
         logger.trace("Requested blob was deleted");
         setOperationException(new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobDeleted));
@@ -383,6 +400,11 @@ class GetBlobInfoOperation extends GetOperation {
       case Blob_Not_Found:
         logger.trace("Requested blob was not found on this server");
         setOperationException(new RouterException("Server returned: " + errorCode, RouterErrorCode.BlobDoesNotExist));
+        break;
+      case Disk_Unavailable:
+      case Replica_Unavailable:
+        logger.trace("Disk or replica on which the requested blob resides is not accessible");
+        setOperationException(new RouterException("Server returned: " + errorCode, RouterErrorCode.AmbryUnavailable));
         break;
       default:
         setOperationException(
@@ -402,7 +424,7 @@ class GetBlobInfoOperation extends GetOperation {
       operationCompleted = true;
     }
 
-    if (operationCompleted) {
+    if (operationCompleted && operationCallbackInvoked.compareAndSet(false, true)) {
       Exception e = operationException.get();
       if (operationResult == null && e == null) {
         e = new RouterException("Operation failed, but exception was not set", RouterErrorCode.UnexpectedInternalError);
@@ -410,10 +432,10 @@ class GetBlobInfoOperation extends GetOperation {
       }
       if (e != null) {
         operationResult = null;
-        routerMetrics.onGetBlobError(e, options, blobId.isEncrypted());
+        routerMetrics.onGetBlobError(e, options, isEncrypted);
       }
       long operationLatencyMs = time.milliseconds() - submissionTimeMs;
-      if (blobId.isEncrypted()) {
+      if (isEncrypted) {
         routerMetrics.getEncryptedBlobInfoOperationLatencyMs.update(operationLatencyMs);
       } else {
         routerMetrics.getBlobInfoOperationLatencyMs.update(operationLatencyMs);

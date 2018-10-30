@@ -153,7 +153,17 @@ public enum RestServiceErrorCode {
   /**
    * There is insufficient capacity to service the request.
    */
-  InsufficientCapacity;
+  InsufficientCapacity,
+
+  /**
+   * The conditions given in the request header fields evaluated to false.
+   */
+  PreconditionFailed,
+
+  /**
+   * Action not allowed
+   */
+  NotAllowed;
 
   /**
    * Gets the RestServiceErrorCode that corresponds to the {@code routerErrorCode}.
@@ -170,8 +180,12 @@ public enum RestServiceErrorCode {
       case BlobDeleted:
       case BlobExpired:
         return Deleted;
+      case BlobAuthorizationFailure:
+        return AccessDenied;
       case BlobDoesNotExist:
         return NotFound;
+      case BlobUpdateNotAllowed:
+        return NotAllowed;
       case RangeNotSatisfiable:
         return RangeNotSatisfiable;
       case OperationTimedOut:

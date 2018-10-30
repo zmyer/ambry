@@ -14,6 +14,8 @@
 package com.github.ambry.clustermap;
 
 import com.codahale.metrics.MetricRegistry;
+import com.github.ambry.commons.ResponseHandler;
+import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.config.VerifiableProperties;
 import java.net.InetAddress;
@@ -33,6 +35,20 @@ import static org.junit.Assert.*;
 
 public class TestUtils {
 
+  static final String DEFAULT_PARTITION_CLASS = "defaultPartitionClass";
+  static final int DEFAULT_XID = 64;
+
+  enum ReplicaStateType {
+    SealedState, StoppedState
+  }
+
+  /**
+   * Resource state associated with datanode, disk and replica.
+   */
+  enum ResourceState {
+    Node_Up, Node_Down, Disk_Up, Disk_Down, Replica_Up, Replica_Down
+  }
+
   public static String getLocalHost() {
     try {
       return InetAddress.getByName("localhost").getCanonicalHostName().toLowerCase();
@@ -46,7 +62,7 @@ public class TestUtils {
       throws JSONException {
     JSONObject jsonObject = new JSONObject();
     jsonObject.put("mountPath", mountPath);
-    jsonObject.put("hardwareState", hardwareState);
+    jsonObject.put("hardwareState", hardwareState.name());
     jsonObject.put("capacityInBytes", capacityInBytes);
     return jsonObject;
   }
@@ -76,7 +92,8 @@ public class TestUtils {
     JSONObject jsonObject = new JSONObject();
     jsonObject.put("hostname", hostname);
     jsonObject.put("port", port);
-    jsonObject.put("hardwareState", hardwareState);
+    jsonObject.put("xid", DEFAULT_XID);
+    jsonObject.put("hardwareState", hardwareState.name());
     jsonObject.put("disks", disks);
     return jsonObject;
   }
@@ -87,7 +104,8 @@ public class TestUtils {
     jsonObject.put("hostname", hostname);
     jsonObject.put("port", port);
     jsonObject.put("sslport", sslPort);
-    jsonObject.put("hardwareState", hardwareState);
+    jsonObject.put("xid", DEFAULT_XID);
+    jsonObject.put("hardwareState", hardwareState.name());
     jsonObject.put("disks", disks);
     return jsonObject;
   }
@@ -99,19 +117,21 @@ public class TestUtils {
    * @param port the plaintext port number for the node
    * @param sslPort the ssl port number for the node
    * @param rackId the rack ID for the node
+   * @param xid the xid for the node
    * @param hardwareState A {@link HardwareState} value for the node
    * @param disks an array of disks belonging to the node
    * @return a {@link JSONObject) representing the node with the properties passed into the function
    * @throws JSONException
    */
-  public static JSONObject getJsonDataNode(String hostname, int port, int sslPort, long rackId,
+  public static JSONObject getJsonDataNode(String hostname, int port, int sslPort, long rackId, long xid,
       HardwareState hardwareState, JSONArray disks) throws JSONException {
     JSONObject jsonObject = new JSONObject();
     jsonObject.put("hostname", hostname);
     jsonObject.put("port", port);
     jsonObject.put("sslport", sslPort);
-    jsonObject.put("rackId", rackId);
-    jsonObject.put("hardwareState", hardwareState);
+    jsonObject.put("rackId", Long.toString(rackId));
+    jsonObject.put("xid", xid);
+    jsonObject.put("hardwareState", hardwareState.name());
     jsonObject.put("disks", disks);
     return jsonObject;
   }
@@ -173,7 +193,8 @@ public class TestUtils {
       int numRacks, HardwareState hardwareState, JSONArray disks) throws JSONException {
     JSONArray jsonArray = new JSONArray();
     for (int i = 0; i < dataNodeCount; ++i) {
-      jsonArray.put(getJsonDataNode(hostname, basePort + i, sslPort + i, i % numRacks, hardwareState, disks));
+      jsonArray.put(
+          getJsonDataNode(hostname, basePort + i, sslPort + i, i % numRacks, DEFAULT_XID, hardwareState, disks));
     }
     return jsonArray;
   }
@@ -194,7 +215,8 @@ public class TestUtils {
   private static void updateJsonArrayDataNodesRackAware(JSONArray dataNodeJsonArray, int dataNodeCount, String hostname,
       int basePort, int sslPort, int numRacks, HardwareState hardwareState, JSONArray disks) throws JSONException {
     for (int i = dataNodeJsonArray.length(); i < dataNodeCount; ++i) {
-      dataNodeJsonArray.put(getJsonDataNode(hostname, basePort + i, sslPort + i, i % numRacks, hardwareState, disks));
+      dataNodeJsonArray.put(
+          getJsonDataNode(hostname, basePort + i, sslPort + i, i % numRacks, DEFAULT_XID, hardwareState, disks));
     }
   }
 
@@ -218,7 +240,7 @@ public class TestUtils {
     JSONArray jsonArray = new JSONArray();
     for (int i = 0; i < dataNodeCount; ++i) {
       JSONObject jsonDataNode =
-          (i % 2 == 0) ? getJsonDataNode(hostname, basePort + i, sslPort + i, i, hardwareState, disks)
+          (i % 2 == 0) ? getJsonDataNode(hostname, basePort + i, sslPort + i, i, DEFAULT_XID, hardwareState, disks)
               : getJsonDataNode(hostname, basePort + i, sslPort + i, hardwareState, disks);
       jsonArray.put(jsonDataNode);
     }
@@ -300,23 +322,24 @@ public class TestUtils {
     return jsonArray;
   }
 
-  public static JSONObject getJsonPartition(long id, PartitionState partitionState, long replicaCapacityInBytes,
-      JSONArray replicas) throws JSONException {
+  public static JSONObject getJsonPartition(long id, String partitionClass, PartitionState partitionState,
+      long replicaCapacityInBytes, JSONArray replicas) throws JSONException {
     JSONObject jsonObject = new JSONObject();
     jsonObject.put("id", id);
-    jsonObject.put("partitionState", partitionState);
+    jsonObject.put("partitionClass", partitionClass);
+    jsonObject.put("partitionState", partitionState.name());
     jsonObject.put("replicaCapacityInBytes", replicaCapacityInBytes);
     jsonObject.put("replicas", replicas);
     return jsonObject;
   }
 
-  public static JSONArray getJsonPartitions(long partitionCount, PartitionState partitionState,
+  public static JSONArray getJsonPartitions(long partitionCount, String partitionClass, PartitionState partitionState,
       long replicaCapacityInBytes, int replicaCountPerDc, TestHardwareLayout testHardwareLayout) throws JSONException {
     JSONArray jsonArray = new JSONArray();
     for (int i = 0; i < partitionCount; i++) {
       JSONArray jsonReplicas =
           TestUtils.getJsonArrayReplicas(testHardwareLayout.getIndependentDisks(replicaCountPerDc));
-      jsonArray.put(getJsonPartition(i, partitionState, replicaCapacityInBytes, jsonReplicas));
+      jsonArray.put(getJsonPartition(i, partitionClass, partitionState, replicaCapacityInBytes, jsonReplicas));
     }
     return jsonArray;
   }
@@ -326,19 +349,21 @@ public class TestUtils {
    * partitionCount is greater.
    * @param jsonArray The {@link JSONArray} to update.
    * @param newPartitionCount The count of partitions to maintain.
+   * @param partitionClass The class to which the new partitions are to be added.
    * @param partitionState The state in which the new partitions are to be added.
    * @param replicaCapacityInBytes The capacity with which the replicas need to be configured.
    * @param replicaCountPerDc The number of replicas for this partition in each and every datacenter.
    * @param testHardwareLayout The {@link TestHardwareLayout} containing the layout of disks and datanodes.
    * @throws JSONException if there is an exception parsing or constructing JSON.
    */
-  static void updateJsonPartitions(JSONArray jsonArray, long newPartitionCount, PartitionState partitionState,
-      long replicaCapacityInBytes, int replicaCountPerDc, TestHardwareLayout testHardwareLayout) throws JSONException {
+  static void updateJsonPartitions(JSONArray jsonArray, long newPartitionCount, String partitionClass,
+      PartitionState partitionState, long replicaCapacityInBytes, int replicaCountPerDc,
+      TestHardwareLayout testHardwareLayout) throws JSONException {
     int currentPartitionCount = jsonArray.length();
     for (long i = currentPartitionCount; i < newPartitionCount; i++) {
       JSONArray jsonReplicas =
           TestUtils.getJsonArrayReplicas(testHardwareLayout.getIndependentDisks(replicaCountPerDc));
-      jsonArray.put(getJsonPartition(i, partitionState, replicaCapacityInBytes, jsonReplicas));
+      jsonArray.put(getJsonPartition(i, partitionClass, partitionState, replicaCapacityInBytes, jsonReplicas));
     }
   }
 
@@ -348,7 +373,7 @@ public class TestUtils {
     for (int i = 0; i < partitionCount; i++) {
       JSONArray jsonReplicas =
           TestUtils.getJsonArrayReplicas(testHardwareLayout.getIndependentDisks(replicaCountPerDc));
-      jsonArray.put(getJsonPartition(0, partitionState, replicaCapacityInBytes, jsonReplicas));
+      jsonArray.put(getJsonPartition(0, DEFAULT_PARTITION_CLASS, partitionState, replicaCapacityInBytes, jsonReplicas));
     }
     return jsonArray;
   }
@@ -363,7 +388,7 @@ public class TestUtils {
         disks.add(randomDisk);
       }
       JSONArray jsonReplicas = TestUtils.getJsonArrayReplicas(disks);
-      jsonArray.put(getJsonPartition(i, partitionState, replicaCapacityInBytes, jsonReplicas));
+      jsonArray.put(getJsonPartition(i, DEFAULT_PARTITION_CLASS, partitionState, replicaCapacityInBytes, jsonReplicas));
     }
     return jsonArray;
   }
@@ -373,7 +398,8 @@ public class TestUtils {
     JSONArray jsonArray = new JSONArray();
     for (int i = 0; i < partitionCount; i++) {
       JSONArray jsonReplicas = TestUtils.getJsonArrayReplicas(testHardwareLayout.getIndependentDisks(replicaCount));
-      jsonArray.put(getJsonPartition(i + 10, partitionState, replicaCapacityInBytes, jsonReplicas));
+      jsonArray.put(
+          getJsonPartition(i + 10, DEFAULT_PARTITION_CLASS, partitionState, replicaCapacityInBytes, jsonReplicas));
     }
     return jsonArray;
   }
@@ -386,6 +412,124 @@ public class TestUtils {
     jsonObject.put("partitionIdFactory", partitionCount);
     jsonObject.put("partitions", partitions);
     return jsonObject;
+  }
+
+  /**
+   * Checks that each of the partitions in {@code partitionIds} belongs to one of the ranges defined by
+   * {@code checkParamsList}.
+   * @param partitionIds the partitions to check.
+   * @param checkParamsList the list of ranges/types that the partitions in {@code partitionIds} can belong to.
+   */
+  static void checkReturnedPartitions(List<? extends PartitionId> partitionIds,
+      List<PartitionRangeCheckParams> checkParamsList) {
+    int expectedPartitionCount = 0;
+    for (PartitionRangeCheckParams checkParams : checkParamsList) {
+      expectedPartitionCount += checkParams.count;
+    }
+    assertEquals("Returned partition count not as expected", expectedPartitionCount, partitionIds.size());
+    for (PartitionId partitionId : partitionIds) {
+      int partId = Integer.parseInt(partitionId.toPathString());
+      PartitionRangeCheckParams selectedCheckParams = null;
+      for (PartitionRangeCheckParams checkParams : checkParamsList) {
+        if (partId >= checkParams.rangeStart && partId <= checkParams.rangeEnd) {
+          selectedCheckParams = checkParams;
+          break;
+        }
+      }
+      assertNotNull("Partition ID [" + partId + "] is not in any of the specified ranges", selectedCheckParams);
+      assertEquals("Partition class not as expected", selectedCheckParams.expectedClass,
+          partitionId.getPartitionClass());
+      assertEquals("Partition state not as expected", selectedCheckParams.expectedState,
+          partitionId.getPartitionState());
+    }
+  }
+
+  /**
+   * The helper method sets up initial states for datanode, disk and replica. Then it triggers specified server event and
+   * verifies the states of datanode, disk and replica are expected after event.
+   * @param clusterManager the {@link ClusterMap} to use.
+   * @param clusterMapConfig the {@link ClusterMapConfig} to use.
+   * @param initialStates the initial states for datanode, disk and replica (default order).
+   * @param serverErrorCode the {@link ServerErrorCode} received for mocking event.
+   * @param expectedStates the expected states for datanode, disk and replica (default order).
+   */
+  static void mockServerEventsAndVerify(ClusterMap clusterManager, ClusterMapConfig clusterMapConfig,
+      ResourceState[] initialStates, ServerErrorCode serverErrorCode, ResourceState[] expectedStates) {
+    ResponseHandler handler = new ResponseHandler(clusterManager);
+    ReplicaId replica = clusterManager.getWritablePartitionIds(null).get(0).getReplicaIds().get(0);
+    DataNodeId dataNode = replica.getDataNodeId();
+    assertTrue(clusterManager.getReplicaIds(dataNode).contains(replica));
+    DiskId disk = replica.getDiskId();
+
+    // Verify that everything is up in the beginning.
+    assertFalse(replica.isDown());
+    assertEquals(HardwareState.AVAILABLE, dataNode.getState());
+    assertEquals(HardwareState.AVAILABLE, disk.getState());
+
+    // Mock initial states for node, disk and replica
+    if (initialStates[0] == ResourceState.Node_Down) {
+      for (int i = 0; i < clusterMapConfig.clusterMapFixedTimeoutDatanodeErrorThreshold; i++) {
+        clusterManager.onReplicaEvent(replica, ReplicaEventType.Node_Timeout);
+      }
+    }
+    if (initialStates[1] == ResourceState.Disk_Down) {
+      for (int i = 0; i < clusterMapConfig.clusterMapFixedTimeoutDiskErrorThreshold; i++) {
+        clusterManager.onReplicaEvent(replica, ReplicaEventType.Disk_Error);
+      }
+    }
+    if (initialStates[2] == ResourceState.Replica_Down) {
+      for (int i = 0; i < clusterMapConfig.clusterMapFixedTimeoutReplicaErrorThreshold; i++) {
+        clusterManager.onReplicaEvent(replica, ReplicaEventType.Replica_Unavailable);
+      }
+    }
+
+    // Make sure node, disk and replica match specified initial states
+    if (dataNode.getState() == HardwareState.AVAILABLE && disk.getState() == HardwareState.AVAILABLE) {
+      // Since replica.isDown() will check the state of disk, if we try to mock disk is down and replica is up, we should
+      // skip this check for initial state. Only when node and disk are up, we check the initial state of replica.
+      assertEquals(initialStates[2], replica.isDown() ? ResourceState.Replica_Down : ResourceState.Replica_Up);
+    }
+    if (dataNode.getState() == HardwareState.AVAILABLE) {
+      assertEquals(initialStates[1],
+          disk.getState() == HardwareState.UNAVAILABLE ? ResourceState.Disk_Down : ResourceState.Disk_Up);
+    }
+    assertEquals(initialStates[0],
+        dataNode.getState() == HardwareState.UNAVAILABLE ? ResourceState.Node_Down : ResourceState.Node_Up);
+
+    // Trigger server event
+    handler.onEvent(replica, serverErrorCode);
+
+    // Verify node, disk and replica match expected states after server event
+    assertEquals(expectedStates[2], replica.isDown() ? ResourceState.Replica_Down : ResourceState.Replica_Up);
+    assertEquals(expectedStates[1],
+        disk.getState() == HardwareState.UNAVAILABLE ? ResourceState.Disk_Down : ResourceState.Disk_Up);
+    assertEquals(expectedStates[0],
+        dataNode.getState() == HardwareState.UNAVAILABLE ? ResourceState.Node_Down : ResourceState.Node_Up);
+  }
+
+  /**
+   * Class that represents the params to check for a given partition.
+   */
+  static class PartitionRangeCheckParams {
+    final int rangeStart;
+    final int rangeEnd;
+    final int count;
+    final String expectedClass;
+    final PartitionState expectedState;
+
+    /**
+     * @param rangeStart start of the range of partitions.
+     * @param count the number of partitions in the range.
+     * @param expectedClass the expected class of all of the partitions
+     * @param expectedState the expected state of all of the partitions
+     */
+    PartitionRangeCheckParams(int rangeStart, int count, String expectedClass, PartitionState expectedState) {
+      this.rangeStart = rangeStart;
+      this.rangeEnd = rangeStart + count - 1;
+      this.count = count;
+      this.expectedClass = expectedClass;
+      this.expectedState = expectedState;
+    }
   }
 
   public static class TestHardwareLayout {
@@ -409,6 +553,8 @@ public class TestUtils {
     private Properties properties;
 
     private HardwareLayout hardwareLayout;
+
+    ClusterMapConfig clusterMapConfig;
 
     protected JSONArray getDisks() throws JSONException {
       return getJsonArrayDisks(diskCount, "/mnt", HardwareState.AVAILABLE, diskCapacityInBytes);
@@ -469,8 +615,9 @@ public class TestUtils {
       properties.setProperty("clustermap.cluster.name", "test");
       properties.setProperty("clustermap.datacenter.name", "dc1");
       properties.setProperty("clustermap.host.name", "localhost");
-      this.hardwareLayout = new HardwareLayout(getJsonHardwareLayout(clusterName, getDatacenters(true)),
-          new ClusterMapConfig(new VerifiableProperties(properties)));
+      clusterMapConfig = new ClusterMapConfig(new VerifiableProperties(properties));
+      this.hardwareLayout =
+          new HardwareLayout(getJsonHardwareLayout(clusterName, getDatacenters(true)), clusterMapConfig);
     }
 
     void addNewDataNodes(int i) throws JSONException {
@@ -531,12 +678,22 @@ public class TestUtils {
       return hardwareLayout.getDatacenters().get(new Random().nextInt(hardwareLayout.getDatacenters().size()));
     }
 
-    public DataNode getRandomDataNode() {
-      Datacenter datacenter = getRandomDatacenter();
+    public DataNode getRandomDataNodeFromDc(String dc) {
+      Datacenter datacenter = null;
+      for (Datacenter dcObj : hardwareLayout.getDatacenters()) {
+        if (dcObj.getName().equals(dc)) {
+          datacenter = dcObj;
+          break;
+        }
+      }
       if (datacenter == null || datacenter.getDataNodes().size() == 0) {
         return null;
       }
       return datacenter.getDataNodes().get(new Random().nextInt(datacenter.getDataNodes().size()));
+    }
+
+    public DataNode getRandomDataNode() {
+      return getRandomDataNodeFromDc(getRandomDatacenter().getName());
     }
 
     /**
@@ -626,46 +783,57 @@ public class TestUtils {
     private long version;
 
     protected JSONObject makeJsonPartitionLayout() throws JSONException {
+      return makeJsonPartitionLayout(DEFAULT_PARTITION_CLASS);
+    }
+
+    protected JSONObject makeJsonPartitionLayout(String partitionClass) throws JSONException {
       version = defaultVersion;
-      jsonPartitions = getJsonPartitions(partitionCount, partitionState, replicaCapacityInBytes, replicaCountPerDc,
-          testHardwareLayout);
+      jsonPartitions =
+          getJsonPartitions(partitionCount, partitionClass, partitionState, replicaCapacityInBytes, replicaCountPerDc,
+              testHardwareLayout);
       return getJsonPartitionLayout(testHardwareLayout.getHardwareLayout().getClusterName(), version, partitionCount,
           jsonPartitions);
     }
 
     /**
      * Return the partition layout as a {@link JSONObject}
+     * @param partitionClass the partition class that these partitions must belong to
+     * @param partitionState the state of the newly created partitions
      * @return the partition layout as a {@link JSONObject}
      * @throws JSONException if there is an exception parsing or constructing JSON.
      */
-    private JSONObject updateJsonPartitionLayout() throws JSONException {
+    private JSONObject updateJsonPartitionLayout(String partitionClass, PartitionState partitionState)
+        throws JSONException {
       version += 1;
-      updateJsonPartitions(jsonPartitions, partitionCount, partitionState, replicaCapacityInBytes, replicaCountPerDc,
-          testHardwareLayout);
+      updateJsonPartitions(jsonPartitions, partitionCount, partitionClass, partitionState, replicaCapacityInBytes,
+          replicaCountPerDc, testHardwareLayout);
       return getJsonPartitionLayout(testHardwareLayout.getHardwareLayout().getClusterName(), version, partitionCount,
           jsonPartitions);
     }
 
     public TestPartitionLayout(TestHardwareLayout testHardwareLayout, int partitionCount, PartitionState partitionState,
-        long replicaCapacityInBytes, int replicaCountPerDc) throws JSONException {
+        long replicaCapacityInBytes, int replicaCountPerDc, String localDc) throws JSONException {
       this.partitionCount = partitionCount;
       this.partitionState = partitionState;
       this.replicaCapacityInBytes = replicaCapacityInBytes;
       this.replicaCountPerDc = replicaCountPerDc;
 
       this.testHardwareLayout = testHardwareLayout;
-      this.partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), makeJsonPartitionLayout());
+      this.partitionLayout =
+          new PartitionLayout(testHardwareLayout.getHardwareLayout(), makeJsonPartitionLayout(), localDc);
       this.dcCount = testHardwareLayout.getHardwareLayout().getDatacenterCount();
     }
 
-    public TestPartitionLayout(TestHardwareLayout testHardwareLayout) throws JSONException {
+    public TestPartitionLayout(TestHardwareLayout testHardwareLayout, String localDc) throws JSONException {
       this(testHardwareLayout, defaultPartitionCount, defaultPartitionState, defaultReplicaCapacityInBytes,
-          defaultReplicaCount);
+          defaultReplicaCount, localDc);
     }
 
-    void addNewPartitions(int i) throws JSONException {
+    void addNewPartitions(int i, String partitionClass, PartitionState partitionState, String localDc)
+        throws JSONException {
       this.partitionCount += i;
-      this.partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), updateJsonPartitionLayout());
+      this.partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(),
+          updateJsonPartitionLayout(partitionClass, partitionState), localDc);
     }
 
     public PartitionLayout getPartitionLayout() {
@@ -711,7 +879,7 @@ public class TestUtils {
     }
 
     public TestPartitionLayoutWithDuplicatePartitions(TestHardwareLayout testHardwareLayout) throws JSONException {
-      super(testHardwareLayout);
+      super(testHardwareLayout, null);
     }
   }
 
@@ -726,7 +894,7 @@ public class TestUtils {
     }
 
     public TestPartitionLayoutWithDuplicateReplicas(TestHardwareLayout testHardwareLayout) throws JSONException {
-      super(testHardwareLayout);
+      super(testHardwareLayout, null);
     }
   }
 
@@ -734,13 +902,13 @@ public class TestUtils {
       long replicaCapacityInBytes) throws JSONException {
 
     TestUtils.TestHardwareLayout testHardwareLayout = new TestHardwareLayout("Alpha");
-    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout());
+    PartitionLayout partitionLayout = new PartitionLayout(testHardwareLayout.getHardwareLayout(), null);
 
     StaticClusterManager clusterMapManager = new StaticClusterManager(partitionLayout, null, new MetricRegistry());
     List<PartitionId> allocatedPartitions;
 
-    allocatedPartitions =
-        clusterMapManager.allocatePartitions(partitionCount, replicaCountPerDatacenter, replicaCapacityInBytes, true);
+    allocatedPartitions = clusterMapManager.allocatePartitions(partitionCount, MockClusterMap.DEFAULT_PARTITION_CLASS,
+        replicaCountPerDatacenter, replicaCapacityInBytes, true);
     assertEquals(allocatedPartitions.size(), 5);
 
     return clusterMapManager;
@@ -784,9 +952,9 @@ public class TestUtils {
    * @return return the constructed layout.
    */
   static TestPartitionLayout constructInitialPartitionLayoutJSON(TestHardwareLayout testHardwareLayout,
-      int partitionCount) throws JSONException {
+      int partitionCount, String localDc) throws JSONException {
     return new TestPartitionLayout(testHardwareLayout, partitionCount, PartitionState.READ_WRITE, 1024L * 1024 * 1024,
-        3);
+        3, localDc);
   }
 
   /**

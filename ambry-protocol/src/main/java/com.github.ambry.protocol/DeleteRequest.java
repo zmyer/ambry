@@ -28,13 +28,12 @@ import java.nio.channels.WritableByteChannel;
  */
 // TODO: 2018/4/20 by zmyer
 public class DeleteRequest extends RequestOrResponse {
-    private final BlobId blobId;
-    private final long deletionTimeInMs;
-    private final short version;
-    static final short DELETE_REQUEST_VERSION_1 = 1;
-    static final short DELETE_REQUEST_VERSION_2 = 2;
-    private final static short CURRENT_VERSION = DELETE_REQUEST_VERSION_2;
-    protected static final int DELETION_TIME_FIELD_SIZE_IN_BYTES = Long.BYTES;
+  private final BlobId blobId;
+  private final long deletionTimeInMs;
+  static final short DELETE_REQUEST_VERSION_1 = 1;
+  static final short DELETE_REQUEST_VERSION_2 = 2;
+  private final static short CURRENT_VERSION = DELETE_REQUEST_VERSION_2;
+  protected static final int DELETION_TIME_FIELD_SIZE_IN_BYTES = Long.BYTES;
 
     private int sizeSent;
 
@@ -49,21 +48,20 @@ public class DeleteRequest extends RequestOrResponse {
         this(correlationId, clientId, blobId, deletionTimeInMs, CURRENT_VERSION);
     }
 
-    /**
-     * Constructs {@link DeleteRequest} in {@link #DELETE_REQUEST_VERSION_2}
-     * @param correlationId correlationId of the delete request
-     * @param clientId clientId of the delete request
-     * @param blobId blobId of the delete request
-     * @param deletionTimeInMs deletion time of the blob in ms
-     * @param version version of the {@link DeleteRequest}
-     */
-    protected DeleteRequest(int correlationId, String clientId, BlobId blobId, long deletionTimeInMs, short version) {
-        super(RequestOrResponseType.DeleteRequest, version, correlationId, clientId);
-        this.version = version;
-        this.blobId = blobId;
-        this.deletionTimeInMs = deletionTimeInMs;
-        sizeSent = 0;
-    }
+  /**
+   * Constructs {@link DeleteRequest} in {@link #DELETE_REQUEST_VERSION_2}
+   * @param correlationId correlationId of the delete request
+   * @param clientId clientId of the delete request
+   * @param blobId blobId of the delete request
+   * @param deletionTimeInMs deletion time of the blob in ms
+   * @param version version of the {@link DeleteRequest}
+   */
+  protected DeleteRequest(int correlationId, String clientId, BlobId blobId, long deletionTimeInMs, short version) {
+    super(RequestOrResponseType.DeleteRequest, version, correlationId, clientId);
+    this.blobId = blobId;
+    this.deletionTimeInMs = deletionTimeInMs;
+    sizeSent = 0;
+  }
 
     public static DeleteRequest readFrom(DataInputStream stream, ClusterMap map) throws IOException {
         Short version = stream.readShort();
@@ -77,24 +75,24 @@ public class DeleteRequest extends RequestOrResponse {
         }
     }
 
-    @Override
-    public long writeTo(WritableByteChannel channel) throws IOException {
-        long written = 0;
-        if (bufferToSend == null) {
-            bufferToSend = ByteBuffer.allocate((int) sizeInBytes());
-            writeHeader();
-            bufferToSend.put(blobId.toBytes());
-            if (version == DELETE_REQUEST_VERSION_2) {
-                bufferToSend.putLong(deletionTimeInMs);
-            }
-            bufferToSend.flip();
-        }
-        if (bufferToSend.remaining() > 0) {
-            written = channel.write(bufferToSend);
-            sizeSent += written;
-        }
-        return written;
+  @Override
+  public long writeTo(WritableByteChannel channel) throws IOException {
+    long written = 0;
+    if (bufferToSend == null) {
+      bufferToSend = ByteBuffer.allocate((int) sizeInBytes());
+      writeHeader();
+      bufferToSend.put(blobId.toBytes());
+      if (versionId == DELETE_REQUEST_VERSION_2) {
+        bufferToSend.putLong(deletionTimeInMs);
+      }
+      bufferToSend.flip();
     }
+    if (bufferToSend.remaining() > 0) {
+      written = channel.write(bufferToSend);
+      sizeSent += written;
+    }
+    return written;
+  }
 
     @Override
     public boolean isSendComplete() {
@@ -117,16 +115,16 @@ public class DeleteRequest extends RequestOrResponse {
         return deletionTimeInMs;
     }
 
-    @Override
-    public long sizeInBytes() {
-        // header + blobId
-        long sizeInBytes = super.sizeInBytes() + blobId.sizeInBytes();
-        if (version == DELETE_REQUEST_VERSION_2) {
-            // deletion time
-            sizeInBytes += DELETION_TIME_FIELD_SIZE_IN_BYTES;
-        }
-        return sizeInBytes;
+  @Override
+  public long sizeInBytes() {
+    // header + blobId
+    long sizeInBytes = super.sizeInBytes() + blobId.sizeInBytes();
+    if (versionId == DELETE_REQUEST_VERSION_2) {
+      // deletion time
+      sizeInBytes += DELETION_TIME_FIELD_SIZE_IN_BYTES;
     }
+    return sizeInBytes;
+  }
 
     @Override
     public String toString() {

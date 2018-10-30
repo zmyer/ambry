@@ -26,21 +26,40 @@ import java.util.List;
 public interface ClusterParticipant extends AutoCloseable {
 
   /**
-   * Initialize the participant.
-   * @param hostname the hostname to use when registering as a participant.
-   * @param port the port to use when registering as a participant.
+   * Initiate the participation of cluster participant.
    * @param ambryHealthReports {@link List} of {@link AmbryHealthReport} to be registered to the participant.
    * @throws IOException
    */
-  void initialize(String hostname, int port, List<AmbryHealthReport> ambryHealthReports) throws IOException;
+  void participate(List<AmbryHealthReport> ambryHealthReports) throws IOException;
 
   /**
    * Set or reset the sealed state of the given replica.
-   * @param replicaId the {@link ReplicaId}
+   * @param replicaId the {@link ReplicaId} whose sealed state will be updated.
    * @param isSealed if true, the replica will be marked as sealed; otherwise it will be marked as read-write.
+   * @return {@code true} if set replica sealed state was successful. {@code false} if not.
    */
   // TODO: 2018/3/22 by zmyer
   boolean setReplicaSealedState(ReplicaId replicaId, boolean isSealed);
+
+  /**
+   * Set or reset the stopped state of the given replica.
+   * @param replicaIds a list of replicas whose stopped state will be updated
+   * @param markStop if true, the replica will be marked as stopped; otherwise it will be marked as started.
+   * @return {@code true} if set replica stopped state was successful. {@code false} if not.
+   */
+  boolean setReplicaStoppedState(List<ReplicaId> replicaIds, boolean markStop);
+
+  /**
+   * Get a list of replicas that are marked as sealed (read-only).
+   * @return a list of all sealed replicas.
+   */
+  List<String> getSealedReplicas();
+
+  /**
+   * Get a list of replicas that are marked as stopped.
+   * @return a list of all stopped replicas.
+   */
+  List<String> getStoppedReplicas();
 
   /**
    * Terminate the participant.

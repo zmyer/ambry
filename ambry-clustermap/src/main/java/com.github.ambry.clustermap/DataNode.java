@@ -18,6 +18,7 @@ import com.github.ambry.network.Port;
 import com.github.ambry.network.PortType;
 import com.github.ambry.utils.Utils;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -38,9 +39,7 @@ import static com.github.ambry.clustermap.ClusterMapUtils.*;
  * DataNode is uniquely identified by its hostname and port. A DataNode is in a {@link Datacenter}. A DataNode has zero
  * or more {@link Disk}s.
  */
-// TODO: 2018/3/20 by zmyer
-class DataNode extends DataNodeId {
-  //所属的数据中心
+class DataNode implements DataNodeId {
   private final Datacenter datacenter;
   //主机名
   private final String hostname;
@@ -54,9 +53,8 @@ class DataNode extends DataNodeId {
   private final long rawCapacityInBytes;
   //资源状态策略
   private final ResourceStatePolicy dataNodeStatePolicy;
-  //机架号
-  private final long rackId;
-  //SSL可用的数据中心集合
+  private final String rackId;
+  private final long xid;
   private final ArrayList<String> sslEnabledDataCenters;
   //集群配置
   private final ClusterMapConfig clusterMapConfig;
@@ -64,7 +62,9 @@ class DataNode extends DataNodeId {
   //日志对象
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  // TODO: 2018/3/21 by zmyer
+  private static final Comparator<DataNode> DATA_NODE_COMPARATOR = Comparator.comparingInt((DataNode k) -> k.portNum).
+      thenComparing(k -> k.hostname);
+
   DataNode(Datacenter datacenter, JSONObject jsonObject, ClusterMapConfig clusterMapConfig) throws JSONException {
     if (logger.isTraceEnabled()) {
       logger.trace("DataNode " + jsonObject.toString());
@@ -104,17 +104,9 @@ class DataNode extends DataNodeId {
     this.ports.put(PortType.PLAINTEXT, new Port(portNum, PortType.PLAINTEXT));
     //解析端口信息
     populatePorts(jsonObject);
+    this.rackId = jsonObject.optString("rackId", null);
+    this.xid = jsonObject.optLong("xid", ClusterMapUtils.DEFAULT_XID);
 
-    if (jsonObject.has("rackId")) {
-      //设置机架号
-      this.rackId = jsonObject.getLong("rackId");
-      if (this.rackId < 0) {
-        throw new IllegalStateException("Invalid rackId : " + this.rackId + " is less than 0");
-      }
-    } else {
-      this.rackId = UNKNOWN_RACK_ID;
-    }
-    //验证
     validate();
   }
 
@@ -225,11 +217,15 @@ class DataNode extends DataNodeId {
   }
 
   @Override
-  public long getRackId() {
+  public String getRackId() {
     return rackId;
   }
 
-  // TODO: 2018/3/21 by zmyer
+  @Override
+  public long getXid() {
+    return xid;
+  }
+
   protected void validateDatacenter() {
     if (datacenter == null) {
       throw new IllegalStateException("Datacenter cannot be null.");
@@ -280,11 +276,10 @@ class DataNode extends DataNodeId {
   JSONObject toJSONObject() throws JSONException {
     JSONObject jsonObject = new JSONObject().put("hostname", hostname).put("port", portNum);
     addSSLPortToJson(jsonObject);
-    if (rackId >= 0) {
-      jsonObject.put("rackId", getRackId());
-    }
+    jsonObject.putOpt("rackId", rackId);
+    jsonObject.putOpt("xid", xid);
     jsonObject.put("hardwareState",
-        dataNodeStatePolicy.isHardDown() ? HardwareState.UNAVAILABLE : HardwareState.AVAILABLE)
+        dataNodeStatePolicy.isHardDown() ? HardwareState.UNAVAILABLE.name() : HardwareState.AVAILABLE.name())
         .put("disks", new JSONArray());
     for (Disk disk : disks) {
       jsonObject.accumulate("disks", disk.toJSONObject());
@@ -341,10 +336,6 @@ class DataNode extends DataNodeId {
     }
 
     DataNode other = (DataNode) o;
-    int compare = (portNum < other.portNum) ? -1 : ((portNum == other.portNum) ? 0 : 1);
-    if (compare == 0) {
-      compare = hostname.compareTo(other.hostname);
-    }
-    return compare;
+    return DATA_NODE_COMPARATOR.compare(this, other);
   }
 }

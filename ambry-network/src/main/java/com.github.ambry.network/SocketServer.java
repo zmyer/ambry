@@ -113,19 +113,17 @@ public class SocketServer implements NetworkServer {
         throw new IllegalStateException("No SSL Port Exists for Server " + host + ":" + port);
     }
 
-    // TODO: 2018/4/20 by zmyer
-    private void initializeSSLFactory(SSLConfig sslConfig) {
-        if (ports.get(PortType.SSL) != null) {
-            try {
-                //创建SSL工厂对象
-                this.sslFactory = new SSLFactory(sslConfig);
-                metrics.sslFactoryInitializationCount.inc();
-            } catch (Exception e) {
-                metrics.sslFactoryInitializationErrorCount.inc();
-                throw new IllegalStateException("Exception thrown during initialization of SSLFactory ", e);
-            }
-        }
+  private void initializeSSLFactory(SSLConfig sslConfig) {
+    if (ports.get(PortType.SSL) != null) {
+      try {
+        this.sslFactory = SSLFactory.getNewInstance(sslConfig);
+        metrics.sslFactoryInitializationCount.inc();
+      } catch (Exception e) {
+        metrics.sslFactoryInitializationErrorCount.inc();
+        throw new IllegalStateException("Exception thrown during initialization of SSLFactory ", e);
+      }
     }
+  }
 
     public int getNumProcessorThreads() {
         return numProcessorThreads;

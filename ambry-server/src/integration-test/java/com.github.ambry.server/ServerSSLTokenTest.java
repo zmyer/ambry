@@ -23,8 +23,6 @@ import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
 import java.io.File;
 import java.io.IOException;
-import java.net.URISyntaxException;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -77,11 +75,12 @@ public class ServerSSLTokenTest {
     routerProps = new Properties();
     routerProps.setProperty("kms.default.container.key", TestUtils.getRandomKey(32));
     TestSSLUtils.addSSLProperties(routerProps, "DC1,DC2,DC3", SSLFactory.Mode.CLIENT, trustStoreFile, "router-client");
-    notificationSystem = new MockNotificationSystem(9);
-    sslCluster = new MockCluster(notificationSystem, serverSSLProps, false, SystemTime.getInstance());
+    sslCluster = new MockCluster(serverSSLProps, false, SystemTime.getInstance());
+    notificationSystem = new MockNotificationSystem(sslCluster.getClusterMap());
+    sslCluster.initializeServers(notificationSystem);
     sslCluster.startServers();
     //client
-    sslFactory = new SSLFactory(clientSSLConfig);
+    sslFactory = SSLFactory.getNewInstance(clientSSLConfig);
     SSLContext sslContext = sslFactory.getSSLContext();
     clientSSLSocketFactory = sslContext.getSocketFactory();
   }
@@ -91,20 +90,19 @@ public class ServerSSLTokenTest {
     long start = System.currentTimeMillis();
     // cleanup appears to hang sometimes. And, it sometimes takes a long time. Printing some info until cleanup is fast
     // and reliable.
-    System.out.println("About to invoke cluster.cleanup()");
+    System.out.println("ServerSSLTokenTest::About to invoke cluster.cleanup()");
     if (sslCluster != null) {
       sslCluster.cleanup();
     }
-    System.out.println("cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
+    System.out.println("ServerSSLTokenTest::cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
   }
 
   @Test
-  public void endToEndSSLReplicationWithMultiNodeSinglePartitionTest()
-      throws InterruptedException, IOException, InstantiationException, URISyntaxException, GeneralSecurityException {
+  public void endToEndSSLReplicationWithMultiNodeSinglePartitionTest() {
     DataNodeId dataNodeId = sslCluster.getClusterMap().getDataNodeIds().get(0);
     ArrayList<String> dataCenterList = new ArrayList<String>(Arrays.asList("DC1", "DC2", "DC3"));
     List<DataNodeId> dataNodes = sslCluster.getOneDataNodeFromEachDatacenter(dataCenterList);
-    ServerTestUtil.endToEndReplicationWithMultiNodeSinglePartitionTest("DC1", "DC2,DC3", dataNodeId.getPort(),
+    ServerTestUtil.endToEndReplicationWithMultiNodeSinglePartitionTest("DC1", dataNodeId.getPort(),
         new Port(dataNodes.get(0).getSSLPort(), PortType.SSL), new Port(dataNodes.get(1).getSSLPort(), PortType.SSL),
         new Port(dataNodes.get(2).getSSLPort(), PortType.SSL), sslCluster, clientSSLConfig, clientSSLSocketFactory,
         notificationSystem, routerProps, testEncryption);

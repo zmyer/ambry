@@ -77,8 +77,9 @@ public class RouterServerSSLTest {
     Properties routerProps = getRouterProperties("DC1");
     TestSSLUtils.addSSLProperties(routerProps, sslEnabledDataCentersStr, SSLFactory.Mode.CLIENT, trustStoreFile,
         "router-client");
-    MockNotificationSystem notificationSystem = new MockNotificationSystem(9);
-    sslCluster = new MockCluster(notificationSystem, serverSSLProps, false, SystemTime.getInstance());
+    sslCluster = new MockCluster(serverSSLProps, false, SystemTime.getInstance());
+    MockNotificationSystem notificationSystem = new MockNotificationSystem(sslCluster.getClusterMap());
+    sslCluster.initializeServers(notificationSystem);
     sslCluster.startServers();
     MockClusterMap routerClusterMap = sslCluster.getClusterMap();
     // MockClusterMap returns a new registry by default. This is to ensure that each node (server, router and so on,
@@ -93,11 +94,11 @@ public class RouterServerSSLTest {
   public static void cleanup() throws IOException {
     testFramework.cleanup();
     long start = System.currentTimeMillis();
-    System.out.println("About to invoke cluster.cleanup()");
+    System.out.println("RouterServerSSLTest::About to invoke cluster.cleanup()");
     if (sslCluster != null) {
       sslCluster.cleanup();
     }
-    System.out.println("cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
+    System.out.println("RouterServerSSLTest::cluster.cleanup() took " + (System.currentTimeMillis() - start) + " ms.");
   }
 
   @Before
@@ -135,6 +136,11 @@ public class RouterServerSSLTest {
         case 0:
           operations.add(OperationType.PUT);
           operations.add(OperationType.AWAIT_CREATION);
+          operations.add(OperationType.GET_AUTHORIZATION_FAILURE);
+          operations.add(OperationType.GET);
+          operations.add(OperationType.GET_INFO);
+          operations.add(OperationType.TTL_UPDATE);
+          operations.add(OperationType.AWAIT_TTL_UPDATE);
           operations.add(OperationType.GET);
           operations.add(OperationType.GET_INFO);
           operations.add(OperationType.DELETE);
@@ -147,6 +153,7 @@ public class RouterServerSSLTest {
         case 1:
           operations.add(OperationType.PUT);
           operations.add(OperationType.AWAIT_CREATION);
+          operations.add(OperationType.DELETE_AUTHORIZATION_FAILURE);
           operations.add(OperationType.DELETE);
           operations.add(OperationType.AWAIT_DELETION);
           operations.add(OperationType.GET_DELETED);
@@ -161,12 +168,17 @@ public class RouterServerSSLTest {
           operations.add(OperationType.AWAIT_CREATION);
           operations.add(OperationType.GET);
           operations.add(OperationType.GET);
+          operations.add(OperationType.GET_AUTHORIZATION_FAILURE);
+          operations.add(OperationType.GET);
+          operations.add(OperationType.GET_INFO);
+          operations.add(OperationType.TTL_UPDATE);
+          operations.add(OperationType.AWAIT_TTL_UPDATE);
           operations.add(OperationType.GET);
           operations.add(OperationType.GET_INFO);
           break;
       }
       int blobSize = random.nextInt(100 * 1024);
-      opChains.add(testFramework.startOperationChain(blobSize, i, operations));
+      opChains.add(testFramework.startOperationChain(blobSize, null, i, operations));
     }
     testFramework.checkOperationChains(opChains);
   }

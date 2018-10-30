@@ -29,7 +29,10 @@ import com.github.ambry.store.FindToken;
 import com.github.ambry.store.FindTokenFactory;
 import com.github.ambry.store.StorageManager;
 import com.github.ambry.store.Store;
+import com.github.ambry.store.StoreKeyConverter;
+import com.github.ambry.store.StoreKeyConverterFactory;
 import com.github.ambry.store.StoreKeyFactory;
+import com.github.ambry.store.Transformer;
 import com.github.ambry.utils.CrcInputStream;
 import com.github.ambry.utils.CrcOutputStream;
 import com.github.ambry.utils.SystemTime;
@@ -72,16 +75,17 @@ final class RemoteReplicaInfo {
     // tracks the point up to which a node is in sync with a remote replica
     private final long tokenPersistIntervalInMs;
 
-    // The latest known token
-    private FindToken currentToken = null;
-    // The token that will be safe to persist eventually
-    private FindToken candidateTokenToPersist = null;
-    // The time at which the candidate token is set
-    private long timeCandidateSetInMs;
-    // The token that is known to be safe to persist.
-    private FindToken tokenSafeToPersist = null;
-    private long totalBytesReadFromLocalStore;
-    private long localLagFromRemoteStore = -1;
+  // The latest known token
+  private FindToken currentToken = null;
+  // The token that will be safe to persist eventually
+  private FindToken candidateTokenToPersist = null;
+  // The time at which the candidate token is set
+  private long timeCandidateSetInMs;
+  // The token that is known to be safe to persist.
+  private FindToken tokenSafeToPersist = null;
+  private long totalBytesReadFromLocalStore;
+  private long localLagFromRemoteStore = -1;
+  private long reEnableReplicationTime = 0;
 
     // TODO: 2018/3/28 by zmyer
     RemoteReplicaInfo(ReplicaId replicaId, ReplicaId localReplicaId, Store localStore, FindToken token,
@@ -112,13 +116,29 @@ final class RemoteReplicaInfo {
         return this.port;
     }
 
-    long getRemoteLagFromLocalInBytes() {
-        if (localStore != null) {
-            return this.localStore.getSizeInBytes() - this.totalBytesReadFromLocalStore;
-        } else {
-            return 0;
-        }
+  /**
+   * Gets the time re-enable replication for this replica.
+   * @return time to re-enable replication in ms.
+   */
+  long getReEnableReplicationTime() {
+    return reEnableReplicationTime;
+  }
+
+  /**
+   * Sets the time to re-enable replication for this replica.
+   * @param reEnableReplicationTime time to re-enable replication in ms.
+   */
+  void setReEnableReplicationTime(long reEnableReplicationTime) {
+    this.reEnableReplicationTime = reEnableReplicationTime;
+  }
+
+  long getRemoteLagFromLocalInBytes() {
+    if (localStore != null) {
+      return this.localStore.getSizeInBytes() - this.totalBytesReadFromLocalStore;
+    } else {
+      return 0;
     }
+  }
 
     long getLocalLagFromRemoteInBytes() {
         return localLagFromRemoteStore;
@@ -262,75 +282,60 @@ final class PartitionInfo {
  */
 // TODO: 2018/3/19 by zmyer
 public class ReplicationManager {
-    //分区表
-    private final Map<PartitionId, PartitionInfo> partitionsToReplicate;
-    //分区组表
-    private final Map<String, List<PartitionInfo>> partitionGroupedByMountPath;
-    //分区配置
-    private final ReplicationConfig replicationConfig;
-    //查找token工厂
-    private final FindTokenFactory factory;
-    //集群对象
-    private final ClusterMap clusterMap;
-    //日志对象
-    private final Logger logger = LoggerFactory.getLogger(getClass());
-    //副本token持久化对象
-    private final ReplicaTokenPersistor persistor;
-    //调度对象
-    private final ScheduledExecutorService scheduler;
-    //id生成器
-    private final AtomicInteger correlationIdGenerator;
-    //数据节点id
-    private final DataNodeId dataNodeId;
-    //连接池对象
-    private final ConnectionPool connectionPool;
-    //分区日志统计对象
-    private final ReplicationMetrics replicationMetrics;
-    //通知系统
-    private final NotificationSystem notification;
-    //远端数据节点上的副本信息集合
-    private final Map<String, DataNodeRemoteReplicaInfos> dataNodeRemoteReplicaInfosPerDC;
-    //存储key工厂
-    private final StoreKeyFactory storeKeyFactory;
-    private final MetricRegistry metricRegistry;
-    //SSL可用的DC集合
-    private final List<String> sslEnabledDatacenters;
-    //副本线程池集合
-    private final Map<String, List<ReplicaThread>> replicaThreadPools;
-    //副本线程中副本的数量
-    private final Map<String, Integer> numberOfReplicaThreads;
+
+  private final Map<PartitionId, PartitionInfo> partitionsToReplicate;
+  private final Map<String, List<PartitionInfo>> partitionGroupedByMountPath;
+  private final ReplicationConfig replicationConfig;
+  private final FindTokenFactory factory;
+  private final ClusterMap clusterMap;
+  private final Logger logger = LoggerFactory.getLogger(getClass());
+  private final ReplicaTokenPersistor persistor;
+  private final ScheduledExecutorService scheduler;
+  private final AtomicInteger correlationIdGenerator;
+  private final DataNodeId dataNodeId;
+  private final ConnectionPool connectionPool;
+  private final ReplicationMetrics replicationMetrics;
+  private final NotificationSystem notification;
+  private final Map<String, DataNodeRemoteReplicaInfos> dataNodeRemoteReplicaInfosPerDC;
+  private final StoreKeyFactory storeKeyFactory;
+  private final MetricRegistry metricRegistry;
+  private final List<String> sslEnabledDatacenters;
+  private final Map<String, List<ReplicaThread>> replicaThreadPools;
+  private final Map<String, Integer> numberOfReplicaThreads;
+  private final StoreKeyConverterFactory storeKeyConverterFactory;
+  private final String transformerClassName;
 
     private static final String replicaTokenFileName = "replicaTokens";
     private static final short Crc_Size = 8;
     private static final short Replication_Delay_Multiplier = 5;
 
-    // TODO: 2018/3/28 by zmyer
-    public ReplicationManager(ReplicationConfig replicationConfig, ClusterMapConfig clusterMapConfig,
-            StoreConfig storeConfig, StorageManager storageManager, StoreKeyFactory storeKeyFactory,
-            ClusterMap clusterMap,
-            ScheduledExecutorService scheduler, DataNodeId dataNode, ConnectionPool connectionPool,
-            MetricRegistry metricRegistry, NotificationSystem requestNotification) throws ReplicationException {
-
-        try {
-            this.replicationConfig = replicationConfig;
-            this.storeKeyFactory = storeKeyFactory;
-            this.factory = Utils.getObj(replicationConfig.replicationTokenFactory, storeKeyFactory);
-            this.replicaThreadPools = new HashMap<>();
-            this.replicationMetrics = new ReplicationMetrics(metricRegistry, clusterMap.getReplicaIds(dataNode));
-            this.partitionGroupedByMountPath = new HashMap<>();
-            this.partitionsToReplicate = new HashMap<>();
-            this.clusterMap = clusterMap;
-            this.scheduler = scheduler;
-            this.persistor = new ReplicaTokenPersistor();
-            this.correlationIdGenerator = new AtomicInteger(0);
-            this.dataNodeId = dataNode;
-            List<? extends ReplicaId> replicaIds = clusterMap.getReplicaIds(dataNodeId);
-            this.connectionPool = connectionPool;
-            this.notification = requestNotification;
-            this.metricRegistry = metricRegistry;
-            this.dataNodeRemoteReplicaInfosPerDC = new HashMap<>();
-            this.sslEnabledDatacenters = Utils.splitString(clusterMapConfig.clusterMapSslEnabledDatacenters, ",");
-            this.numberOfReplicaThreads = new HashMap<>();
+  public ReplicationManager(ReplicationConfig replicationConfig, ClusterMapConfig clusterMapConfig,
+      StoreConfig storeConfig, StorageManager storageManager, StoreKeyFactory storeKeyFactory, ClusterMap clusterMap,
+      ScheduledExecutorService scheduler, DataNodeId dataNode, ConnectionPool connectionPool,
+      MetricRegistry metricRegistry, NotificationSystem requestNotification,
+      StoreKeyConverterFactory storeKeyConverterFactory, String transformerClassName) throws ReplicationException {
+    try {
+      this.replicationConfig = replicationConfig;
+      this.storeKeyFactory = storeKeyFactory;
+      this.factory = Utils.getObj(replicationConfig.replicationTokenFactory, storeKeyFactory);
+      this.replicaThreadPools = new HashMap<>();
+      this.replicationMetrics = new ReplicationMetrics(metricRegistry, clusterMap.getReplicaIds(dataNode));
+      this.partitionGroupedByMountPath = new HashMap<>();
+      this.partitionsToReplicate = new HashMap<>();
+      this.clusterMap = clusterMap;
+      this.scheduler = scheduler;
+      this.persistor = new ReplicaTokenPersistor();
+      this.correlationIdGenerator = new AtomicInteger(0);
+      this.dataNodeId = dataNode;
+      List<? extends ReplicaId> replicaIds = clusterMap.getReplicaIds(dataNodeId);
+      this.connectionPool = connectionPool;
+      this.notification = requestNotification;
+      this.metricRegistry = metricRegistry;
+      this.dataNodeRemoteReplicaInfosPerDC = new HashMap<>();
+      this.sslEnabledDatacenters = Utils.splitString(clusterMapConfig.clusterMapSslEnabledDatacenters, ",");
+      this.numberOfReplicaThreads = new HashMap<>();
+      this.storeKeyConverterFactory = storeKeyConverterFactory;
+      this.transformerClassName = transformerClassName;
 
             // initialize all partitions
             for (ReplicaId replicaId : replicaIds) {
@@ -517,19 +522,19 @@ public class ReplicationManager {
         return foundRemoteReplicaInfo;
     }
 
-    /**
-     * Shutsdown the replication manager. Shutsdown the individual replica threads and
-     * then persists all the replica tokens
-     * @throws ReplicationException
-     */
-    public void shutdown() throws ReplicationException {
-        try {
-            // stop all replica threads
-            for (Map.Entry<String, List<ReplicaThread>> replicaThreads : replicaThreadPools.entrySet()) {
-                for (ReplicaThread replicaThread : replicaThreads.getValue()) {
-                    replicaThread.shutdown();
-                }
-            }
+  /**
+   * Shutsdown the replication manager. Shutsdown the individual replica threads and
+   * then persists all the replica tokens
+   * @throws ReplicationException
+   */
+  public void shutdown() throws ReplicationException {
+    try {
+      // stop all replica threads
+      for (Map.Entry<String, List<ReplicaThread>> replicaThreads : replicaThreadPools.entrySet()) {
+        for (ReplicaThread replicaThread : replicaThreads.getValue()) {
+          replicaThread.shutdown();
+        }
+      }
 
             // persist replica tokens
             persistor.write(true);
@@ -568,36 +573,24 @@ public class ReplicationManager {
         dataNodeRemoteReplicaInfosPerDC.put(datacenter, dataNodeRemoteReplicaInfos);
     }
 
-    /**
-     * Partitions the list of data nodes between given set of replica threads for the given DC
-     */
-    // TODO: 2018/3/19 by zmyer
-    private void assignReplicasToThreadPool() {
-        //获取每个数据中心分区副本集合
-        Iterator<Map.Entry<String, DataNodeRemoteReplicaInfos>> mapIterator =
-                dataNodeRemoteReplicaInfosPerDC.entrySet().iterator();
-        while (mapIterator.hasNext()) {
-            Map.Entry<String, DataNodeRemoteReplicaInfos> mapEntry = mapIterator.next();
-            //获取数据中心
-            String datacenter = mapEntry.getKey();
-            //获取数据节点有关副本信息
-            DataNodeRemoteReplicaInfos dataNodeRemoteReplicaInfos = mapEntry.getValue();
-            //获取数据节点集合
-            Set<DataNodeId> dataNodesToReplicate = dataNodeRemoteReplicaInfos.getDataNodeIds();
-            //获取节点个数
-            int dataNodesCount = dataNodesToReplicate.size();
-            //获取副本线程数量
-            int replicaThreadCount = numberOfReplicaThreads.get(datacenter);
-            if (replicaThreadCount <= 0) {
-                logger.warn(
-                        "Number of replica threads is smaller or equal to 0, not starting any replica threads for {} ",
-                        datacenter);
-                return;
-            } else if (dataNodesCount == 0) {
-                logger.warn("Number of nodes to replicate from is 0, not starting any replica threads for {} ",
-                        datacenter);
-                return;
-            }
+  /**
+   * Partitions the list of data nodes between given set of replica threads for the given DC
+   */
+  private void assignReplicasToThreadPool() throws IOException {
+    for (Map.Entry<String, DataNodeRemoteReplicaInfos> mapEntry : dataNodeRemoteReplicaInfosPerDC.entrySet()) {
+      String datacenter = mapEntry.getKey();
+      DataNodeRemoteReplicaInfos dataNodeRemoteReplicaInfos = mapEntry.getValue();
+      Set<DataNodeId> dataNodesToReplicate = dataNodeRemoteReplicaInfos.getDataNodeIds();
+      int dataNodesCount = dataNodesToReplicate.size();
+      int replicaThreadCount = numberOfReplicaThreads.get(datacenter);
+      if (replicaThreadCount <= 0) {
+        logger.warn("Number of replica threads is smaller or equal to 0, not starting any replica threads for {} ",
+            datacenter);
+        continue;
+      } else if (dataNodesCount == 0) {
+        logger.warn("Number of nodes to replicate from is 0, not starting any replica threads for {} ", datacenter);
+        continue;
+      }
 
             // Divide the nodes between the replica threads if the number of replica threads is less than or equal to the
             // number of nodes. Otherwise, assign one thread to one node.
@@ -620,162 +613,136 @@ public class ReplicationManager {
 
             Iterator<DataNodeId> dataNodeIdIterator = dataNodesToReplicate.iterator();
 
-            for (int i = 0; i < replicaThreadCount; i++) {
-                // create the list of nodes for the replica thread
-                Map<DataNodeId, List<RemoteReplicaInfo>> replicasForThread =
-                        new HashMap<DataNodeId, List<RemoteReplicaInfo>>();
-                int nodesAssignedToThread = 0;
-                while (nodesAssignedToThread < numberOfNodesPerThread) {
-                    //获取数据节点id
-                    DataNodeId dataNodeToReplicate = dataNodeIdIterator.next();
-                    //将节点信息与对应的副本信息插入到当前线程需要处理集合中
-                    replicasForThread.put(dataNodeToReplicate,
-                            dataNodeRemoteReplicaInfos.getRemoteReplicaListForDataNode(dataNodeToReplicate));
-                    //删除
-                    dataNodeIdIterator.remove();
-                    //递增已分配的节点数目
-                    nodesAssignedToThread++;
-                }
-
-                //如果还有多余的节点
-                if (remainingNodes > 0) {
-                    //获取节点id
-                    DataNodeId dataNodeToReplicate = dataNodeIdIterator.next();
-                    //将节点id对应的副本信息插入到当前线程中
-                    replicasForThread.put(dataNodeToReplicate,
-                            dataNodeRemoteReplicaInfos.getRemoteReplicaListForDataNode(dataNodeToReplicate));
-                    dataNodeIdIterator.remove();
-                    remainingNodes--;
-                }
-                boolean replicatingOverSsl = sslEnabledDatacenters.contains(datacenter);
-                //创建线程标志
-                String threadIdentity =
-                        "Replica Thread-" + (dataNodeId.getDatacenterName().equals(datacenter) ? "Intra-" : "Inter") + i
-                                + datacenter;
-                //创建副本线程
-                ReplicaThread replicaThread =
-                        new ReplicaThread(threadIdentity, replicasForThread, factory, clusterMap,
-                                correlationIdGenerator,
-                                dataNodeId, connectionPool, replicationConfig, replicationMetrics, notification,
-                                storeKeyFactory,
-                                replicationConfig.replicationValidateMessageStream, metricRegistry, replicatingOverSsl,
-                                datacenter,
-                                responseHandler);
-                if (replicaThreadPools.containsKey(datacenter)) {
-                    //将当前的线程插入到集合中
-                    replicaThreadPools.get(datacenter).add(replicaThread);
-                } else {
-                    //将当前的线程插入到集合中
-                    replicaThreadPools.put(datacenter, new ArrayList<>(Arrays.asList(replicaThread)));
-                }
-            }
+      for (int i = 0; i < replicaThreadCount; i++) {
+        // create the list of nodes for the replica thread
+        Map<DataNodeId, List<RemoteReplicaInfo>> replicasForThread = new HashMap<DataNodeId, List<RemoteReplicaInfo>>();
+        int nodesAssignedToThread = 0;
+        while (nodesAssignedToThread < numberOfNodesPerThread) {
+          DataNodeId dataNodeToReplicate = dataNodeIdIterator.next();
+          replicasForThread.put(dataNodeToReplicate,
+              dataNodeRemoteReplicaInfos.getRemoteReplicaListForDataNode(dataNodeToReplicate));
+          dataNodeIdIterator.remove();
+          nodesAssignedToThread++;
         }
+        if (remainingNodes > 0) {
+          DataNodeId dataNodeToReplicate = dataNodeIdIterator.next();
+          replicasForThread.put(dataNodeToReplicate,
+              dataNodeRemoteReplicaInfos.getRemoteReplicaListForDataNode(dataNodeToReplicate));
+          dataNodeIdIterator.remove();
+          remainingNodes--;
+        }
+        boolean replicatingOverSsl = sslEnabledDatacenters.contains(datacenter);
+        String threadIdentity =
+            "Replica Thread-" + (dataNodeId.getDatacenterName().equals(datacenter) ? "Intra-" : "Inter") + i
+                + datacenter;
+        try {
+          StoreKeyConverter threadSpecificKeyConverter = storeKeyConverterFactory.getStoreKeyConverter();
+          Transformer threadSpecificTransformer =
+              Utils.getObj(transformerClassName, storeKeyFactory, threadSpecificKeyConverter);
+          ReplicaThread replicaThread =
+              new ReplicaThread(threadIdentity, replicasForThread, factory, clusterMap, correlationIdGenerator,
+                  dataNodeId, connectionPool, replicationConfig, replicationMetrics, notification,
+                  threadSpecificKeyConverter, threadSpecificTransformer, metricRegistry, replicatingOverSsl, datacenter,
+                  responseHandler, SystemTime.getInstance());
+          if (replicaThreadPools.containsKey(datacenter)) {
+            replicaThreadPools.get(datacenter).add(replicaThread);
+          } else {
+            replicaThreadPools.put(datacenter, new ArrayList<>(Arrays.asList(replicaThread)));
+          }
+        } catch (Exception e) {
+          throw new IOException("Encountered exception instantiating ReplicaThread", e);
+        }
+      }
     }
+  }
 
-    /**
-     * Reads the replica tokens from the file and populates the Remote replica info
-     * and persists the token file if necessary.
-     * @param mountPath The mount path where the replica tokens are stored
-     * @throws ReplicationException
-     * @throws IOException
-     */
-    // TODO: 2018/3/19 by zmyer
-    private void readFromFileAndPersistIfNecessary(String mountPath) throws ReplicationException, IOException {
-        logger.info("Reading replica tokens for mount path {}", mountPath);
-        long readStartTimeMs = SystemTime.getInstance().milliseconds();
-        //根据提供的挂载点信息，读取对应的token文件
-        File replicaTokenFile = new File(mountPath, replicaTokenFileName);
-        boolean tokenWasReset = false;
-        if (replicaTokenFile.exists()) {
-            CrcInputStream crcStream = new CrcInputStream(new FileInputStream(replicaTokenFile));
-            DataInputStream stream = new DataInputStream(crcStream);
-            try {
-                //读取版本信息
-                short version = stream.readShort();
-                switch (version) {
-                case 0:
-                    while (stream.available() > Crc_Size) {
-                        // read partition id
-                        //读取分区id
-                        PartitionId partitionId = clusterMap.getPartitionIdFromStream(stream);
-                        // read remote node host name
-                        //读取远程节点主机名
-                        String hostname = Utils.readIntString(stream);
-                        // read remote replica path
-                        //读取远程副本路径
-                        String replicaPath = Utils.readIntString(stream);
-                        // read remote port
-                        //读取远程节点端口号
-                        int port = stream.readInt();
-                        // read total bytes read from local store
-                        //读取总的字节数
-                        long totalBytesReadFromLocalStore = stream.readLong();
-                        // read replica token
-                        //读取副本token
-                        FindToken token = factory.getFindToken(stream);
-                        // update token
-                        //根据分区id获取分区信息
-                        PartitionInfo partitionInfo = partitionsToReplicate.get(partitionId);
-                        if (partitionInfo != null) {
-                            boolean updatedToken = false;
-                            for (RemoteReplicaInfo remoteReplicaInfo : partitionInfo.getRemoteReplicaInfos()) {
-                                //依次遍历每个远端的分区副本信息
-                                if (remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname().equalsIgnoreCase(
-                                        hostname)
-                                        && remoteReplicaInfo.getReplicaId().getDataNodeId().getPort() == port
-                                        && remoteReplicaInfo.getReplicaId().getReplicaPath().equals(replicaPath)) {
-                                    logger.info("Read token for partition {} remote host {} port {} token {}",
-                                            partitionId, hostname,
-                                            port, token);
-                                    if (partitionInfo.getStore().getSizeInBytes() > 0) {
-                                        //初始化远端副本token信息
-                                        remoteReplicaInfo.initializeTokens(token);
-                                        //更新远端副本本地存储的字节总数目
-                                        remoteReplicaInfo.setTotalBytesReadFromLocalStore(totalBytesReadFromLocalStore);
-                                    } else {
-                                        // if the local replica is empty, it could have been newly created. In this case, the offset in
-                                        // every peer replica which the local replica lags from should be set to 0, so that the local
-                                        // replica starts fetching from the beginning of the peer. The totalBytes the peer read from the
-                                        // local replica should also be set to 0. During initialization these values are already set to 0,
-                                        // so we let them be.
-                                        //重置副本token
-                                        tokenWasReset = true;
-                                        logTokenReset(partitionId, hostname, port, token);
-                                    }
-                                    updatedToken = true;
-                                    break;
-                                }
-                            }
-                            if (!updatedToken) {
-                                logger.warn("Persisted remote replica host {} and port {} not present in new cluster ",
-                                        hostname,
-                                        port);
-                            }
-                        } else {
-                            // If this partition was not found in partitionsToReplicate, it means that the local store corresponding
-                            // to this partition could not be started. In such a case, the tokens for its remote replicas should be
-                            // reset.
-                            tokenWasReset = true;
-                            logTokenReset(partitionId, hostname, port, token);
-                        }
+  /**
+   * Reads the replica tokens from the file and populates the Remote replica info
+   * and persists the token file if necessary.
+   * @param mountPath The mount path where the replica tokens are stored
+   * @throws ReplicationException
+   * @throws IOException
+   */
+  private void readFromFileAndPersistIfNecessary(String mountPath) throws ReplicationException, IOException {
+    logger.info("Reading replica tokens for mount path {}", mountPath);
+    long readStartTimeMs = SystemTime.getInstance().milliseconds();
+    File replicaTokenFile = new File(mountPath, replicaTokenFileName);
+    boolean tokenWasReset = false;
+    if (replicaTokenFile.exists()) {
+      CrcInputStream crcStream = new CrcInputStream(new FileInputStream(replicaTokenFile));
+      DataInputStream stream = new DataInputStream(crcStream);
+      try {
+        short version = stream.readShort();
+        switch (version) {
+          case 0:
+            while (stream.available() > Crc_Size) {
+              // read partition id
+              PartitionId partitionId = clusterMap.getPartitionIdFromStream(stream);
+              // read remote node host name
+              String hostname = Utils.readIntString(stream);
+              // read remote replica path
+              String replicaPath = Utils.readIntString(stream);
+              // read remote port
+              int port = stream.readInt();
+              // read total bytes read from local store
+              long totalBytesReadFromLocalStore = stream.readLong();
+              // read replica token
+              FindToken token = factory.getFindToken(stream);
+              // update token
+              PartitionInfo partitionInfo = partitionsToReplicate.get(partitionId);
+              if (partitionInfo != null) {
+                boolean updatedToken = false;
+                for (RemoteReplicaInfo remoteReplicaInfo : partitionInfo.getRemoteReplicaInfos()) {
+                  if (remoteReplicaInfo.getReplicaId().getDataNodeId().getHostname().equalsIgnoreCase(hostname)
+                      && remoteReplicaInfo.getReplicaId().getDataNodeId().getPort() == port
+                      && remoteReplicaInfo.getReplicaId().getReplicaPath().equals(replicaPath)) {
+                    logger.info("Read token for partition {} remote host {} port {} token {}", partitionId, hostname,
+                        port, token);
+                    if (!partitionInfo.getStore().isEmpty()) {
+                      remoteReplicaInfo.initializeTokens(token);
+                      remoteReplicaInfo.setTotalBytesReadFromLocalStore(totalBytesReadFromLocalStore);
+                    } else {
+                      // if the local replica is empty, it could have been newly created. In this case, the offset in
+                      // every peer replica which the local replica lags from should be set to 0, so that the local
+                      // replica starts fetching from the beginning of the peer. The totalBytes the peer read from the
+                      // local replica should also be set to 0. During initialization these values are already set to 0,
+                      // so we let them be.
+                      tokenWasReset = true;
+                      logTokenReset(partitionId, hostname, port, token);
                     }
-                    long crc = crcStream.getValue();
-                    if (crc != stream.readLong()) {
-                        throw new ReplicationException(
-                                "Crc check does not match for replica token file for mount path " + mountPath);
-                    }
+                    updatedToken = true;
                     break;
-                default:
-                    throw new ReplicationException("Invalid version in replica token file for mount path " + mountPath);
+                  }
                 }
-            } catch (IOException e) {
-                throw new ReplicationException("IO error while reading from replica token file " + e);
-            } finally {
-                stream.close();
-                replicationMetrics.remoteReplicaTokensRestoreTime.update(
-                        SystemTime.getInstance().milliseconds() - readStartTimeMs);
+                if (!updatedToken) {
+                  logger.warn("Persisted remote replica host {} and port {} not present in new cluster ", hostname,
+                      port);
+                }
+              } else {
+                // If this partition was not found in partitionsToReplicate, it means that the local store corresponding
+                // to this partition could not be started. In such a case, the tokens for its remote replicas should be
+                // reset.
+                tokenWasReset = true;
+                logTokenReset(partitionId, hostname, port, token);
+              }
             }
+            long crc = crcStream.getValue();
+            if (crc != stream.readLong()) {
+              throw new ReplicationException(
+                  "Crc check does not match for replica token file for mount path " + mountPath);
+            }
+            break;
+          default:
+            throw new ReplicationException("Invalid version in replica token file for mount path " + mountPath);
         }
+      } catch (IOException e) {
+        throw new ReplicationException("IO error while reading from replica token file " + e);
+      } finally {
+        stream.close();
+        replicationMetrics.remoteReplicaTokensRestoreTime.update(
+            SystemTime.getInstance().milliseconds() - readStartTimeMs);
+      }
+    }
 
         if (tokenWasReset) {
             // We must ensure that the the token file is persisted if any of the tokens in the file got reset. We need to do

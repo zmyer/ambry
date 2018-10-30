@@ -13,6 +13,7 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.BlobIdFactory;
@@ -45,6 +46,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -161,7 +163,7 @@ public class GetBlobOperationTest {
   @Parameterized.Parameters
   public static List<Object[]> data() {
     return Arrays.asList(
-        new Object[][]{{SimpleOperationTracker.class.getSimpleName(), false}, {SimpleOperationTracker.class.getSimpleName(), true}, {AdaptiveOperationTracker.class.getSimpleName(), false}});
+        new Object[][]{{SimpleOperationTracker.class.getSimpleName(), false}, {AdaptiveOperationTracker.class.getSimpleName(), false}, {AdaptiveOperationTracker.class.getSimpleName(), true}});
   }
 
   /**
@@ -185,7 +187,8 @@ public class GetBlobOperationTest {
     routerMetrics = new NonBlockingRouterMetrics(mockClusterMap);
     options = new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet);
     mockServerLayout = new MockServerLayout(mockClusterMap);
-    replicasCount = mockClusterMap.getWritablePartitionIds().get(0).getReplicaIds().size();
+    replicasCount =
+        mockClusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0).getReplicaIds().size();
     responseHandler = new ResponseHandler(mockClusterMap);
     MockNetworkClientFactory networkClientFactory =
         new MockNetworkClientFactory(vprops, mockSelectorState, MAX_PORTS_PLAIN_TEXT, MAX_PORTS_SSL,
@@ -197,7 +200,8 @@ public class GetBlobOperationTest {
       cryptoJobHandler = new CryptoJobHandler(CryptoJobHandlerTest.DEFAULT_THREAD_COUNT);
     }
     router = new NonBlockingRouter(routerConfig, new NonBlockingRouterMetrics(mockClusterMap), networkClientFactory,
-        new LoggingNotificationSystem(), mockClusterMap, kms, cryptoService, cryptoJobHandler, time);
+        new LoggingNotificationSystem(), mockClusterMap, kms, cryptoService, cryptoJobHandler,
+        new InMemAccountService(false, true), time, MockClusterMap.DEFAULT_PARTITION_CLASS);
     mockNetworkClient = networkClientFactory.getMockNetworkClient();
     routerCallback = new RouterCallback(mockNetworkClient, new ArrayList<BackgroundDeleteRequest>());
   }
@@ -216,7 +220,7 @@ public class GetBlobOperationTest {
     putContent = new byte[blobSize];
     random.nextBytes(putContent);
     ReadableStreamChannel putChannel = new ByteBufferReadableStreamChannel(ByteBuffer.wrap(putContent));
-    blobIdStr = router.putBlob(blobProperties, userMetadata, putChannel).get();
+    blobIdStr = router.putBlob(blobProperties, userMetadata, putChannel, new PutBlobOptionsBuilder().build()).get();
     blobId = RouterUtils.getBlobIdFromString(blobIdStr, mockClusterMap);
   }
 
@@ -235,13 +239,15 @@ public class GetBlobOperationTest {
 
     blobId = new BlobId(routerConfig.routerBlobidCurrentVersion, BlobId.BlobIdType.NATIVE,
         mockClusterMap.getLocalDatacenterId(), Utils.getRandomShort(TestUtils.RANDOM),
-        Utils.getRandomShort(TestUtils.RANDOM), mockClusterMap.getWritablePartitionIds().get(0), false);
+        Utils.getRandomShort(TestUtils.RANDOM),
+        mockClusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0), false,
+        BlobId.BlobDataType.DATACHUNK);
     blobIdStr = blobId.getID();
     // test a good case
     // operationCount is not incremented here as this operation is not taken to completion.
     GetBlobOperation op = new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobId,
         new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet),
-        getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
+        getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time, false);
     Assert.assertEquals("Callbacks must match", getRouterCallback, op.getCallback());
     Assert.assertEquals("Blob ids must match", blobIdStr, op.getBlobIdStr());
 
@@ -252,7 +258,7 @@ public class GetBlobOperationTest {
     try {
       new GetBlobOperation(badConfig, routerMetrics, mockClusterMap, responseHandler, blobId,
           new GetBlobOptionsInternal(new GetBlobOptionsBuilder().build(), false, routerMetrics.ageAtGet),
-          getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
+          getRouterCallback, routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time, false);
       Assert.fail("Instantiation of GetBlobOperation with an invalid tracker type must fail");
     } catch (IllegalArgumentException e) {
       // expected. Nothing to do.
@@ -399,22 +405,52 @@ public class GetBlobOperationTest {
   }
 
   /**
-   * Test the case with Blob_Not_Found errors from most servers, and Blob_Deleted at just one server. The latter
-   * should be the exception received for the operation.
+   * Test the case with Blob_Not_Found errors from most servers, and Blob_Deleted, Blob_Expired or
+   * Blob_Authorization_Failure at just one server. The latter should be the exception received for the operation.
    * @throws Exception
    */
   @Test
-  public void testErrorPrecedenceWithBlobDeletedAndExpiredCase() throws Exception {
+  public void testErrorPrecedenceWithSpecialCase() throws Exception {
     doPut();
     Map<ServerErrorCode, RouterErrorCode> serverErrorToRouterError = new HashMap<>();
     serverErrorToRouterError.put(ServerErrorCode.Blob_Deleted, RouterErrorCode.BlobDeleted);
     serverErrorToRouterError.put(ServerErrorCode.Blob_Expired, RouterErrorCode.BlobExpired);
+    serverErrorToRouterError.put(ServerErrorCode.Blob_Authorization_Failure, RouterErrorCode.BlobAuthorizationFailure);
     for (Map.Entry<ServerErrorCode, RouterErrorCode> entry : serverErrorToRouterError.entrySet()) {
       Map<ServerErrorCode, Integer> errorCounts = new HashMap<>();
       errorCounts.put(ServerErrorCode.Blob_Not_Found, replicasCount - 1);
       errorCounts.put(entry.getKey(), 1);
       testWithErrorCodes(errorCounts, mockServerLayout, entry.getValue(), getErrorCodeChecker);
     }
+  }
+
+  /**
+   * Test the case where servers return different {@link ServerErrorCode} or success, and the {@link GetBlobOperation}
+   * is able to resolve and conclude the correct {@link RouterErrorCode}. The get operation should be able
+   * to resolve the router error code as {@code Blob_Authorization_Failure}.
+   * @throws Exception
+   */
+  @Test
+  public void testAuthorizationFailureOverrideAll() throws Exception {
+    doPut();
+    ServerErrorCode[] serverErrorCodes = new ServerErrorCode[9];
+    serverErrorCodes[0] = ServerErrorCode.Blob_Not_Found;
+    serverErrorCodes[1] = ServerErrorCode.Data_Corrupt;
+    serverErrorCodes[2] = ServerErrorCode.IO_Error;
+    serverErrorCodes[3] = ServerErrorCode.Partition_Unknown;
+    serverErrorCodes[4] = ServerErrorCode.Disk_Unavailable;
+    serverErrorCodes[5] = ServerErrorCode.Blob_Authorization_Failure;
+    serverErrorCodes[6] = ServerErrorCode.Unknown_Error;
+    serverErrorCodes[7] = ServerErrorCode.Unknown_Error;
+    serverErrorCodes[8] = ServerErrorCode.Blob_Authorization_Failure;
+    Map<ServerErrorCode, Integer> errorCounts = new HashMap<>();
+    for (int i = 0; i < 9; i++) {
+      if (!errorCounts.containsKey(serverErrorCodes[i])) {
+        errorCounts.put(serverErrorCodes[i], 0);
+      }
+      errorCounts.put(serverErrorCodes[i], errorCounts.get(serverErrorCodes[i]) + 1);
+    }
+    testWithErrorCodes(errorCounts, mockServerLayout, RouterErrorCode.BlobAuthorizationFailure, getErrorCodeChecker);
   }
 
   /**
@@ -432,17 +468,37 @@ public class GetBlobOperationTest {
     Properties props = getDefaultNonBlockingRouterProperties();
     props.setProperty("router.datacenter.name", "DC1");
     routerConfig = new RouterConfig(new VerifiableProperties(props));
-    testVariousErrors(dcWherePutHappened);
+    doTestSuccessInThePresenceOfVariousErrors(dcWherePutHappened);
 
     props = getDefaultNonBlockingRouterProperties();
     props.setProperty("router.datacenter.name", "DC2");
     routerConfig = new RouterConfig(new VerifiableProperties(props));
-    testVariousErrors(dcWherePutHappened);
+    doTestSuccessInThePresenceOfVariousErrors(dcWherePutHappened);
 
     props = getDefaultNonBlockingRouterProperties();
     props.setProperty("router.datacenter.name", "DC3");
     routerConfig = new RouterConfig(new VerifiableProperties(props));
-    testVariousErrors(dcWherePutHappened);
+    doTestSuccessInThePresenceOfVariousErrors(dcWherePutHappened);
+  }
+
+  /**
+   * Tests the case where all servers return the same server level error code
+   * @throws Exception
+   */
+  @Test
+  public void testFailureOnServerErrors() throws Exception {
+    doPut();
+    // set the status to various server level errors (remove all partition level errors or non errors)
+    EnumSet<ServerErrorCode> serverErrors = EnumSet.complementOf(
+        EnumSet.of(ServerErrorCode.Blob_Deleted, ServerErrorCode.Blob_Expired, ServerErrorCode.No_Error,
+            ServerErrorCode.Blob_Authorization_Failure, ServerErrorCode.Blob_Not_Found));
+    for (ServerErrorCode serverErrorCode : serverErrors) {
+      mockServerLayout.getMockServers().forEach(server -> server.setServerErrorForAllRequests(serverErrorCode));
+      GetBlobOperation op = createOperationAndComplete(null);
+      assertFailureAndCheckErrorCode(op,
+          EnumSet.of(ServerErrorCode.Disk_Unavailable, ServerErrorCode.Replica_Unavailable).contains(serverErrorCode)
+              ? RouterErrorCode.AmbryUnavailable : RouterErrorCode.UnexpectedInternalError);
+    }
   }
 
   /**
@@ -499,7 +555,7 @@ public class GetBlobOperationTest {
    * operation should succeed.
    * @param dcWherePutHappened the datacenter where the put happened.
    */
-  private void testVariousErrors(String dcWherePutHappened) throws Exception {
+  private void doTestSuccessInThePresenceOfVariousErrors(String dcWherePutHappened) throws Exception {
     ArrayList<MockServer> mockServers = new ArrayList<>(mockServerLayout.getMockServers());
     ArrayList<ServerErrorCode> serverErrors = new ArrayList<>(Arrays.asList(ServerErrorCode.values()));
     // set the status to various server level or partition level errors (not Blob_Deleted or Blob_Expired - as they
@@ -508,6 +564,7 @@ public class GetBlobOperationTest {
     serverErrors.remove(ServerErrorCode.Blob_Deleted);
     serverErrors.remove(ServerErrorCode.Blob_Expired);
     serverErrors.remove(ServerErrorCode.No_Error);
+    serverErrors.remove(ServerErrorCode.Blob_Authorization_Failure);
     boolean goodServerMarked = false;
     for (MockServer mockServer : mockServers) {
       if (!goodServerMarked && mockServer.getDataCenter().equals(dcWherePutHappened)) {
@@ -561,14 +618,16 @@ public class GetBlobOperationTest {
    */
   @Test
   public void testLegacyBlobGetSuccess() throws Exception {
-    RouterTestHelpers.setBlobFormatVersionForAllServers(MessageFormatRecord.Blob_Version_V1, mockServerLayout);
+    mockServerLayout.getMockServers()
+        .forEach(mockServer -> mockServer.setBlobFormatVersion(MessageFormatRecord.Blob_Version_V1));
     for (int i = 0; i < 10; i++) {
       // blobSize in the range [1, maxChunkSize]
       blobSize = random.nextInt(maxChunkSize) + 1;
       doPut();
       getAndAssertSuccess();
     }
-    RouterTestHelpers.setBlobFormatVersionForAllServers(MessageFormatRecord.Blob_Version_V2, mockServerLayout);
+    mockServerLayout.getMockServers()
+        .forEach(mockServer -> mockServer.setBlobFormatVersion(MessageFormatRecord.Blob_Version_V2));
   }
 
   /**
@@ -857,7 +916,7 @@ public class GetBlobOperationTest {
     final CountDownLatch readCompleteLatch = new CountDownLatch(1);
     final AtomicReference<Exception> readCompleteException = new AtomicReference<>(null);
     final ByteBufferAsyncWritableChannel asyncWritableChannel = new ByteBufferAsyncWritableChannel();
-    RouterTestHelpers.setGetErrorOnDataBlobOnlyForAllServers(true, mockServerLayout);
+    mockServerLayout.getMockServers().forEach(mockServer -> mockServer.setGetErrorOnDataBlobOnly(true));
     RouterTestHelpers.testWithErrorCodes(Collections.singletonMap(serverErrorCode, 9), mockServerLayout,
         expectedErrorCode, new ErrorCodeChecker() {
           @Override
@@ -1028,7 +1087,7 @@ public class GetBlobOperationTest {
     NonBlockingRouter.currentOperationsCount.incrementAndGet();
     GetBlobOperation op =
         new GetBlobOperation(routerConfig, routerMetrics, mockClusterMap, responseHandler, blobId, options, callback,
-            routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time);
+            routerCallback, blobIdFactory, kms, cryptoService, cryptoJobHandler, time, false);
     requestRegistrationCallback.requestListToFill = new ArrayList<>();
     return op;
   }

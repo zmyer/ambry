@@ -13,12 +13,20 @@
  */
 package com.github.ambry.router;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.AccountBuilder;
+import com.github.ambry.account.AccountService;
+import com.github.ambry.account.Container;
+import com.github.ambry.account.ContainerBuilder;
+import com.github.ambry.account.InMemAccountService;
 import com.github.ambry.clustermap.ClusterMap;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.BlobId;
 import com.github.ambry.commons.CommonTestUtils;
+import com.github.ambry.utils.Pair;
 import com.github.ambry.utils.Utils;
+import java.util.Arrays;
 import java.util.Random;
 import org.junit.Assert;
 import org.junit.Test;
@@ -39,10 +47,10 @@ public class RouterUtilsTest {
     } catch (Exception e) {
       fail("Should not get any exception.");
     }
-    partition = clusterMap.getWritablePartitionIds().get(0);
+    partition = clusterMap.getWritablePartitionIds(MockClusterMap.DEFAULT_PARTITION_CLASS).get(0);
     originalBlobId = new BlobId(CommonTestUtils.getCurrentBlobIdVersion(), BlobId.BlobIdType.NATIVE,
-        clusterMap.getLocalDatacenterId(), Utils.getRandomShort(random), Utils.getRandomShort(random), partition,
-        false);
+        clusterMap.getLocalDatacenterId(), Utils.getRandomShort(random), Utils.getRandomShort(random), partition, false,
+        BlobId.BlobDataType.DATACHUNK);
     blobIdStr = originalBlobId.getID();
   }
 
@@ -89,9 +97,11 @@ public class RouterUtilsTest {
         case BadInputChannel:
         case BlobDeleted:
         case BlobDoesNotExist:
+        case BlobAuthorizationFailure:
         case BlobExpired:
         case RangeNotSatisfiable:
         case ChannelClosed:
+        case BlobUpdateNotAllowed:
           Assert.assertFalse(RouterUtils.isSystemHealthError(new RouterException("", errorCode)));
           break;
         default:
@@ -101,5 +111,44 @@ public class RouterUtilsTest {
     }
     Assert.assertTrue(RouterUtils.isSystemHealthError(new Exception()));
     Assert.assertFalse(RouterUtils.isSystemHealthError(Utils.convertToClientTerminationException(new Exception())));
+  }
+
+  /**
+   * Test {@link RouterUtils#getAccountContainer(AccountService, short, short)}.
+   */
+  @Test
+  public void testGetAccountContainer() {
+    AccountService accountService = new InMemAccountService(false, false);
+    // Both accountId and containerId are not tracked by AccountService.
+    Pair<Account, Container> accountContainer =
+        RouterUtils.getAccountContainer(accountService, Account.UNKNOWN_ACCOUNT_ID, Container.UNKNOWN_CONTAINER_ID);
+    Assert.assertEquals("Account should be null", null, accountContainer.getFirst());
+    Assert.assertEquals("Container should be null", null, accountContainer.getSecond());
+
+    accountContainer =
+        RouterUtils.getAccountContainer(accountService, Utils.getRandomShort(random), Utils.getRandomShort(random));
+    Assert.assertEquals("Account should be null", null, accountContainer.getFirst());
+    Assert.assertEquals("Container should be null", null, accountContainer.getSecond());
+
+    // accountId is tracked by AccountService but containerId not.
+    short accountId = Utils.getRandomShort(random);
+    short containerId = Utils.getRandomShort(random);
+    Account account = new AccountBuilder(accountId, "AccountNameOf" + accountId, Account.AccountStatus.ACTIVE).build();
+    accountService.updateAccounts(Arrays.asList(account));
+    accountContainer = RouterUtils.getAccountContainer(accountService, accountId, containerId);
+    Assert.assertEquals("Account doesn't match", account, accountContainer.getFirst());
+    Assert.assertEquals("Container should be null", null, accountContainer.getSecond());
+
+    // Both accountId and containerId are tracked by AccountService.
+    Container container =
+        new ContainerBuilder(containerId, "ContainerNameOf" + containerId, Container.ContainerStatus.ACTIVE,
+            "description", accountId).build();
+    account =
+        new AccountBuilder(accountId, "AccountNameOf" + accountId, Account.AccountStatus.ACTIVE).addOrUpdateContainer(
+            container).build();
+    accountService.updateAccounts(Arrays.asList(account));
+    accountContainer = RouterUtils.getAccountContainer(accountService, accountId, containerId);
+    Assert.assertEquals("Account doesn't match", account, accountContainer.getFirst());
+    Assert.assertEquals("Container doesn't match", container, accountContainer.getSecond());
   }
 }

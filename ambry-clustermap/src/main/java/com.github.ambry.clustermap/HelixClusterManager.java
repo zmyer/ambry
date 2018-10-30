@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -32,13 +33,18 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+import org.I0Itec.zkclient.IZkDataListener;
+import org.apache.helix.AccessOption;
 import org.apache.helix.HelixManager;
 import org.apache.helix.InstanceConfigChangeListener;
 import org.apache.helix.InstanceType;
 import org.apache.helix.LiveInstanceChangeListener;
 import org.apache.helix.NotificationContext;
+import org.apache.helix.ZNRecord;
 import org.apache.helix.model.InstanceConfig;
 import org.apache.helix.model.LiveInstance;
+import org.apache.helix.store.zk.ZkHelixPropertyStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,13 +62,13 @@ class HelixClusterManager implements ClusterMap {
   private final Logger logger = LoggerFactory.getLogger(getClass());
   //集群名称
   private final String clusterName;
-  //metrics注册对象
+  private final String selfInstanceName;
   private final MetricRegistry metricRegistry;
   //集群配置
   private final ClusterMapConfig clusterMapConfig;
   //数据中心集合
   private final ConcurrentHashMap<String, DcInfo> dcToDcZkInfo = new ConcurrentHashMap<>();
-  //分区集合
+  private final ConcurrentHashMap<Byte, String> dcIdToDcName = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, AmbryPartition> partitionNameToAmbryPartition = new ConcurrentHashMap<>();
   //数据节点集合
   private final ConcurrentHashMap<String, AmbryDataNode> instanceNameToAmbryDataNode = new ConcurrentHashMap<>();
@@ -92,11 +98,19 @@ class HelixClusterManager implements ClusterMap {
   private final AtomicLong sealedStateChangeCounter = new AtomicLong(0);
   //集群统计对象
   final HelixClusterManagerMetrics helixClusterManagerMetrics;
+  private final PartitionSelectionHelper partitionSelectionHelper;
+  private final Map<String, Map<String, String>> partitionOverrideInfoMap = new HashMap<>();
+  // The current xid currently does not change after instantiation. This can change in the future, allowing the cluster
+  // manager to dynamically incorporate newer changes in the cluster. This variable is atomic so that the gauge metric
+  // reflects the current value.
+  private final AtomicLong currentXid;
 
   /**
    * Instantiate a HelixClusterManager.
    * @param clusterMapConfig the {@link ClusterMapConfig} associated with this manager.
    * @param instanceName the String representation of the instance associated with this manager.
+   * @param helixFactory the factory class to construct and get a reference to a {@link HelixManager}.
+   * @param metricRegistry the registry of metric instances associated with this manager.
    * @throws IOException if there is an error in parsing the clusterMapConfig or in connecting with the associated
    *                     remote Zookeeper services.
    */
@@ -104,15 +118,20 @@ class HelixClusterManager implements ClusterMap {
   HelixClusterManager(ClusterMapConfig clusterMapConfig, String instanceName, HelixFactory helixFactory,
       MetricRegistry metricRegistry) throws IOException {
     this.clusterMapConfig = clusterMapConfig;
+    currentXid = new AtomicLong(clusterMapConfig.clustermapCurrentXid);
     this.metricRegistry = metricRegistry;
     clusterName = clusterMapConfig.clusterMapClusterName;
+    selfInstanceName = instanceName;
     helixClusterManagerCallback = new HelixClusterManagerCallback();
     helixClusterManagerMetrics = new HelixClusterManagerMetrics(metricRegistry, helixClusterManagerCallback);
     try {
       //解析数据中心集合
       final Map<String, DcZkInfo> dataCenterToZkAddress =
           parseDcJsonAndPopulateDcInfo(clusterMapConfig.clusterMapDcsZkConnectStrings);
-      //构造初始化屏障对象
+      // Make sure the HelixManager of local datacenter gets connected first and partitionOverrideInfoMap use PropertyStore
+      // in local DC for initialization.
+      HelixManager localManager =
+          initializeHelixManagerAndPropertyStoreInLocalDC(dataCenterToZkAddress, instanceName, helixFactory);
       final CountDownLatch initializationAttemptComplete = new CountDownLatch(dataCenterToZkAddress.size());
       for (Map.Entry<String, DcZkInfo> entry : dataCenterToZkAddress.entrySet()) {
         //dc名
@@ -121,43 +140,43 @@ class HelixClusterManager implements ClusterMap {
         String zkConnectStr = entry.getValue().getZkConnectStr();
         //创建集群变更处理对象
         ClusterChangeHandler clusterChangeHandler = new ClusterChangeHandler(dcName);
-        // Initialize from every datacenter in a separate thread to speed things up.
-        //创建初始化线程
-        Utils.newThread(new Runnable() {
-          @Override
-          public void run() {
-            try {
-              //创建helix管理器
-              HelixManager manager =
-                  helixFactory.getZKHelixManager(clusterName, instanceName, InstanceType.SPECTATOR, zkConnectStr);
+        // Initialize from every remote datacenter in a separate thread to speed things up.
+        Utils.newThread(() -> {
+          try {
+            HelixManager manager;
+            if (dcName.equals(clusterMapConfig.clusterMapDatacenterName)) {
+              manager = localManager;
+            } else {
+              manager =
+                  helixFactory.getZKHelixManager(clusterName, selfInstanceName, InstanceType.SPECTATOR, zkConnectStr);
               logger.info("Connecting to Helix manager at {}", zkConnectStr);
               //开始连接管理器
               manager.connect();
               logger.info("Established connection to Helix manager at {}", zkConnectStr);
-              //创建dc信息
-              DcInfo dcInfo = new DcInfo(dcName, entry.getValue(), manager, clusterChangeHandler);
-              //将dc插入到集合中
-              dcToDcZkInfo.put(dcName, dcInfo);
-
-              // The initial instance config change notification is required to populate the static cluster
-              // information, and only after that is complete do we want the live instance change notification to
-              // come in. We do not need to do anything extra to ensure this, however, since Helix provides the initial
-              // notification for a change from within the same thread that adds the listener, in the context of the add
-              // call. Therefore, when the call to add a listener returns, the initial notification will have been
-              // received and handled.
-              //helix管理器注册实例配置变更监听器
-              manager.addInstanceConfigChangeListener(clusterChangeHandler);
-              logger.info("Registered instance config change listeners for Helix manager at {}", zkConnectStr);
-              // Now register listeners to get notified on live instance change in every datacenter.
-              //helix管理器注册实例变更监听器
-              manager.addLiveInstanceChangeListener(clusterChangeHandler);
-              logger.info("Registered live instance change listeners for Helix manager at {}", zkConnectStr);
-            } catch (Exception e) {
-              initializationException.compareAndSet(null, e);
-            } finally {
-              //初始化完毕
-              initializationAttemptComplete.countDown();
             }
+            DcInfo dcInfo = new DcInfo(dcName, entry.getValue(), manager, clusterChangeHandler);
+            dcToDcZkInfo.put(dcName, dcInfo);
+            dcIdToDcName.put(dcInfo.dcZkInfo.getDcId(), dcName);
+
+            // The initial instance config change notification is required to populate the static cluster
+            // information, and only after that is complete do we want the live instance change notification to
+            // come in. We do not need to do anything extra to ensure this, however, since Helix provides the initial
+            // notification for a change from within the same thread that adds the listener, in the context of the add
+            // call. Therefore, when the call to add a listener returns, the initial notification will have been
+            // received and handled.
+            manager.addInstanceConfigChangeListener(clusterChangeHandler);
+            logger.info("Registered instance config change listeners for Helix manager at {}", zkConnectStr);
+            // Now register listeners to get notified on live instance change in every datacenter.
+            manager.addLiveInstanceChangeListener(clusterChangeHandler);
+            logger.info("Registered live instance change listeners for Helix manager at {}", zkConnectStr);
+            if (!clusterMapConfig.clustermapListenCrossColo && manager != localManager) {
+              manager.disconnect();
+              logger.info("Stopped listening to cross colo ZK server {}", zkConnectStr);
+            }
+          } catch (Exception e) {
+            initializationException.compareAndSet(null, e);
+          } finally {
+            initializationAttemptComplete.countDown();
           }
         }, false).start();
       }
@@ -167,8 +186,13 @@ class HelixClusterManager implements ClusterMap {
       initializationException.compareAndSet(null, e);
     }
     if (initializationException.get() == null) {
+      // resolve the status of all partitions before completing initialization
+      for (AmbryPartition partition : partitionMap.values()) {
+        partition.resolvePartitionState();
+      }
       initializeCapacityStats();
       helixClusterManagerMetrics.initializeInstantiationMetric(true);
+      helixClusterManagerMetrics.initializeXidMetric(currentXid);
       helixClusterManagerMetrics.initializeDatacenterMetrics();
       helixClusterManagerMetrics.initializeDataNodeMetrics();
       helixClusterManagerMetrics.initializeDiskMetrics();
@@ -182,6 +206,59 @@ class HelixClusterManager implements ClusterMap {
     }
     //获取本地数据中心id
     localDatacenterId = dcToDcZkInfo.get(clusterMapConfig.clusterMapDatacenterName).dcZkInfo.getDcId();
+    partitionSelectionHelper =
+        new PartitionSelectionHelper(partitionMap.values(), clusterMapConfig.clusterMapDatacenterName);
+  }
+
+  /**
+   * Initialize HelixManager in local datacenter and complete subscription of HelixPropertyStore to listen for
+   * PartitionOverride zNode.
+   * @param dataCenterToZkAddress the map mapping each datacenter to its corresponding ZkAddress.
+   * @param instanceName the String representation of the instance associated with this manager.
+   * @param helixFactory the factory class to construct and get a reference to a {@link HelixManager}.
+   * @return the HelixManager of local datacenter
+   * @throws IllegalStateException
+   */
+  private HelixManager initializeHelixManagerAndPropertyStoreInLocalDC(Map<String, DcZkInfo> dataCenterToZkAddress,
+      String instanceName, HelixFactory helixFactory) throws IllegalStateException {
+    DcZkInfo dcZkInfo = dataCenterToZkAddress.get(clusterMapConfig.clusterMapDatacenterName);
+    String zkConnectStr = dcZkInfo.getZkConnectStr();
+    HelixManager manager = null;
+    ZkHelixPropertyStore<ZNRecord> helixPropertyStore = null;
+    try {
+      manager = helixFactory.getZKHelixManager(clusterName, instanceName, InstanceType.SPECTATOR, zkConnectStr);
+      logger.info("Connecting to Helix manager in local zookeeper at {}", zkConnectStr);
+      manager.connect();
+      logger.info("Established connection to Helix manager in local zookeeper at {}", zkConnectStr);
+      helixPropertyStore = manager.getHelixPropertyStore();
+      logger.info("HelixPropertyStore from local datacenter {} is: {}", dcZkInfo.getDcName(), helixPropertyStore);
+      IZkDataListener dataListener = new IZkDataListener() {
+        @Override
+        public void handleDataChange(String dataPath, Object data) throws Exception {
+          logger.info("Received data change notification for: {}", dataPath);
+        }
+
+        @Override
+        public void handleDataDeleted(String dataPath) throws Exception {
+          logger.info("Received data delete notification for: {}", dataPath);
+        }
+      };
+      logger.info("Subscribing data listener to HelixPropertyStore.");
+      helixPropertyStore.subscribeDataChanges(ClusterMapUtils.ZNODE_PATH, dataListener);
+      logger.info("Getting ZNRecord from HelixPropertyStore");
+      ZNRecord zNRecord = helixPropertyStore.get(ClusterMapUtils.ZNODE_PATH, null, AccessOption.PERSISTENT);
+      if (clusterMapConfig.clusterMapEnablePartitionOverride) {
+        if (zNRecord != null) {
+          partitionOverrideInfoMap.putAll(zNRecord.getMapFields());
+          logger.info("partitionOverrideInfoMap is initialized!");
+        } else {
+          logger.warn("ZNRecord from HelixPropertyStore is NULL, the partitionOverrideInfoMap is empty.");
+        }
+      }
+    } catch (Exception e) {
+      throw new IllegalStateException(e);
+    }
+    return manager;
   }
 
   /**
@@ -212,7 +289,11 @@ class HelixClusterManager implements ClusterMap {
     return localDatacenterId;
   }
 
-  // TODO: 2018/3/20 by zmyer
+  @Override
+  public String getDatacenterName(byte id) {
+    return dcIdToDcName.get(id);
+  }
+
   @Override
   public AmbryDataNode getDataNodeId(String hostname, int port) {
     return instanceNameToAmbryDataNode.get(getInstanceName(hostname, port));
@@ -265,6 +346,12 @@ class HelixClusterManager implements ClusterMap {
       case Partition_ReadOnly:
         replica.getPartitionId().onPartitionReadOnly();
         break;
+      case Replica_Unavailable:
+        replica.onReplicaUnavailable();
+        break;
+      case Replica_Available:
+        replica.onReplicaResponse();
+        break;
     }
   }
 
@@ -281,36 +368,14 @@ class HelixClusterManager implements ClusterMap {
     return partition;
   }
 
-  /**
-   * @return list of partition ids that are in {@link PartitionState#READ_WRITE}.
-   */
-  // TODO: 2018/3/20 by zmyer
   @Override
-  public List<AmbryPartition> getWritablePartitionIds() {
-    List<AmbryPartition> writablePartitions = new ArrayList<>();
-    List<AmbryPartition> healthyWritablePartitions = new ArrayList<>();
-    //依次遍历每个分区信息
-    for (AmbryPartition partition : partitionNameToAmbryPartition.values()) {
-      if (partition.getPartitionState() == PartitionState.READ_WRITE) {
-        //如果当前的分区可读写，则插入到结果集中
-        writablePartitions.add(partition);
-        if (areAllReplicasForPartitionUp(partition)) {
-          //如果所有的副本都是在线状态，则将该分区插入到健康列表中
-          healthyWritablePartitions.add(partition);
-        }
-      }
-    }
-    //返回结果集
-    return healthyWritablePartitions.isEmpty() ? writablePartitions : healthyWritablePartitions;
+  public List<PartitionId> getWritablePartitionIds(String partitionClass) {
+    return partitionSelectionHelper.getWritablePartitions(partitionClass);
   }
 
-  /**
-   * @return list of all partition ids in the cluster
-   */
-  // TODO: 2018/3/20 by zmyer
   @Override
-  public List<AmbryPartition> getAllPartitionIds() {
-    return new ArrayList<>(partitionNameToAmbryPartition.values());
+  public List<PartitionId> getAllPartitionIds(String partitionClass) {
+    return partitionSelectionHelper.getPartitions(partitionClass);
   }
 
   /**
@@ -320,26 +385,11 @@ class HelixClusterManager implements ClusterMap {
   @Override
   public void close() {
     for (DcInfo dcInfo : dcToDcZkInfo.values()) {
-      //断开helix管理器
-      dcInfo.helixManager.disconnect();
-    }
-    dcToDcZkInfo.clear();
-  }
-
-  /**
-   * Check whether all replicas of the given {@link AmbryPartition} are up.
-   * @param partition the {@link AmbryPartition} to check.
-   * @return true if all associated replicas are up; false otherwise.
-   */
-  // TODO: 2018/3/20 by zmyer
-  private boolean areAllReplicasForPartitionUp(AmbryPartition partition) {
-    for (AmbryReplica replica : ambryPartitionToAmbryReplicas.get(partition)) {
-      //依次遍历每个副本信息，检查状态，如果跪掉，则直接返回
-      if (replica.isDown()) {
-        return false;
+      if (dcInfo.helixManager.isConnected()) {
+        dcInfo.helixManager.disconnect();
       }
     }
-    return true;
+    dcToDcZkInfo.clear();
   }
 
   /**
@@ -358,6 +408,15 @@ class HelixClusterManager implements ClusterMap {
       }
     }
     return null;
+  }
+
+  /**
+   * @return a map of datacenter names to {@link HelixManager}
+   */
+  Map<String, HelixManager> getHelixManagerMap() {
+    return dcToDcZkInfo.entrySet()
+        .stream()
+        .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().helixManager));
   }
 
   /**
@@ -393,7 +452,7 @@ class HelixClusterManager implements ClusterMap {
           }
           instanceConfigInitialized.set(true);
         } else {
-          updateSealedStateOfReplicas(configs);
+          updateStateOfReplicas(configs);
         }
         sealedStateChangeCounter.incrementAndGet();
         helixClusterManagerMetrics.instanceConfigChangeTriggerCount.inc();
@@ -402,35 +461,85 @@ class HelixClusterManager implements ClusterMap {
 
     /**
      * Populate the initial data from the admin connection. Create nodes, disks, partitions and replicas for the entire
-     * cluster.
+     * cluster. An {@link InstanceConfig} will only be looked at if the xid in it is <= currentXid.
+     * @param instanceConfigs the list of {@link InstanceConfig}s containing the information about the sealed states of replicas.
      * @throws Exception if creation of {@link AmbryDataNode}s or {@link AmbryDisk}s throw an Exception.
      */
     private void initializeInstances(List<InstanceConfig> instanceConfigs) throws Exception {
       logger.info("Initializing cluster information from {}", dcName);
       for (InstanceConfig instanceConfig : instanceConfigs) {
-        String instanceName = instanceConfig.getInstanceName();
-        logger.info("Adding node {} and its disks and replicas", instanceName);
-        AmbryDataNode datanode =
-            new AmbryDataNode(getDcName(instanceConfig), clusterMapConfig, instanceConfig.getHostName(),
-                Integer.valueOf(instanceConfig.getPort()), getRackId(instanceConfig), getSslPortStr(instanceConfig));
-        initializeDisksAndReplicasOnNode(datanode, instanceConfig);
-        instanceNameToAmbryDataNode.put(instanceName, datanode);
-        allInstances.add(instanceName);
+        int schemaVersion = getSchemaVersion(instanceConfig);
+        switch (schemaVersion) {
+          case 0:
+            String instanceName = instanceConfig.getInstanceName();
+            long instanceXid = getXid(instanceConfig);
+            if (instanceName.equals(selfInstanceName) || instanceXid <= currentXid.get()) {
+              logger.info("Adding node {} and its disks and replicas", instanceName);
+              AmbryDataNode datanode =
+                  new AmbryDataNode(getDcName(instanceConfig), clusterMapConfig, instanceConfig.getHostName(),
+                      Integer.valueOf(instanceConfig.getPort()), getRackId(instanceConfig),
+                      getSslPortStr(instanceConfig), instanceXid);
+              initializeDisksAndReplicasOnNode(datanode, instanceConfig);
+              instanceNameToAmbryDataNode.put(instanceName, datanode);
+              allInstances.add(instanceName);
+            } else {
+              logger.info(
+                  "Ignoring instanceConfig for {} because the xid associated with it ({}) is later than current xid ({})",
+                  instanceName, instanceXid, currentXid.get());
+              helixClusterManagerMetrics.ignoredUpdatesCount.inc();
+            }
+            break;
+          default:
+            logger.error("Unknown InstanceConfig schema version: {}, ignoring.", schemaVersion);
+            break;
+        }
       }
       logger.info("Initialized cluster information from {}", dcName);
     }
 
     /**
-     * Go over the given list of {@link InstanceConfig}s and update the sealed states of replicas.
+     * Go over the given list of {@link InstanceConfig}s and update the both sealed and stopped states of replicas.
+     * An {@link InstanceConfig} will only be looked at if the xid in it is <= currentXid.
      * @param instanceConfigs the list of {@link InstanceConfig}s containing the up-to-date information about the
      *                        sealed states of replicas.
      */
-    private void updateSealedStateOfReplicas(List<InstanceConfig> instanceConfigs) {
+    private void updateStateOfReplicas(List<InstanceConfig> instanceConfigs) {
       for (InstanceConfig instanceConfig : instanceConfigs) {
-        AmbryDataNode node = instanceNameToAmbryDataNode.get(instanceConfig.getInstanceName());
-        HashSet<String> sealedReplicas = new HashSet<>(getSealedReplicas(instanceConfig));
-        for (AmbryReplica replica : ambryDataNodeToAmbryReplicas.get(node)) {
-          replica.setSealedState(sealedReplicas.contains(replica.getPartitionId().toPathString()));
+        int schemaVersion = getSchemaVersion(instanceConfig);
+        switch (schemaVersion) {
+          case 0:
+            String instanceName = instanceConfig.getInstanceName();
+            long instanceXid = getXid(instanceConfig);
+            AmbryDataNode node = instanceNameToAmbryDataNode.get(instanceName);
+            if (instanceName.equals(selfInstanceName) || instanceXid <= currentXid.get()) {
+              if (node == null) {
+                logger.info("Dynamic addition of new nodes is not yet supported, ignoring InstanceConfig {}",
+                    instanceConfig);
+              } else {
+                Set<String> sealedReplicas = new HashSet<>(getSealedReplicas(instanceConfig));
+                Set<String> stoppedReplicas = new HashSet<>(getStoppedReplicas(instanceConfig));
+                for (AmbryReplica replica : ambryDataNodeToAmbryReplicas.get(node)) {
+                  String partitionId = replica.getPartitionId().toPathString();
+                  if (clusterMapConfig.clusterMapEnablePartitionOverride && partitionOverrideInfoMap.containsKey(
+                      partitionId)) {
+                    logger.trace(
+                        "Ignoring instanceConfig change for partition {} on instance {} because partition override is enabled",
+                        partitionId, instanceName);
+                  } else {
+                    replica.setSealedState(sealedReplicas.contains(partitionId));
+                    replica.setStoppedState(stoppedReplicas.contains(partitionId));
+                  }
+                }
+              }
+            } else {
+              logger.trace(
+                  "Ignoring instanceConfig change for {} because the xid associated with it ({}) is later than current xid ({})",
+                  instanceName, instanceXid, currentXid.get());
+              helixClusterManagerMetrics.ignoredUpdatesCount.inc();
+            }
+            break;
+          default:
+            logger.error("Unknown InstanceConfig schema version: {}, ignoring.", schemaVersion);
         }
       }
     }
@@ -473,7 +582,8 @@ class HelixClusterManager implements ClusterMap {
 
     /**
      * Initialize the disks and replicas on the given node. Create partitions if this is the first time a replica of
-     * that partition is being constructed.
+     * that partition is being constructed. If partition override is enabled, the seal state of replica is determined by
+     * partition info in HelixPropertyStore, if disabled, the seal state is determined by instanceConfig.
      * @param datanode the {@link AmbryDataNode} that is being initialized.
      * @param instanceConfig the {@link InstanceConfig} associated with this datanode.
      * @throws Exception if creation of {@link AmbryDisk} throws an Exception.
@@ -483,17 +593,18 @@ class HelixClusterManager implements ClusterMap {
       ambryDataNodeToAmbryReplicas.put(datanode, new HashSet<AmbryReplica>());
       ambryDataNodeToAmbryDisks.put(datanode, new HashSet<AmbryDisk>());
       List<String> sealedReplicas = getSealedReplicas(instanceConfig);
+      List<String> stoppedReplicas = getStoppedReplicas(instanceConfig);
       Map<String, Map<String, String>> diskInfos = instanceConfig.getRecord().getMapFields();
       for (Map.Entry<String, Map<String, String>> entry : diskInfos.entrySet()) {
         String mountPath = entry.getKey();
         Map<String, String> diskInfo = entry.getValue();
         long capacityBytes = Long.valueOf(diskInfo.get(DISK_CAPACITY_STR));
-        HardwareState state =
+        HardwareState diskState =
             diskInfo.get(DISK_STATE).equals(AVAILABLE_STR) ? HardwareState.AVAILABLE : HardwareState.UNAVAILABLE;
         String replicasStr = diskInfo.get(ClusterMapUtils.REPLICAS_STR);
 
         // Create disk
-        AmbryDisk disk = new AmbryDisk(clusterMapConfig, datanode, mountPath, state, capacityBytes);
+        AmbryDisk disk = new AmbryDisk(clusterMapConfig, datanode, mountPath, diskState, capacityBytes);
         ambryDataNodeToAmbryDisks.get(datanode).add(disk);
 
         if (!replicasStr.isEmpty()) {
@@ -503,8 +614,12 @@ class HelixClusterManager implements ClusterMap {
             // partition name and replica name are the same.
             String partitionName = info[0];
             long replicaCapacity = Long.valueOf(info[1]);
+            String partitionClass = clusterMapConfig.clusterMapDefaultPartitionClass;
+            if (info.length > 2) {
+              partitionClass = info[2];
+            }
             AmbryPartition mappedPartition =
-                new AmbryPartition(Long.valueOf(partitionName), helixClusterManagerCallback);
+                new AmbryPartition(Long.valueOf(partitionName), partitionClass, helixClusterManagerCallback);
             // Ensure only one AmbryPartition entry goes in to the mapping based on the name.
             AmbryPartition existing = partitionNameToAmbryPartition.putIfAbsent(partitionName, mappedPartition);
             if (existing != null) {
@@ -520,8 +635,18 @@ class HelixClusterManager implements ClusterMap {
             }
             ensurePartitionAbsenceOnNodeAndValidateCapacity(mappedPartition, datanode, replicaCapacity);
             // Create replica associated with this node.
+            boolean isSealed;
+            if (clusterMapConfig.clusterMapEnablePartitionOverride && partitionOverrideInfoMap.containsKey(
+                partitionName)) {
+              isSealed = partitionOverrideInfoMap.get(partitionName)
+                  .get(ClusterMapUtils.PARTITION_STATE)
+                  .equals(ClusterMapUtils.READ_ONLY_STR);
+            } else {
+              isSealed = sealedReplicas.contains(partitionName);
+            }
             AmbryReplica replica =
-                new AmbryReplica(mappedPartition, disk, replicaCapacity, sealedReplicas.contains(partitionName));
+                new AmbryReplica(clusterMapConfig, mappedPartition, disk, stoppedReplicas.contains(partitionName),
+                    replicaCapacity, isSealed);
             ambryPartitionToAmbryReplicas.get(mappedPartition).add(replica);
             ambryDataNodeToAmbryReplicas.get(datanode).add(replica);
           }

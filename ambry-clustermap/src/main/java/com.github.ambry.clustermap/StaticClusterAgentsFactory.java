@@ -17,6 +17,7 @@ import com.codahale.metrics.MetricRegistry;
 import com.github.ambry.config.ClusterMapConfig;
 import com.github.ambry.server.AmbryHealthReport;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import org.json.JSONException;
@@ -55,7 +56,7 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
       String partitionLayoutFilePath) throws JSONException, IOException {
     this(clusterMapConfig, new PartitionLayout(
         new HardwareLayout(new JSONObject(readStringFromFile(hardwareLayoutFilePath)), clusterMapConfig),
-        new JSONObject(readStringFromFile(partitionLayoutFilePath))));
+        new JSONObject(readStringFromFile(partitionLayoutFilePath)), clusterMapConfig.clusterMapDatacenterName));
   }
 
   /**
@@ -88,7 +89,7 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
       //如果集群参与者为空，则提供默认实现
       clusterParticipant = new ClusterParticipant() {
         @Override
-        public void initialize(String hostname, int port, List<AmbryHealthReport> ambryHealthReports) {
+        public void participate(List<AmbryHealthReport> ambryHealthReports) {
 
         }
 
@@ -100,6 +101,21 @@ public class StaticClusterAgentsFactory implements ClusterAgentsFactory {
         @Override
         public boolean setReplicaSealedState(ReplicaId replicaId, boolean isSealed) {
           return false;
+        }
+
+        @Override
+        public boolean setReplicaStoppedState(List<ReplicaId> replicaIds, boolean markStop) {
+          return false;
+        }
+
+        @Override
+        public List<String> getSealedReplicas() {
+          return Collections.emptyList();
+        }
+
+        @Override
+        public List<String> getStoppedReplicas() {
+          return Collections.emptyList();
         }
       };
     }

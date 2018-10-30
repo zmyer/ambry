@@ -13,6 +13,8 @@
  */
 package com.github.ambry.protocol;
 
+import com.github.ambry.account.Account;
+import com.github.ambry.account.Container;
 import com.github.ambry.clustermap.MockClusterMap;
 import com.github.ambry.clustermap.MockPartitionId;
 import com.github.ambry.commons.BlobId;
@@ -20,14 +22,15 @@ import com.github.ambry.messageformat.MessageMetadata;
 import com.github.ambry.store.MessageInfo;
 import com.github.ambry.store.StoreKey;
 import com.github.ambry.utils.ByteBufferInputStream;
-import com.github.ambry.utils.Pair;
 import com.github.ambry.utils.SystemTime;
 import com.github.ambry.utils.TestUtils;
+import com.github.ambry.utils.Utils;
 import java.io.DataInputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -46,7 +49,7 @@ public class MessageInfoAndMetadataListSerDeTest {
   @Parameterized.Parameters
   public static List<Object[]> data() {
     return Arrays.asList(
-        new Object[][]{{MessageInfoAndMetadataListSerde.VERSION_1}, {MessageInfoAndMetadataListSerde.VERSION_2}, {MessageInfoAndMetadataListSerde.VERSION_3}, {MessageInfoAndMetadataListSerde.VERSION_4}});
+        new Object[][]{{MessageInfoAndMetadataListSerde.DETERMINE_VERSION}, {MessageInfoAndMetadataListSerde.VERSION_1}, {MessageInfoAndMetadataListSerde.VERSION_2}, {MessageInfoAndMetadataListSerde.VERSION_3}, {MessageInfoAndMetadataListSerde.VERSION_4}, {MessageInfoAndMetadataListSerde.VERSION_5}});
   }
 
   public MessageInfoAndMetadataListSerDeTest(short serDeVersion) {
@@ -59,18 +62,22 @@ public class MessageInfoAndMetadataListSerDeTest {
     MockPartitionId partitionId = new MockPartitionId();
     short[] accountIds = {100, 101, 102, 103};
     short[] containerIds = {10, 11, 12, 13};
+    boolean[] isDeletedVals = {false, true, false, true};
+    boolean[] isTtlUpdatedVals = {true, false, false, true};
+    Long[] crcs = {null, 100L, Long.MIN_VALUE, Long.MAX_VALUE};
     StoreKey[] keys =
         {new BlobId(TestUtils.getRandomElement(BlobId.getAllValidVersions()), BlobId.BlobIdType.NATIVE, (byte) 0,
-            accountIds[0], containerIds[0], partitionId, false), new BlobId(
+            accountIds[0], containerIds[0], partitionId, false, BlobId.BlobDataType.DATACHUNK), new BlobId(
             TestUtils.getRandomElement(BlobId.getAllValidVersions()), BlobId.BlobIdType.NATIVE, (byte) 0, accountIds[1],
-            containerIds[1], partitionId, false), new BlobId(TestUtils.getRandomElement(BlobId.getAllValidVersions()),
-            BlobId.BlobIdType.NATIVE, (byte) 0, accountIds[2], containerIds[2], partitionId, false), new BlobId(
+            containerIds[1], partitionId, false, BlobId.BlobDataType.DATACHUNK), new BlobId(TestUtils.getRandomElement(BlobId.getAllValidVersions()),
+            BlobId.BlobIdType.NATIVE, (byte) 0, accountIds[2], containerIds[2], partitionId, false,
+            BlobId.BlobDataType.DATACHUNK), new BlobId(
             TestUtils.getRandomElement(BlobId.getAllValidVersions()), BlobId.BlobIdType.NATIVE, (byte) 0, accountIds[3],
-            containerIds[3], partitionId, false)};
+            containerIds[3], partitionId, false, BlobId.BlobDataType.DATACHUNK)};
     long[] blobSizes = {1024, 2048, 4096, 8192};
-    long[] operationTimes = {SystemTime.getInstance().milliseconds(),
-        SystemTime.getInstance().milliseconds() + 10,
-        SystemTime.getInstance().milliseconds() + 20, SystemTime.getInstance().milliseconds() + 30};
+    long[] times = {SystemTime.getInstance().milliseconds(),
+        SystemTime.getInstance().milliseconds() - 1,
+        SystemTime.getInstance().milliseconds() + TimeUnit.SECONDS.toMillis(5), Utils.Infinite_Time};
     MessageMetadata[] messageMetadata = new MessageMetadata[4];
     messageMetadata[0] = new MessageMetadata(ByteBuffer.wrap(getRandomBytes(100)));
     messageMetadata[1] = new MessageMetadata(null);
@@ -80,7 +87,9 @@ public class MessageInfoAndMetadataListSerDeTest {
     List<MessageInfo> messageInfoList = new ArrayList<>(4);
     List<MessageMetadata> messageMetadataList = new ArrayList<>(4);
     for (int i = 0; i < 4; i++) {
-      messageInfoList.add(new MessageInfo(keys[i], blobSizes[i], accountIds[i], containerIds[i], operationTimes[i]));
+      messageInfoList.add(
+          new MessageInfo(keys[i], blobSizes[i], isDeletedVals[i], isTtlUpdatedVals[i], times[i], crcs[i],
+              accountIds[i], containerIds[i], times[i]));
       messageMetadataList.add(messageMetadata[i]);
     }
 
@@ -90,13 +99,24 @@ public class MessageInfoAndMetadataListSerDeTest {
     ByteBuffer buffer = ByteBuffer.allocate(messageInfoAndMetadataListSerde.getMessageInfoAndMetadataListSize());
     messageInfoAndMetadataListSerde.serializeMessageInfoAndMetadataList(buffer);
     buffer.flip();
-    Pair<List<MessageInfo>, List<MessageMetadata>> messageInfoAndMetadataList =
+    if (serDeVersion >= MessageInfoAndMetadataListSerde.VERSION_5) {
+      // should fail if the wrong version is provided
+      try {
+        MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(
+            new DataInputStream(new ByteBufferInputStream(buffer)), mockMap, (short) (serDeVersion - 1));
+        Assert.fail("Should have failed to deserialize");
+      } catch (IllegalArgumentException e) {
+        // expected. Nothing to do
+      }
+    }
+    buffer.rewind();
+    MessageInfoAndMetadataListSerde messageInfoAndMetadataList =
         MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(
             new DataInputStream(new ByteBufferInputStream(buffer)), mockMap, serDeVersion);
 
     // Verify
-    List<MessageInfo> responseMessageInfoList = messageInfoAndMetadataList.getFirst();
-    List<MessageMetadata> responseMessageMetadataList = messageInfoAndMetadataList.getSecond();
+    List<MessageInfo> responseMessageInfoList = messageInfoAndMetadataList.getMessageInfoList();
+    List<MessageMetadata> responseMessageMetadataList = messageInfoAndMetadataList.getMessageMetadataList();
     Assert.assertEquals(4, responseMessageInfoList.size());
     Assert.assertEquals(4, responseMessageMetadataList.size());
     for (int i = 0; i < 4; i++) {
@@ -105,35 +125,54 @@ public class MessageInfoAndMetadataListSerDeTest {
     }
   }
 
-  private void assertMessageInfoEquality(MessageInfo a, MessageInfo b) {
-    Assert.assertEquals(a.getExpirationTimeInMs(), b.getExpirationTimeInMs());
-    Assert.assertEquals(a.getSize(), b.getSize());
-    Assert.assertEquals(a.getStoreKey(), b.getStoreKey());
-    Assert.assertEquals(a.isDeleted(), b.isDeleted());
-    Assert.assertEquals(a.isExpired(), b.isExpired());
-    if (serDeVersion >= MessageInfoAndMetadataListSerde.VERSION_2) {
-      Assert.assertEquals(a.getCrc(), b.getCrc());
+  private void assertMessageInfoEquality(MessageInfo exp, MessageInfo act) {
+    short version =
+        serDeVersion == MessageInfoAndMetadataListSerde.DETERMINE_VERSION ? MessageInfoAndMetadataListSerde.AUTO_VERSION
+            : serDeVersion;
+    Assert.assertEquals(exp.getExpirationTimeInMs(), act.getExpirationTimeInMs());
+    Assert.assertEquals(exp.getSize(), act.getSize());
+    Assert.assertEquals(exp.getStoreKey(), act.getStoreKey());
+    Assert.assertEquals(exp.isDeleted(), act.isDeleted());
+    Assert.assertEquals(exp.isExpired(), act.isExpired());
+    if (version >= MessageInfoAndMetadataListSerde.VERSION_2) {
+      Assert.assertEquals(exp.getCrc(), act.getCrc());
+    } else {
+      Assert.assertNull("Crc should be null for version < 2", act.getCrc());
     }
-    if (serDeVersion >= MessageInfoAndMetadataListSerde.VERSION_3) {
-      Assert.assertEquals(a.getAccountId(), b.getAccountId());
-      Assert.assertEquals(a.getContainerId(), b.getContainerId());
-      Assert.assertEquals(a.getOperationTimeMs(), b.getOperationTimeMs());
+    if (version >= MessageInfoAndMetadataListSerde.VERSION_3) {
+      Assert.assertEquals(exp.getAccountId(), act.getAccountId());
+      Assert.assertEquals(exp.getContainerId(), act.getContainerId());
+      Assert.assertEquals(exp.getOperationTimeMs(), act.getOperationTimeMs());
+    } else {
+      Assert.assertEquals("Account ID should be unknown", Account.UNKNOWN_ACCOUNT_ID, act.getAccountId());
+      Assert.assertEquals("Container ID should be unknown", Container.UNKNOWN_CONTAINER_ID, act.getContainerId());
+      Assert.assertEquals("Operation time should be unknown", Utils.Infinite_Time, act.getOperationTimeMs());
+    }
+    if (version >= MessageInfoAndMetadataListSerde.VERSION_5) {
+      Assert.assertEquals("TtlUpdated not as expected", exp.isTtlUpdated(), act.isTtlUpdated());
+    } else {
+      Assert.assertFalse("TtlUpdated should be false for version < 5", act.isTtlUpdated());
     }
   }
 
-  private void assertMessageMetadataEquality(MessageMetadata a, MessageMetadata b) {
-    if (serDeVersion >= MessageInfoAndMetadataListSerde.VERSION_4) {
-      if (a == null) {
-        Assert.assertNull(b);
+  private void assertMessageMetadataEquality(MessageMetadata expected, MessageMetadata actual) {
+    short version =
+        serDeVersion == MessageInfoAndMetadataListSerde.DETERMINE_VERSION ? MessageInfoAndMetadataListSerde.AUTO_VERSION
+            : serDeVersion;
+    if (version >= MessageInfoAndMetadataListSerde.VERSION_4) {
+      if (expected == null) {
+        Assert.assertNull(actual);
       } else {
-        if (a.getEncryptionKey() == null) {
+        if (expected.getEncryptionKey() == null) {
           // null encryption keys come in as empty.
-          Assert.assertEquals(0, b.getEncryptionKey().remaining());
+          Assert.assertEquals(0, actual.getEncryptionKey().remaining());
         } else {
-          Assert.assertEquals(a.getEncryptionKey().rewind(), b.getEncryptionKey());
+          Assert.assertEquals(expected.getEncryptionKey().rewind(), actual.getEncryptionKey());
         }
-        Assert.assertEquals(a.getVersion(), b.getVersion());
+        Assert.assertEquals(expected.getVersion(), actual.getVersion());
       }
+    } else {
+      Assert.assertNull("MessageMetadata must null for versions < 4", actual);
     }
   }
 }

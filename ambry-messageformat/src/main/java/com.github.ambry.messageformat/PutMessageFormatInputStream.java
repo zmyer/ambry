@@ -30,6 +30,8 @@ import java.nio.ByteBuffer;
  *  - - - - - - - - - - - - - -
  * |       blob key            |
  *  - - - - - - - - - - - - - -
+ * |     Encryption key        |
+ *  - - - - - - - - - - - - - -
  * |  Blob Properties Record   |
  *  - - - - - - - - - - - - - -
  * |  User metadata Record     |
@@ -77,33 +79,33 @@ public class PutMessageFormatInputStream extends MessageFormatInputStream {
                         (int) (
                                 blobSize - streamSize - MessageFormatRecord.Crc_Size));
 
-        long totalSize = blobEncryptionKeySize + blobPropertiesRecordSize + userMetadataSize + blobSize;
-        int blobEncryptionKeyRecordRelativeOffset =
-                blobEncryptionKey == null ? MessageFormatRecord.Message_Header_Invalid_Relative_Offset
-                        : headerSize + key.sizeInBytes();
-        int blobPropertiesRecordRelativeOffset = blobEncryptionKey == null ? headerSize + key.sizeInBytes()
-                : blobEncryptionKeyRecordRelativeOffset + blobEncryptionKeySize;
-        int deleteRecordRelativeOffset = MessageFormatRecord.Message_Header_Invalid_Relative_Offset;
-        int userMetadataRecordRelativeOffset = blobPropertiesRecordRelativeOffset + blobPropertiesRecordSize;
-        int blobRecordRelativeOffset = userMetadataRecordRelativeOffset + userMetadataSize;
-        MessageFormatRecord.MessageHeader_Format_V2.serializeHeader(buffer, totalSize,
-                blobEncryptionKeyRecordRelativeOffset, blobPropertiesRecordRelativeOffset, deleteRecordRelativeOffset,
-                userMetadataRecordRelativeOffset, blobRecordRelativeOffset);
-        buffer.put(key.toBytes());
-        if (blobEncryptionKey != null) {
-            MessageFormatRecord.BlobEncryptionKey_Format_V1.serializeBlobEncryptionKeyRecord(buffer, blobEncryptionKey);
-        }
-        MessageFormatRecord.BlobProperties_Format_V1.serializeBlobPropertiesRecord(buffer, blobProperties);
-        MessageFormatRecord.UserMetadata_Format_V1.serializeUserMetadataRecord(buffer, userMetadata);
-        int bufferBlobStart = buffer.position();
-        MessageFormatRecord.Blob_Format_V2.serializePartialBlobRecord(buffer, streamSize, blobType);
-        Crc32 crc = new Crc32();
-        crc.update(buffer.array(), bufferBlobStart, buffer.position() - bufferBlobStart);
-        stream = new CrcInputStream(crc, blobStream);
-        streamLength = streamSize;
-        messageLength = buffer.capacity() + streamLength + MessageFormatRecord.Crc_Size;
-        buffer.flip();
+    long totalSize = blobEncryptionKeySize + blobPropertiesRecordSize + userMetadataSize + blobSize;
+    int blobEncryptionKeyRecordRelativeOffset =
+        blobEncryptionKey == null ? MessageFormatRecord.Message_Header_Invalid_Relative_Offset
+            : headerSize + key.sizeInBytes();
+    int blobPropertiesRecordRelativeOffset = blobEncryptionKey == null ? headerSize + key.sizeInBytes()
+        : blobEncryptionKeyRecordRelativeOffset + blobEncryptionKeySize;
+    int updateRecordRelativeOffset = MessageFormatRecord.Message_Header_Invalid_Relative_Offset;
+    int userMetadataRecordRelativeOffset = blobPropertiesRecordRelativeOffset + blobPropertiesRecordSize;
+    int blobRecordRelativeOffset = userMetadataRecordRelativeOffset + userMetadataSize;
+    MessageFormatRecord.MessageHeader_Format_V2.serializeHeader(buffer, totalSize,
+        blobEncryptionKeyRecordRelativeOffset, blobPropertiesRecordRelativeOffset, updateRecordRelativeOffset,
+        userMetadataRecordRelativeOffset, blobRecordRelativeOffset);
+    buffer.put(key.toBytes());
+    if (blobEncryptionKey != null) {
+      MessageFormatRecord.BlobEncryptionKey_Format_V1.serializeBlobEncryptionKeyRecord(buffer, blobEncryptionKey);
     }
+    MessageFormatRecord.BlobProperties_Format_V1.serializeBlobPropertiesRecord(buffer, blobProperties);
+    MessageFormatRecord.UserMetadata_Format_V1.serializeUserMetadataRecord(buffer, userMetadata);
+    int bufferBlobStart = buffer.position();
+    MessageFormatRecord.Blob_Format_V2.serializePartialBlobRecord(buffer, streamSize, blobType);
+    Crc32 crc = new Crc32();
+    crc.update(buffer.array(), bufferBlobStart, buffer.position() - bufferBlobStart);
+    stream = new CrcInputStream(crc, blobStream);
+    streamLength = streamSize;
+    messageLength = buffer.capacity() + streamLength + MessageFormatRecord.Crc_Size;
+    buffer.flip();
+  }
 
     /**
      * Helper method to create a stream without encryption key record. This is the default currently, but once all nodes

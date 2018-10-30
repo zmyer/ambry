@@ -18,8 +18,6 @@ import com.github.ambry.clustermap.PartitionId;
 import com.github.ambry.commons.ServerErrorCode;
 import com.github.ambry.messageformat.MessageMetadata;
 import com.github.ambry.store.MessageInfo;
-import com.github.ambry.utils.Pair;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -76,22 +74,20 @@ public class PartitionResponseInfo {
         return errorCode;
     }
 
-    public static PartitionResponseInfo readFrom(DataInputStream stream, ClusterMap map, short getResponseVersion)
-            throws IOException {
-        PartitionId partitionId = map.getPartitionIdFromStream(stream);
-        Pair<List<MessageInfo>, List<MessageMetadata>> messageInfoAndMetadataList =
-                MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(stream, map,
-                        getMessageInfoAndMetadataListSerDeVersion(getResponseVersion));
-        ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
-        if (error != ServerErrorCode.No_Error) {
-            return new PartitionResponseInfo(partitionId, new ArrayList<>(), new ArrayList<>(), error,
-                    getMessageInfoAndMetadataListSerDeVersion(getResponseVersion));
-        } else {
-            return new PartitionResponseInfo(partitionId, messageInfoAndMetadataList.getFirst(),
-                    messageInfoAndMetadataList.getSecond(), ServerErrorCode.No_Error,
-                    getMessageInfoAndMetadataListSerDeVersion(getResponseVersion));
-        }
+  public static PartitionResponseInfo readFrom(DataInputStream stream, ClusterMap map, short getResponseVersion)
+      throws IOException {
+    PartitionId partitionId = map.getPartitionIdFromStream(stream);
+    MessageInfoAndMetadataListSerde messageInfoAndMetadataList =
+        MessageInfoAndMetadataListSerde.deserializeMessageInfoAndMetadataList(stream, map,
+            getMessageInfoAndMetadataListSerDeVersion(getResponseVersion));
+    ServerErrorCode error = ServerErrorCode.values()[stream.readShort()];
+    if (error != ServerErrorCode.No_Error) {
+      return new PartitionResponseInfo(partitionId, new ArrayList<>(), new ArrayList<>(), error, getResponseVersion);
+    } else {
+      return new PartitionResponseInfo(partitionId, messageInfoAndMetadataList.getMessageInfoList(),
+          messageInfoAndMetadataList.getMessageMetadataList(), ServerErrorCode.No_Error, getResponseVersion);
     }
+  }
 
     public void writeTo(ByteBuffer byteBuffer) {
         byteBuffer.put(partitionId.getBytes());
@@ -114,23 +110,25 @@ public class PartitionResponseInfo {
         return sb.toString();
     }
 
-    /**
-     * Return the SerDe version for MessageInfoAndMetadataList to use for the given {@link GetResponse} version
-     * @param getResponseVersion the GetResponse version
-     * @return the MessageInfoAndMetadataList SerDe version to use for the given GetResponse version
-     */
-    private static short getMessageInfoAndMetadataListSerDeVersion(short getResponseVersion) {
-        switch (getResponseVersion) {
-        case GetResponse.GET_RESPONSE_VERSION_V_1:
-            return MessageInfoAndMetadataListSerde.VERSION_1;
-        case GetResponse.GET_RESPONSE_VERSION_V_2:
-            return MessageInfoAndMetadataListSerde.VERSION_2;
-        case GetResponse.GET_RESPONSE_VERSION_V_3:
-            return MessageInfoAndMetadataListSerde.VERSION_3;
-        case GetResponse.GET_RESPONSE_VERSION_V_4:
-            return MessageInfoAndMetadataListSerde.VERSION_4;
-        default:
-            throw new IllegalArgumentException("Unknown GetResponse version encountered: " + getResponseVersion);
-        }
+  /**
+   * Return the SerDe version for MessageInfoAndMetadataList to use for the given {@link GetResponse} version
+   * @param getResponseVersion the GetResponse version
+   * @return the MessageInfoAndMetadataList SerDe version to use for the given GetResponse version
+   */
+  private static short getMessageInfoAndMetadataListSerDeVersion(short getResponseVersion) {
+    switch (getResponseVersion) {
+      case GetResponse.GET_RESPONSE_VERSION_V_1:
+        return MessageInfoAndMetadataListSerde.VERSION_1;
+      case GetResponse.GET_RESPONSE_VERSION_V_2:
+        return MessageInfoAndMetadataListSerde.VERSION_2;
+      case GetResponse.GET_RESPONSE_VERSION_V_3:
+        return MessageInfoAndMetadataListSerde.VERSION_3;
+      case GetResponse.GET_RESPONSE_VERSION_V_4:
+        return MessageInfoAndMetadataListSerde.VERSION_4;
+      case GetResponse.GET_RESPONSE_VERSION_V_5:
+        return MessageInfoAndMetadataListSerde.DETERMINE_VERSION;
+      default:
+        throw new IllegalArgumentException("Unknown GetResponse version encountered: " + getResponseVersion);
     }
+  }
 }

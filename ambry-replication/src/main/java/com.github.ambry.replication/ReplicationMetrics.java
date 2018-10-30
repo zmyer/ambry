@@ -37,83 +37,90 @@ import java.util.Set;
 // TODO: 2018/4/27 by zmyer
 public class ReplicationMetrics {
 
-    public final Map<String, Meter> interColoReplicationBytesRate = new HashMap<String, Meter>();
-    public final Meter intraColoReplicationBytesRate;
-    public final Map<String, Meter> plainTextInterColoReplicationBytesRate = new HashMap<String, Meter>();
-    public final Meter plainTextIntraColoReplicationBytesRate;
-    public final Map<String, Meter> sslInterColoReplicationBytesRate = new HashMap<String, Meter>();
-    public final Meter sslIntraColoReplicationBytesRate;
-    public final Map<String, Counter> interColoMetadataExchangeCount = new HashMap<>();
-    public final Map<String, Counter> interColoReplicationGetRequestCount = new HashMap<>();
-    public final Counter intraColoMetadataExchangeCount;
-    public final Counter intraColoReplicationGetRequestCount;
-    public final Map<String, Counter> interColoBlobsReplicatedCount = new HashMap<String, Counter>();
-    public final Counter intraColoBlobsReplicatedCount;
-    public final Counter unknownRemoteReplicaRequestCount;
-    public final Map<String, Counter> plainTextInterColoMetadataExchangeCount = new HashMap<String, Counter>();
-    public final Counter plainTextIntraColoMetadataExchangeCount;
-    public final Map<String, Counter> plainTextInterColoBlobsReplicatedCount = new HashMap<String, Counter>();
-    public final Counter plainTextIntraColoBlobsReplicatedCount;
-    public final Map<String, Counter> sslInterColoMetadataExchangeCount = new HashMap<String, Counter>();
-    public final Counter sslIntraColoMetadataExchangeCount;
-    public final Map<String, Counter> sslInterColoBlobsReplicatedCount = new HashMap<String, Counter>();
-    public final Counter sslIntraColoBlobsReplicatedCount;
-    public final Counter replicationErrors;
-    public final Counter plainTextReplicationErrors;
-    public final Counter sslReplicationErrors;
-    public final Counter replicationTokenResetCount;
-    public final Counter replicationInvalidMessageStreamErrorCount;
-    public final Map<String, Timer> interColoReplicationLatency = new HashMap<String, Timer>();
-    public final Timer intraColoReplicationLatency;
-    public final Map<String, Timer> plainTextInterColoReplicationLatency = new HashMap<String, Timer>();
-    public final Timer plainTextIntraColoReplicationLatency;
-    public final Map<String, Timer> sslInterColoReplicationLatency = new HashMap<String, Timer>();
-    public final Timer sslIntraColoReplicationLatency;
-    public final Histogram remoteReplicaTokensPersistTime;
-    public final Histogram remoteReplicaTokensRestoreTime;
-    public final Map<String, Histogram> interColoExchangeMetadataTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoExchangeMetadataTime;
-    public final Map<String, Histogram> plainTextInterColoExchangeMetadataTime = new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoExchangeMetadataTime;
-    public final Map<String, Histogram> sslInterColoExchangeMetadataTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoExchangeMetadataTime;
-    public final Map<String, Histogram> interColoFixMissingKeysTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoFixMissingKeysTime;
-    public final Map<String, Histogram> plainTextInterColoFixMissingKeysTime = new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoFixMissingKeysTime;
-    public final Map<String, Histogram> sslInterColoFixMissingKeysTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoFixMissingKeysTime;
-    public final Map<String, Histogram> interColoReplicationMetadataRequestTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoReplicationMetadataRequestTime;
-    public final Map<String, Histogram> plainTextInterColoReplicationMetadataRequestTime =
-            new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoReplicationMetadataRequestTime;
-    public final Map<String, Histogram> sslInterColoReplicationMetadataRequestTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoReplicationMetadataRequestTime;
-    public final Histogram intraColoReplicationWaitTime;
-    public final Map<String, Histogram> interColoCheckMissingKeysTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoCheckMissingKeysTime;
-    public final Map<String, Histogram> interColoProcessMetadataResponseTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoProcessMetadataResponseTime;
-    public final Map<String, Histogram> interColoGetRequestTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoGetRequestTime;
-    public final Map<String, Histogram> plainTextInterColoGetRequestTime = new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoGetRequestTime;
-    public final Map<String, Histogram> sslInterColoGetRequestTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoGetRequestTime;
-    public final Map<String, Histogram> interColoBatchStoreWriteTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoBatchStoreWriteTime;
-    public final Map<String, Histogram> plainTextInterColoBatchStoreWriteTime = new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoBatchStoreWriteTime;
-    public final Map<String, Histogram> sslInterColoBatchStoreWriteTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoBatchStoreWriteTime;
-    public final Map<String, Histogram> interColoTotalReplicationTime = new HashMap<String, Histogram>();
-    public final Histogram intraColoTotalReplicationTime;
-    public final Map<String, Histogram> plainTextInterColoTotalReplicationTime = new HashMap<String, Histogram>();
-    public final Histogram plainTextIntraColoTotalReplicationTime;
-    public final Map<String, Histogram> sslInterColoTotalReplicationTime = new HashMap<String, Histogram>();
-    public final Histogram sslIntraColoTotalReplicationTime;
-    public final Counter blobDeletedOnGetCount;
+  public final Map<String, Meter> interColoReplicationBytesRate = new HashMap<String, Meter>();
+  public final Meter intraColoReplicationBytesRate;
+  public final Map<String, Meter> plainTextInterColoReplicationBytesRate = new HashMap<String, Meter>();
+  public final Meter plainTextIntraColoReplicationBytesRate;
+  public final Map<String, Meter> sslInterColoReplicationBytesRate = new HashMap<String, Meter>();
+  public final Meter sslIntraColoReplicationBytesRate;
+  public final Map<String, Counter> interColoMetadataExchangeCount = new HashMap<>();
+  public final Map<String, Counter> interColoReplicationGetRequestCount = new HashMap<>();
+  public final Counter intraColoMetadataExchangeCount;
+  public final Counter intraColoReplicationGetRequestCount;
+  public final Map<String, Counter> interColoBlobsReplicatedCount = new HashMap<String, Counter>();
+  public final Counter intraColoBlobsReplicatedCount;
+  public final Counter unknownRemoteReplicaRequestCount;
+  public final Map<String, Counter> plainTextInterColoMetadataExchangeCount = new HashMap<String, Counter>();
+  public final Counter plainTextIntraColoMetadataExchangeCount;
+  public final Map<String, Counter> plainTextInterColoBlobsReplicatedCount = new HashMap<String, Counter>();
+  public final Counter plainTextIntraColoBlobsReplicatedCount;
+  public final Map<String, Counter> sslInterColoMetadataExchangeCount = new HashMap<String, Counter>();
+  public final Counter sslIntraColoMetadataExchangeCount;
+  public final Map<String, Counter> sslInterColoBlobsReplicatedCount = new HashMap<String, Counter>();
+  public final Counter sslIntraColoBlobsReplicatedCount;
+  public final Counter replicationErrors;
+  public final Counter plainTextReplicationErrors;
+  public final Counter sslReplicationErrors;
+  public final Counter replicationTokenResetCount;
+  public final Counter replicationInvalidMessageStreamErrorCount;
+  public final Map<String, Timer> interColoReplicationLatency = new HashMap<String, Timer>();
+  public final Timer intraColoReplicationLatency;
+  public final Map<String, Timer> plainTextInterColoReplicationLatency = new HashMap<String, Timer>();
+  public final Timer plainTextIntraColoReplicationLatency;
+  public final Map<String, Timer> sslInterColoReplicationLatency = new HashMap<String, Timer>();
+  public final Timer sslIntraColoReplicationLatency;
+  public final Histogram remoteReplicaTokensPersistTime;
+  public final Histogram remoteReplicaTokensRestoreTime;
+  public final Map<String, Histogram> interColoExchangeMetadataTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoExchangeMetadataTime;
+  public final Map<String, Histogram> plainTextInterColoExchangeMetadataTime = new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoExchangeMetadataTime;
+  public final Map<String, Histogram> sslInterColoExchangeMetadataTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoExchangeMetadataTime;
+  public final Map<String, Histogram> interColoFixMissingKeysTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoFixMissingKeysTime;
+  public final Map<String, Histogram> plainTextInterColoFixMissingKeysTime = new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoFixMissingKeysTime;
+  public final Map<String, Histogram> sslInterColoFixMissingKeysTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoFixMissingKeysTime;
+  public final Map<String, Histogram> interColoReplicationMetadataRequestTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoReplicationMetadataRequestTime;
+  public final Map<String, Histogram> plainTextInterColoReplicationMetadataRequestTime =
+      new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoReplicationMetadataRequestTime;
+  public final Map<String, Histogram> sslInterColoReplicationMetadataRequestTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoReplicationMetadataRequestTime;
+  public final Histogram intraColoReplicationWaitTime;
+  public final Map<String, Histogram> interColoCheckMissingKeysTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoCheckMissingKeysTime;
+  public final Map<String, Histogram> interColoProcessMetadataResponseTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoProcessMetadataResponseTime;
+  public final Map<String, Histogram> interColoGetRequestTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoGetRequestTime;
+  public final Map<String, Histogram> plainTextInterColoGetRequestTime = new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoGetRequestTime;
+  public final Map<String, Histogram> sslInterColoGetRequestTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoGetRequestTime;
+  public final Map<String, Histogram> interColoBatchStoreWriteTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoBatchStoreWriteTime;
+  public final Map<String, Histogram> plainTextInterColoBatchStoreWriteTime = new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoBatchStoreWriteTime;
+  public final Map<String, Histogram> sslInterColoBatchStoreWriteTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoBatchStoreWriteTime;
+  public final Map<String, Histogram> interColoTotalReplicationTime = new HashMap<String, Histogram>();
+  public final Histogram intraColoTotalReplicationTime;
+  public final Map<String, Histogram> plainTextInterColoTotalReplicationTime = new HashMap<String, Histogram>();
+  public final Histogram plainTextIntraColoTotalReplicationTime;
+  public final Map<String, Histogram> sslInterColoTotalReplicationTime = new HashMap<String, Histogram>();
+  public final Histogram sslIntraColoTotalReplicationTime;
+  public final Counter blobDeletedOnGetCount;
+  public final Counter blobAuthorizationFailureCount;
+  public final Counter intraColoReplicaSyncedBackoffCount;
+  public final Counter interColoReplicaSyncedBackoffCount;
+  public final Counter intraColoReplicaThreadIdleCount;
+  public final Counter interColoReplicaThreadIdleCount;
+  public final Counter intraColoReplicaThreadThrottleCount;
+  public final Counter interColoReplicaThreadThrottleCount;
 
     public List<Gauge<Long>> replicaLagInBytes;
     private MetricRegistry registry;
@@ -122,99 +129,111 @@ public class ReplicationMetrics {
     private Map<String, Counter> localStoreErrorMap;
     private Map<PartitionId, Counter> partitionIdToInvalidMessageStreamErrorCounter;
 
-    public ReplicationMetrics(MetricRegistry registry, List<? extends ReplicaId> replicaIds) {
-        metadataRequestErrorMap = new HashMap<String, Counter>();
-        getRequestErrorMap = new HashMap<String, Counter>();
-        localStoreErrorMap = new HashMap<String, Counter>();
-        partitionIdToInvalidMessageStreamErrorCounter = new HashMap<PartitionId, Counter>();
-        intraColoReplicationBytesRate =
-                registry.meter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationBytesRate"));
-        plainTextIntraColoReplicationBytesRate =
-                registry.meter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationBytesRate"));
-        sslIntraColoReplicationBytesRate =
-                registry.meter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationBytesRate"));
-        intraColoMetadataExchangeCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoMetadataExchangeCount"));
-        intraColoReplicationGetRequestCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationGetRequestCount"));
-        intraColoBlobsReplicatedCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoBlobsReplicatedCount"));
-        unknownRemoteReplicaRequestCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "UnknownRemoteReplicaRequestCount"));
-        plainTextIntraColoMetadataExchangeCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoMetadataExchangeCount"));
-        plainTextIntraColoBlobsReplicatedCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoBlobsReplicatedCount"));
-        sslIntraColoMetadataExchangeCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoMetadataExchangeCount"));
-        sslIntraColoBlobsReplicatedCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoBlobsReplicatedCount"));
-        replicationErrors = registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationErrors"));
-        plainTextReplicationErrors =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextReplicationErrors"));
-        sslReplicationErrors = registry.counter(MetricRegistry.name(ReplicaThread.class, "SslReplicationErrors"));
-        replicationTokenResetCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationTokenResetCount"));
-        replicationInvalidMessageStreamErrorCount =
-                registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationInvalidMessageStreamErrorCount"));
-        intraColoReplicationLatency =
-                registry.timer(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationLatency"));
-        plainTextIntraColoReplicationLatency =
-                registry.timer(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationLatency"));
-        sslIntraColoReplicationLatency =
-                registry.timer(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationLatency"));
-        remoteReplicaTokensPersistTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "RemoteReplicaTokensPersistTime"));
-        remoteReplicaTokensRestoreTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "RemoteReplicaTokensRestoreTime"));
-        intraColoExchangeMetadataTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoExchangeMetadataTime"));
-        plainTextIntraColoExchangeMetadataTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoExchangeMetadataTime"));
-        sslIntraColoExchangeMetadataTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoExchangeMetadataTime"));
-        intraColoFixMissingKeysTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoFixMissingKeysTime"));
-        plainTextIntraColoFixMissingKeysTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoFixMissingKeysTime"));
-        sslIntraColoFixMissingKeysTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoFixMissingKeysTime"));
-        intraColoReplicationWaitTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationWaitTime"));
-        intraColoReplicationMetadataRequestTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationMetadataRequestTime"));
-        plainTextIntraColoReplicationMetadataRequestTime = registry.histogram(
-                MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationMetadataRequestTime"));
-        sslIntraColoReplicationMetadataRequestTime =
-                registry.histogram(
-                        MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationMetadataRequestTime"));
-        intraColoCheckMissingKeysTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoCheckMissingKeysTime"));
-        intraColoProcessMetadataResponseTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoProcessMetadataResponseTime"));
-        intraColoGetRequestTime = registry.histogram(
-                MetricRegistry.name(ReplicaThread.class, "IntraColoGetRequestTime"));
-        plainTextIntraColoGetRequestTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoGetRequestTime"));
-        sslIntraColoGetRequestTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoGetRequestTime"));
-        intraColoBatchStoreWriteTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoBatchStoreWriteTime"));
-        plainTextIntraColoBatchStoreWriteTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoBatchStoreWriteTime"));
-        sslIntraColoBatchStoreWriteTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoBatchStoreWriteTime"));
-        intraColoTotalReplicationTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoTotalReplicationTime"));
-        plainTextIntraColoTotalReplicationTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoTotalReplicationTime"));
-        sslIntraColoTotalReplicationTime =
-                registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoTotalReplicationTime"));
-        blobDeletedOnGetCount = registry.counter(MetricRegistry.name(ReplicaThread.class, "BlobDeletedOnGetCount"));
-        this.registry = registry;
-        this.replicaLagInBytes = new ArrayList<Gauge<Long>>();
-        populateInvalidMessageMetricForReplicas(replicaIds);
-    }
+  public ReplicationMetrics(MetricRegistry registry, List<? extends ReplicaId> replicaIds) {
+    metadataRequestErrorMap = new HashMap<String, Counter>();
+    getRequestErrorMap = new HashMap<String, Counter>();
+    localStoreErrorMap = new HashMap<String, Counter>();
+    partitionIdToInvalidMessageStreamErrorCounter = new HashMap<PartitionId, Counter>();
+    intraColoReplicationBytesRate =
+        registry.meter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationBytesRate"));
+    plainTextIntraColoReplicationBytesRate =
+        registry.meter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationBytesRate"));
+    sslIntraColoReplicationBytesRate =
+        registry.meter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationBytesRate"));
+    intraColoMetadataExchangeCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoMetadataExchangeCount"));
+    intraColoReplicationGetRequestCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationGetRequestCount"));
+    intraColoBlobsReplicatedCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoBlobsReplicatedCount"));
+    unknownRemoteReplicaRequestCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "UnknownRemoteReplicaRequestCount"));
+    plainTextIntraColoMetadataExchangeCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoMetadataExchangeCount"));
+    plainTextIntraColoBlobsReplicatedCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoBlobsReplicatedCount"));
+    sslIntraColoMetadataExchangeCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoMetadataExchangeCount"));
+    sslIntraColoBlobsReplicatedCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "SslIntraColoBlobsReplicatedCount"));
+    replicationErrors = registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationErrors"));
+    plainTextReplicationErrors =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "PlainTextReplicationErrors"));
+    sslReplicationErrors = registry.counter(MetricRegistry.name(ReplicaThread.class, "SslReplicationErrors"));
+    replicationTokenResetCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationTokenResetCount"));
+    replicationInvalidMessageStreamErrorCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "ReplicationInvalidMessageStreamErrorCount"));
+    intraColoReplicationLatency =
+        registry.timer(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationLatency"));
+    plainTextIntraColoReplicationLatency =
+        registry.timer(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationLatency"));
+    sslIntraColoReplicationLatency =
+        registry.timer(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationLatency"));
+    remoteReplicaTokensPersistTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "RemoteReplicaTokensPersistTime"));
+    remoteReplicaTokensRestoreTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "RemoteReplicaTokensRestoreTime"));
+    intraColoExchangeMetadataTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoExchangeMetadataTime"));
+    plainTextIntraColoExchangeMetadataTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoExchangeMetadataTime"));
+    sslIntraColoExchangeMetadataTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoExchangeMetadataTime"));
+    intraColoFixMissingKeysTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoFixMissingKeysTime"));
+    plainTextIntraColoFixMissingKeysTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoFixMissingKeysTime"));
+    sslIntraColoFixMissingKeysTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoFixMissingKeysTime"));
+    intraColoReplicationWaitTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationWaitTime"));
+    intraColoReplicationMetadataRequestTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicationMetadataRequestTime"));
+    plainTextIntraColoReplicationMetadataRequestTime = registry.histogram(
+        MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoReplicationMetadataRequestTime"));
+    sslIntraColoReplicationMetadataRequestTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoReplicationMetadataRequestTime"));
+    intraColoCheckMissingKeysTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoCheckMissingKeysTime"));
+    intraColoProcessMetadataResponseTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoProcessMetadataResponseTime"));
+    intraColoGetRequestTime = registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoGetRequestTime"));
+    plainTextIntraColoGetRequestTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoGetRequestTime"));
+    sslIntraColoGetRequestTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoGetRequestTime"));
+    intraColoBatchStoreWriteTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoBatchStoreWriteTime"));
+    plainTextIntraColoBatchStoreWriteTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoBatchStoreWriteTime"));
+    sslIntraColoBatchStoreWriteTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoBatchStoreWriteTime"));
+    intraColoTotalReplicationTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "IntraColoTotalReplicationTime"));
+    plainTextIntraColoTotalReplicationTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "PlainTextIntraColoTotalReplicationTime"));
+    sslIntraColoTotalReplicationTime =
+        registry.histogram(MetricRegistry.name(ReplicaThread.class, "SslIntraColoTotalReplicationTime"));
+    blobDeletedOnGetCount = registry.counter(MetricRegistry.name(ReplicaThread.class, "BlobDeletedOnGetCount"));
+    blobAuthorizationFailureCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "BlobAuthorizationFailureCount"));
+    intraColoReplicaSyncedBackoffCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicaSyncedBackoffCount"));
+    interColoReplicaSyncedBackoffCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "InterColoReplicaSyncedBackoffCount"));
+    intraColoReplicaThreadIdleCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicaThreadIdleCount"));
+    interColoReplicaThreadIdleCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "InterColoReplicaThreadIdleCount"));
+    intraColoReplicaThreadThrottleCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "IntraColoReplicaThreadThrottleCount"));
+    interColoReplicaThreadThrottleCount =
+        registry.counter(MetricRegistry.name(ReplicaThread.class, "InterColoReplicaThreadThrottleCount"));
+    this.registry = registry;
+    this.replicaLagInBytes = new ArrayList<Gauge<Long>>();
+    populateInvalidMessageMetricForReplicas(replicaIds);
+  }
 
     /**
      * Updates per colo metrics for each thread pool
@@ -415,17 +434,16 @@ public class ReplicationMetrics {
         }
     }
 
-    public void populateInvalidMessageMetricForReplicas(List<? extends ReplicaId> replicaIds) {
-        for (ReplicaId replicaId : replicaIds) {
-            PartitionId partitionId = replicaId.getPartitionId();
-            if (!partitionIdToInvalidMessageStreamErrorCounter.containsKey(partitionId)) {
-                Counter partitionBasedCorruptionErrorCount =
-                        registry.counter(
-                                MetricRegistry.name(ReplicaThread.class, partitionId + "-CorruptionErrorCount"));
-                partitionIdToInvalidMessageStreamErrorCounter.put(partitionId, partitionBasedCorruptionErrorCount);
-            }
-        }
+  private void populateInvalidMessageMetricForReplicas(List<? extends ReplicaId> replicaIds) {
+    for (ReplicaId replicaId : replicaIds) {
+      PartitionId partitionId = replicaId.getPartitionId();
+      if (!partitionIdToInvalidMessageStreamErrorCounter.containsKey(partitionId)) {
+        Counter partitionBasedCorruptionErrorCount =
+            registry.counter(MetricRegistry.name(ReplicaThread.class, partitionId + "-CorruptionErrorCount"));
+        partitionIdToInvalidMessageStreamErrorCounter.put(partitionId, partitionBasedCorruptionErrorCount);
+      }
     }
+  }
 
     public void incrementInvalidMessageError(PartitionId partitionId) {
         replicationInvalidMessageStreamErrorCount.inc();

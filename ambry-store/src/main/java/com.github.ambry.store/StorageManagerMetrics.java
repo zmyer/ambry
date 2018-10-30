@@ -34,6 +34,7 @@ public class StorageManagerMetrics {
   public final Counter totalStoreShutdownFailures;
   public final Counter diskMountPathFailures;
   public final Counter diskDownCount;
+  public final Counter unexpectedDirsOnDisk;
 
   // DiskSpaceAllocator related metrics
   public final Histogram diskSpaceAllocatorStartTimeMs;
@@ -69,6 +70,8 @@ public class StorageManagerMetrics {
     totalStoreShutdownFailures = registry.counter(MetricRegistry.name(DiskManager.class, "TotalStoreShutdownFailures"));
     diskMountPathFailures = registry.counter(MetricRegistry.name(DiskManager.class, "DiskMountPathFailures"));
     diskDownCount = registry.counter(MetricRegistry.name(DiskManager.class, "DiskDownCount"));
+    unexpectedDirsOnDisk = registry.counter(MetricRegistry.name(DiskManager.class, "UnexpectedDirsOnDisk"));
+
     diskSpaceAllocatorStartTimeMs =
         registry.histogram(MetricRegistry.name(DiskSpaceAllocator.class, "DiskSpaceAllocatorStartTimeMs"));
     diskSpaceAllocatorAllocTimeMs =
@@ -105,6 +108,14 @@ public class StorageManagerMetrics {
     registry.register(MetricRegistry.name(StorageManager.class, "CompactionThreadsAlive"), compactionThreadsCountGauge);
     Gauge<Integer> compactionHealthGauge = () -> storageManager.getCompactionThreadCount() == diskCount ? 1 : 0;
     registry.register(MetricRegistry.name(StorageManager.class, "CompactionHealth"), compactionHealthGauge);
+  }
+
+  /**
+   * Deregister the Metrics related to the compaction thread.
+   */
+  void deregisterCompactionThreadsTracker() {
+    registry.remove(MetricRegistry.name(StorageManager.class, "CompactionThreadsAlive"));
+    registry.remove(MetricRegistry.name(StorageManager.class, "CompactionHealth"));
   }
 
   /**

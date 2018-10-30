@@ -19,12 +19,8 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.helix.AccessOption;
 import org.apache.helix.ZNRecord;
-import org.apache.helix.manager.zk.ZNRecordSerializer;
-import org.apache.helix.manager.zk.ZkBaseDataAccessor;
-import org.apache.helix.manager.zk.ZkClient;
 import org.apache.helix.store.HelixPropertyListener;
 import org.apache.helix.store.HelixPropertyStore;
-import org.apache.helix.store.zk.ZkHelixPropertyStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,21 +60,20 @@ public class HelixNotifier implements Notifier<String> {
 
   /**
    * A constructor that gets a {@link HelixNotifier} based on {@link HelixPropertyStoreConfig}.
+   * @param zkServers the ZooKeeper server address.
    * @param storeConfig A {@link HelixPropertyStore} used to instantiate a {@link HelixNotifier}. Cannot be {@code null}.
    */
-  public HelixNotifier(HelixPropertyStoreConfig storeConfig) {
+  public HelixNotifier(String zkServers, HelixPropertyStoreConfig storeConfig) {
     if (storeConfig == null) {
       throw new IllegalArgumentException("storeConfig cannot be null");
     }
     long startTimeMs = System.currentTimeMillis();
     logger.info("Starting a HelixNotifier");
-    ZkClient zkClient = new ZkClient(storeConfig.zkClientConnectString, storeConfig.zkClientSessionTimeoutMs,
-        storeConfig.zkClientConnectionTimeoutMs, new ZNRecordSerializer());
     List<String> subscribedPaths = Collections.singletonList(storeConfig.rootPath + HelixNotifier.TOPIC_PATH);
     HelixPropertyStore<ZNRecord> helixStore =
-        new ZkHelixPropertyStore<>(new ZkBaseDataAccessor<>(zkClient), storeConfig.rootPath, subscribedPaths);
+        CommonUtils.createHelixPropertyStore(zkServers, storeConfig, subscribedPaths);
     logger.info("HelixPropertyStore started with zkClientConnectString={}, zkClientSessionTimeoutMs={}, "
-            + "zkClientConnectionTimeoutMs={}, rootPath={}, subscribedPaths={}", storeConfig.zkClientConnectString,
+            + "zkClientConnectionTimeoutMs={}, rootPath={}, subscribedPaths={}", zkServers,
         storeConfig.zkClientSessionTimeoutMs, storeConfig.zkClientConnectionTimeoutMs, storeConfig.rootPath,
         subscribedPaths);
     this.helixStore = helixStore;
@@ -172,7 +167,7 @@ public class HelixNotifier implements Notifier<String> {
    * @param topic The topic which the message belongs to.
    * @param path The path to the topic.
    */
-  private void sendMessageToLocalTopicListener(TopicListener topicListener, String topic, String path) {
+  private void sendMessageToLocalTopicListener(TopicListener<String> topicListener, String topic, String path) {
     String message = null;
     try {
       ZNRecord zNRecord = helixStore.get(path, null, AccessOption.PERSISTENT);

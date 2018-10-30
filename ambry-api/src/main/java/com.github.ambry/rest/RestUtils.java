@@ -23,10 +23,13 @@ import com.github.ambry.router.GetBlobOptionsBuilder;
 import com.github.ambry.utils.Crc32;
 import com.github.ambry.utils.Pair;
 import com.github.ambry.utils.Utils;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -90,6 +93,27 @@ public class RestUtils {
      * {@code "Range"}
      */
     public static final String RANGE = "Range";
+    /**
+     * Header to contain the Cookies
+     */
+    public final static String COOKIE = "Cookie";
+    /**
+     * Header to be set by the clients during a Get blob call to denote, that blob should be served only if the blob
+     * has been modified after the value set for this header.
+     */
+    public static final String IF_MODIFIED_SINCE = "If-Modified-Since";
+    /**
+     * Header that is set in the response of OPTIONS request that specifies the allowed methods.
+     */
+    public static final String ACCESS_CONTROL_ALLOW_METHODS = "Access-Control-Allow-Methods";
+    /**
+     * Header that is set in the response of OPTIONS request that specifies the validity of the options returned.
+     */
+    public static final String ACCESS_CONTROL_MAX_AGE = "Access-Control-Max-Age";
+    /**
+     * {@code "allow"}
+     */
+    public final static String ALLOW = "allow";
 
     // ambry specific headers
     /**
@@ -127,6 +151,11 @@ public class RestUtils {
      */
     public final static String OWNER_ID = "x-ambry-owner-id";
     /**
+     * Header that is set in the response of GetBlobInfo.
+     * 'true' or 'false'; case insensitive; true indicates content is encrypted at the storage layer. false otherwise
+     */
+    public final static String ENCRYPTED_IN_STORAGE = "x-ambry-encrypted-in-storage";
+    /**
      * optional in request; defines an option while getting the blob and is optional support in a
      * {@link BlobStorageService}. Valid values are available in {@link GetOption}. Defaults to {@link GetOption#None}
      */
@@ -156,50 +185,96 @@ public class RestUtils {
      */
     public static final String SIGNED_URL = "x-ambry-signed-url";
     /**
+     * Boolean field set to "true" for getting chunk upload URLs with {@code GET /signedUrl} that will eventually be
+     * stitched together.
+     */
+    public static final String CHUNK_UPLOAD = "x-ambry-chunk-upload";
+
+    /**
+     * This header will carry a UUID that represents a "session." For example, when performing a stitched upload, each
+     * chunk upload should be a part of the same session.
+     */
+    public static final String SESSION = "x-ambry-session";
+
+    /**
      * prefix for any header to be set as user metadata for the given blob
      */
     public final static String USER_META_DATA_HEADER_PREFIX = "x-ambry-um-";
 
     /**
-     * Header to contain the Cookies
+     * Response header indicating the reason a request is non compliant.
      */
-    public final static String COOKIE = "Cookie";
-    /**
-     * Header to be set by the clients during a Get blob call to denote, that blob should be served only if the blob
-     * has been modified after the value set for this header.
-     */
-    public static final String IF_MODIFIED_SINCE = "If-Modified-Since";
+    public final static String NON_COMPLIANCE_WARNING = "x-ambry-non-compliance-warning";
+  }
+
+  public static final class TrackingHeaders {
 
     /**
-     * Header that is set in the response of OPTIONS request that specifies the allowed methods.
+     * Response header for the the name of the datacenter that the frontend responding belongs to.
      */
-    public static final String ACCESS_CONTROL_ALLOW_METHODS = "Access-Control-Allow-Methods";
+    public static final String DATACENTER_NAME = "x-ambry-datacenter";
+    /**
+     * Response header for the hostname of the responding frontend.
+     */
+    public static final String FRONTEND_NAME = "x-ambry-frontend";
+    /**
+     * A list of all tracking headers.
+     */
+    public static final List<String> TRACKING_HEADERS;
 
-    /**
-     * Header that is set in the response of OPTIONS request that specifies the validity of the options returned.
-     */
-    public static final String ACCESS_CONTROL_MAX_AGE = "Access-Control-Max-Age";
-    /**
-     * Header that is set in the response of GetBlobInfo
-     * 'true' or 'false' case insensitive; true indicates content is encrypted at the storage layer. false otherwise
-     */
-    public final static String ENCRYPTED_IN_STORAGE = "x-ambry-encrypted-in-storage";
+    static {
+      Field[] fields = RestUtils.TrackingHeaders.class.getDeclaredFields();
+      TRACKING_HEADERS = new ArrayList<>(fields.length);
+      try {
+        for (Field field : fields) {
+          if (field.getType() == String.class) {
+            TRACKING_HEADERS.add(field.get(null).toString());
+          }
+        }
+      } catch (IllegalAccessException e) {
+        throw new IllegalStateException("Could not get values of the tracking headers", e);
+      }
+    }
   }
 
   /**
    * Ambry specific keys used internally in a {@link RestRequest}.
    */
   public static final class InternalKeys {
+    private static final String KEY_PREFIX = "ambry-internal-key-";
 
     /**
      * The key for the target {@link com.github.ambry.account.Account} indicated by the request.
      */
-    public final static String TARGET_ACCOUNT_KEY = "ambry-internal-key-target-account";
+    public static final String TARGET_ACCOUNT_KEY = KEY_PREFIX + "target-account";
 
     /**
      * The key for the target {@link com.github.ambry.account.Container} indicated by the request.
      */
-    public final static String TARGET_CONTAINER_KEY = "ambry-internal-key-target-container";
+    public static final String TARGET_CONTAINER_KEY = KEY_PREFIX + "target-container";
+
+    /**
+     * The key for the metadata {@code Map<String, String>} to include in a signed ID. This argument should be non-null
+     * to indicate that a signed ID should be created and returned to the requester on a POST request.
+     */
+    public static final String SIGNED_ID_METADATA_KEY = KEY_PREFIX + "signed-id-metadata";
+
+    /**
+     * To be set if the operation knows the keep-alive behavior it prefers on error. Valid values are boolean.
+     * Not authoritative, only a hint
+     */
+    public static final String KEEP_ALIVE_ON_ERROR_HINT = KEY_PREFIX + "keep-alive-on-error-hint";
+
+    /**
+     * To be set to {@code true} if tracking info should be attached to frontend responses.
+     */
+    public static final String SEND_TRACKING_INFO = KEY_PREFIX + "send-tracking-info";
+
+    /**
+     * Set to {@code true} (assumed {@code false} if absent) if the user metadata needs to be sent as the body of the
+     * response.
+     */
+    public static final String SEND_USER_METADATA_AS_RESPONSE_BODY = KEY_PREFIX + "send-user-metadata-as-response-body";
   }
 
   /**
@@ -235,7 +310,7 @@ public class RestUtils {
   private static final int CRC_SIZE = 8;
   private static final short USER_METADATA_VERSION_V1 = 1;
   private static final String BYTE_RANGE_PREFIX = BYTE_RANGE_UNITS + "=";
-  private static Logger logger = LoggerFactory.getLogger(RestUtils.class);
+  private static final Logger logger = LoggerFactory.getLogger(RestUtils.class);
 
   /**
    * Builds {@link BlobProperties} given the arguments associated with a request.
@@ -252,18 +327,13 @@ public class RestUtils {
     String ownerId = getHeader(args, Headers.OWNER_ID, false);
 
     long ttl = Utils.Infinite_Time;
-    String ttlStr = getHeader(args, Headers.TTL, false);
-    if (ttlStr != null) {
-      try {
-        ttl = Long.parseLong(ttlStr);
-        if (ttl < -1) {
-          throw new RestServiceException(Headers.TTL + "[" + ttl + "] is not valid (has to be >= -1)",
-              RestServiceErrorCode.InvalidArgs);
-        }
-      } catch (NumberFormatException e) {
-        throw new RestServiceException(Headers.TTL + "[" + ttlStr + "] could not parsed into a number",
+    Long ttlFromHeader = getLongHeader(args, Headers.TTL, false);
+    if (ttlFromHeader != null) {
+      if (ttlFromHeader < -1) {
+        throw new RestServiceException(Headers.TTL + "[" + ttlFromHeader + "] is not valid (has to be >= -1)",
             RestServiceErrorCode.InvalidArgs);
       }
+      ttl = ttlFromHeader;
     }
 
     // This field should not matter on newly created blobs, because all privacy/cacheability decisions should be made
@@ -274,6 +344,10 @@ public class RestUtils {
   }
 
   /**
+   * Builds user metadata given the arguments associated with a request.
+   * <p>
+   * The following binary format will be used:
+   * <pre>
    *  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
    * |         |   size    |  total   |           |          |             |            |            |            |            |
    * | version | excluding |  no of   | key1 size |   key1   | value1 size |  value 1   |  key2 size |     ...    |     Crc    |
@@ -299,16 +373,13 @@ public class RestUtils {
    *  key2 size      - Size of 2nd key
    *
    *  crc        - The crc of the user metadata record
+   * </pre>
    *
-   */
-
-  /**
-   * Builds user metadata given the arguments associated with a request.
    * @param args the arguments associated with the request.
    * @return the user metadata extracted from arguments.
    * @throws RestServiceException if usermetadata arguments have null values.
    */
-  public static byte[] buildUsermetadata(Map<String, Object> args) throws RestServiceException {
+  public static byte[] buildUserMetadata(Map<String, Object> args) throws RestServiceException {
     ByteBuffer userMetadata;
     if (args.containsKey(MultipartPost.USER_METADATA_PART)) {
       userMetadata = (ByteBuffer) args.get(MultipartPost.USER_METADATA_PART);
@@ -317,7 +388,7 @@ public class RestUtils {
       int sizeToAllocate = 0;
       for (Map.Entry<String, Object> entry : args.entrySet()) {
         String key = entry.getKey();
-        if (key.startsWith(Headers.USER_META_DATA_HEADER_PREFIX)) {
+        if (key.toLowerCase().startsWith(Headers.USER_META_DATA_HEADER_PREFIX)) {
           // key size
           sizeToAllocate += 4;
           String keyToStore = key.substring(Headers.USER_META_DATA_HEADER_PREFIX.length());
@@ -364,46 +435,48 @@ public class RestUtils {
    * @return the user metadata that is read from the byte array, or {@code null} if the {@code userMetadata} cannot be
    * parsed in expected format
    */
-  public static Map<String, String> buildUserMetadata(byte[] userMetadata) throws RestServiceException {
+  public static Map<String, String> buildUserMetadata(byte[] userMetadata) {
+    if (userMetadata.length == 0) {
+      return Collections.emptyMap();
+    }
     Map<String, String> toReturn = null;
-    if (userMetadata.length > 0) {
-      try {
-        ByteBuffer userMetadataBuffer = ByteBuffer.wrap(userMetadata);
-        short version = userMetadataBuffer.getShort();
-        switch (version) {
-          case USER_METADATA_VERSION_V1:
-            int sizeToRead = userMetadataBuffer.getInt();
-            if (sizeToRead != (userMetadataBuffer.remaining() - 8)) {
-              logger.trace("Size didn't match. Returning null");
-            } else {
-              int entryCount = userMetadataBuffer.getInt();
-              int counter = 0;
-              if (entryCount > 0) {
-                toReturn = new HashMap<>();
-              }
-              while (counter++ < entryCount) {
-                String key = Utils.deserializeString(userMetadataBuffer, StandardCharsets.US_ASCII);
-                String value = Utils.deserializeString(userMetadataBuffer, StandardCharsets.US_ASCII);
-                toReturn.put(Headers.USER_META_DATA_HEADER_PREFIX + key, value);
-              }
-              long actualCRC = userMetadataBuffer.getLong();
-              Crc32 crc32 = new Crc32();
-              crc32.update(userMetadata, 0, userMetadata.length - CRC_SIZE);
-              long expectedCRC = crc32.getValue();
-              if (actualCRC != expectedCRC) {
-                logger.trace("corrupt data while parsing user metadata Expected CRC " + expectedCRC + " Actual CRC "
-                    + actualCRC);
-                toReturn = null;
-              }
+    try {
+      ByteBuffer userMetadataBuffer = ByteBuffer.wrap(userMetadata);
+      short version = userMetadataBuffer.getShort();
+      switch (version) {
+        case USER_METADATA_VERSION_V1:
+          int sizeToRead = userMetadataBuffer.getInt();
+          if (sizeToRead != (userMetadataBuffer.remaining() - 8)) {
+            logger.trace("Size didn't match. Returning null");
+          } else {
+            int entryCount = userMetadataBuffer.getInt();
+            int counter = 0;
+            if (entryCount > 0) {
+              toReturn = new HashMap<>();
             }
-            break;
-          default:
-            logger.trace("Failed to parse version in new format. Returning null");
-        }
-      } catch (RuntimeException e) {
-        logger.trace("Runtime Exception on parsing user metadata. Returning null");
-        toReturn = null;
+            while (counter++ < entryCount) {
+              String key = Utils.deserializeString(userMetadataBuffer, StandardCharsets.US_ASCII);
+              String value = Utils.deserializeString(userMetadataBuffer, StandardCharsets.US_ASCII);
+              toReturn.put(Headers.USER_META_DATA_HEADER_PREFIX + key, value);
+            }
+            long actualCRC = userMetadataBuffer.getLong();
+            Crc32 crc32 = new Crc32();
+            crc32.update(userMetadata, 0, userMetadata.length - CRC_SIZE);
+            long expectedCRC = crc32.getValue();
+            if (actualCRC != expectedCRC) {
+              logger.error(
+                  "corrupt data while parsing user metadata Expected CRC " + expectedCRC + " Actual CRC " + actualCRC);
+              toReturn = null;
+            }
+          }
+          break;
+        default:
+          toReturn = null;
+          logger.trace("Failed to parse version in new format. Returning null");
       }
+    } catch (RuntimeException e) {
+      logger.trace("Runtime Exception on parsing user metadata. Returning null");
+      toReturn = null;
     }
     return toReturn;
   }
@@ -545,19 +618,21 @@ public class RestUtils {
   /**
    * Gets the {@link GetOption} required by the request.
    * @param restRequest the representation of the request.
+   * @param defaultGetOption the {@link GetOption} to use if the {@code restRequest} doesn't have one. Can be
+   * {@code null}.
    * @return the required {@link GetOption}. Defaults to {@link GetOption#None}.
    * @throws RestServiceException if the {@link RestUtils.Headers#GET_OPTION} is present but not recognized.
    */
-  public static GetOption getGetOption(RestRequest restRequest) throws RestServiceException {
-    GetOption options = GetOption.None;
-    Map<String, Object> args = restRequest.getArgs();
-    Object value = args.get(RestUtils.Headers.GET_OPTION);
+  public static GetOption getGetOption(RestRequest restRequest, GetOption defaultGetOption)
+      throws RestServiceException {
+    GetOption option = defaultGetOption == null ? GetOption.None : defaultGetOption;
+    Object value = restRequest.getArgs().get(RestUtils.Headers.GET_OPTION);
     if (value != null) {
       String str = (String) value;
       boolean foundMatch = false;
       for (GetOption getOption : GetOption.values()) {
         if (str.equalsIgnoreCase(getOption.name())) {
-          options = getOption;
+          option = getOption;
           foundMatch = true;
           break;
         }
@@ -567,7 +642,7 @@ public class RestUtils {
             RestServiceErrorCode.InvalidArgs);
       }
     }
-    return options;
+    return option;
   }
 
   /**
@@ -577,18 +652,17 @@ public class RestUtils {
    * @throws RestServiceException if exception occurs during parsing the arg.
    */
   public static boolean isPrivate(Map<String, Object> args) throws RestServiceException {
-    boolean isPrivate;
-    String isPrivateStr = getHeader(args, Headers.PRIVATE, false);
-    if (isPrivateStr == null || isPrivateStr.toLowerCase().equals("false")) {
-      isPrivate = false;
-    } else if (isPrivateStr.toLowerCase().equals("true")) {
-      isPrivate = true;
-    } else {
-      throw new RestServiceException(
-          Headers.PRIVATE + "[" + isPrivateStr + "] has an invalid value (allowed values:true, false)",
-          RestServiceErrorCode.InvalidArgs);
-    }
-    return isPrivate;
+    return getBooleanHeader(args, Headers.PRIVATE, false);
+  }
+
+  /**
+   * Determine if {@link Headers#CHUNK_UPLOAD} is set in the request args.
+   * @param args The request arguments.
+   * @return {@code true} if {@link Headers#CHUNK_UPLOAD} is set.
+   * @throws RestServiceException if exception occurs during parsing the arg.
+   */
+  public static boolean isChunkUpload(Map<String, Object> args) throws RestServiceException {
+    return getBooleanHeader(args, Headers.CHUNK_UPLOAD, false);
   }
 
   /**
@@ -617,7 +691,7 @@ public class RestUtils {
    *                                    {@code args} or if there is more than one value for {@code header} in
    *                                    {@code args}.
    */
-  public static String getHeader(Map<String, Object> args, String header, boolean required)
+  public static String getHeader(Map<String, ?> args, String header, boolean required)
       throws RestServiceException {
     String value = null;
     if (args.containsKey(header)) {
@@ -638,14 +712,14 @@ public class RestUtils {
    * Gets the value of a header as a {@link Long}
    * @param args a map of arguments to be used to look for {@code header}.
    * @param header the name of the header.
-   * @param required if {@code true}, {@link IllegalArgumentException} will be thrown if {@code header} is not present
+   * @param required if {@code true}, {@link RestServiceException} will be thrown if {@code header} is not present
    *                 in {@code args}.
    * @return the value of {@code header} in {@code args} if it exists. If it does not exist and {@code required} is
    *          {@code false}, then returns null.
    * @throws RestServiceException same as cases of {@link #getHeader(Map, String, boolean)} and if the value cannot be
    *                              converted to a {@link Long}.
    */
-  public static Long getLongHeader(Map<String, Object> args, String header, boolean required)
+  public static Long getLongHeader(Map<String, ?> args, String header, boolean required)
       throws RestServiceException {
     // if getHeader() is no longer called, tests for this function have to be changed.
     String value = getHeader(args, header, required);
@@ -658,6 +732,34 @@ public class RestUtils {
       }
     }
     return null;
+  }
+
+  /**
+   * Gets the value of a header as a {@code boolean}.
+   * @param args a map of arguments to be used to look for {@code header}.
+   * @param header the name of the header.
+   * @param required if {@code true}, {@link RestServiceException} will be thrown if {@code header} is not present
+   *                 in {@code args}.
+   * @return {@code true} if the header's value is {@code "true"} (case-insensitive), or {@code false} if the header's
+   *         value is {@code "false} (case-insensitive) or the header is not present and {@code required} is
+   *         {@code false}.
+   * @throws RestServiceException same as cases of {@link #getHeader(Map, String, boolean)} and if the value cannot be
+   *                              converted to a {@code boolean}.
+   */
+  public static boolean getBooleanHeader(Map<String, Object> args, String header, boolean required)
+      throws RestServiceException {
+    boolean booleanValue;
+    String stringValue = getHeader(args, header, required);
+    if (stringValue == null || "false".equalsIgnoreCase(stringValue)) {
+      booleanValue = false;
+    } else if ("true".equalsIgnoreCase(stringValue)) {
+      booleanValue = true;
+    } else {
+      throw new RestServiceException(
+          header + "[" + stringValue + "] has an invalid value (allowed values: true, false)",
+          RestServiceErrorCode.InvalidArgs);
+    }
+    return booleanValue;
   }
 
   /**
@@ -696,6 +798,57 @@ public class RestUtils {
           RestServiceErrorCode.InternalServerError);
     }
     return (Container) container;
+  }
+
+  /**
+   * Check preconditions for request if the {@code restRequest} contains the target account and container.
+   * @param restRequest the {@link RestRequest} that contains the {@link Account} and {@link Container} details.
+   * @throws RestServiceException if preconditions check failed.
+   */
+  public static void accountAndContainerNamePreconditionCheck(RestRequest restRequest) throws RestServiceException {
+    String accountNameFromHeader = getHeader(restRequest.getArgs(), Headers.TARGET_ACCOUNT_NAME, false);
+    String containerNameFromHeader = getHeader(restRequest.getArgs(), Headers.TARGET_CONTAINER_NAME, false);
+    if (accountNameFromHeader != null) {
+      Account targetAccount = getAccountFromArgs(restRequest.getArgs());
+      String accountNameFromBlobId = targetAccount.getName();
+      if (!accountNameFromHeader.equals(accountNameFromBlobId)) {
+        throw new RestServiceException(
+            "Account name: " + accountNameFromHeader + " from request doesn't match the account name from Blob id : "
+                + accountNameFromBlobId, RestServiceErrorCode.PreconditionFailed);
+      }
+      if (containerNameFromHeader != null) {
+        Container targetContainer = getContainerFromArgs(restRequest.getArgs());
+        String containerNameFromBlobId = targetContainer.getName();
+        if (!containerNameFromHeader.equals(containerNameFromBlobId)) {
+          throw new RestServiceException("Container name: " + containerNameFromHeader
+              + "from request doesn't match the container name from Blob id : " + containerNameFromBlobId,
+              RestServiceErrorCode.PreconditionFailed);
+        }
+      }
+    } else if (containerNameFromHeader != null) {
+      throw new RestServiceException(
+          "Only container name is set in request with no corresponding account name is not allowed.",
+          RestServiceErrorCode.BadRequest);
+    }
+  }
+
+  /**
+   * Sets the user metadata in the headers of the response.
+   * @param userMetadata the user metadata that needs to be sent.
+   * @param restResponseChannel the {@link RestResponseChannel} that is used for sending the response.
+   * @return {@code true} if the user metadata was successfully deserialized into headers, {@code false} if not.
+   * @throws RestServiceException if there are any problems setting the header.
+   */
+  public static boolean setUserMetadataHeaders(byte[] userMetadata, RestResponseChannel restResponseChannel)
+      throws RestServiceException {
+    Map<String, String> userMetadataMap = buildUserMetadata(userMetadata);
+    boolean setHeaders = userMetadataMap != null;
+    if (setHeaders) {
+      for (Map.Entry<String, String> entry : userMetadataMap.entrySet()) {
+        restResponseChannel.setHeader(entry.getKey(), entry.getValue());
+      }
+    }
+    return setHeaders;
   }
 
   /**

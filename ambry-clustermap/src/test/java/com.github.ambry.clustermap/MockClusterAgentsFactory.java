@@ -15,6 +15,7 @@ package com.github.ambry.clustermap;
 
 import com.github.ambry.server.AmbryHealthReport;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 
@@ -37,7 +38,8 @@ public class MockClusterAgentsFactory implements ClusterAgentsFactory {
   @Override
   public MockClusterMap getClusterMap() throws IOException {
     if (mockClusterMap == null) {
-      mockClusterMap = new MockClusterMap(enableSslPorts, numNodes, numMountPointsPerNode, numStoresPerMountPoint);
+      mockClusterMap = new MockClusterMap(enableSslPorts, numNodes, numMountPointsPerNode, numStoresPerMountPoint,
+          false);
     }
     return mockClusterMap;
   }
@@ -47,7 +49,7 @@ public class MockClusterAgentsFactory implements ClusterAgentsFactory {
     if (clusterParticipant == null) {
       clusterParticipant = new ClusterParticipant() {
         @Override
-        public void initialize(String hostname, int port, List<AmbryHealthReport> ambryHealthReports) {
+        public void participate(List<AmbryHealthReport> ambryHealthReports) {
 
         }
 
@@ -64,6 +66,28 @@ public class MockClusterAgentsFactory implements ClusterAgentsFactory {
           MockReplicaId mockReplicaId = (MockReplicaId) replicaId;
           mockReplicaId.setSealedState(isSealed);
           return true;
+        }
+
+        @Override
+        public boolean setReplicaStoppedState(List<ReplicaId> replicaIds, boolean markStop) {
+          for (ReplicaId replicaId : replicaIds) {
+            if (!(replicaId instanceof MockReplicaId)) {
+              throw new IllegalArgumentException("Not MockReplicaId");
+            }
+            MockReplicaId mockReplicaId = (MockReplicaId) replicaId;
+            mockReplicaId.markReplicaDownStatus(markStop);
+          }
+          return true;
+        }
+
+        @Override
+        public List<String> getSealedReplicas() {
+          return new ArrayList<>();
+        }
+
+        @Override
+        public List<String> getStoppedReplicas() {
+          return new ArrayList<>();
         }
       };
     }
